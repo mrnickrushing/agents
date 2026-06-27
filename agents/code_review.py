@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
@@ -249,9 +250,9 @@ Always provide the fix with code, not just a description of what's wrong.
             findings.append({"severity": "HIGH", "issue": "Async handler without try/catch — unhandled promise rejection will crash the server", "fix": "Wrap in try/catch or use asyncHandler wrapper"})
         if "zod" not in code_lower and "validate" not in code_lower and ("body" in code_lower or "params" in code_lower or "query" in code_lower):
             findings.append({"severity": "HIGH", "issue": "No input validation — client can send any data structure", "fix": "Add Zod validation: const schema = z.object({...}); const validated = schema.parse(req.body);"})
-        if "status(" in code and "500" in code:
+        if re.search(r"\.status\(\s*500\s*\)", code):
             findings.append({"severity": "MEDIUM", "issue": "Hardcoded 500 error — consider structured error handling", "fix": "Use a central error handler middleware"})
-        if "select" in code_lower and ("*" in code_lower or "all" in code_lower) and "limit" not in code_lower:
+        if re.search(r"\.findmany\s*\(|select\s+\*", code_lower) and ".limit(" not in code_lower:
             findings.append({"severity": "MEDIUM", "issue": "Unbounded query — no LIMIT on database select, could return millions of rows", "fix": "Add pagination: .limit(pageSize).offset(page * pageSize)"})
 
         return {"route": route_path, "auth_required": auth_required, "findings": findings, "total_issues": len(findings)}
@@ -287,7 +288,7 @@ Always provide the fix with code, not just a description of what's wrong.
             findings.append({"severity": "LOW", "issue": "No timestamp columns — consider adding createdAt/updatedAt", "fix": "Add createdAt: timestamp('created_at').defaultNow()"})
         if database == "sqlite" and "json" in code_lower:
             findings.append({"severity": "MEDIUM", "issue": "SQLite has limited JSON support — consider normalizing or using PostgreSQL", "fix": "Use text() with JSON.stringify/parse or migrate to PostgreSQL"})
-        if "id" not in code_lower:
+        if "primarykey" not in code_lower.replace(" ", ""):
             findings.append({"severity": "HIGH", "issue": "No primary key defined", "fix": "Add id: serial('id').primaryKey() or uuid('id').primaryKey().defaultRandom()"})
 
         return {"database": database, "findings": findings, "total_issues": len(findings)}
