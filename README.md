@@ -27,7 +27,7 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 
 ## Install
 
-```bash
+```fish
 # Clone and install locally
 git clone https://github.com/mrnickrushing/agents.git
 cd agents
@@ -209,8 +209,8 @@ agent = SecurityAuditAgent(
 )
 
 # Using environment variables
-# export OPENAI_API_KEY="sk-..."
-# export ANTHROPIC_API_KEY="sk-ant-..."
+# set -gx OPENAI_API_KEY "sk-..."
+# set -gx ANTHROPIC_API_KEY "sk-ant-..."
 agent = SecurityAuditAgent(provider="openai")  # Uses OPENAI_API_KEY
 agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 ```
@@ -468,24 +468,24 @@ User Input (Natural Language)
 
 ## Environment Variables
 
-```bash
+```fish
 # OpenAI (optional if API key passed directly)
-export OPENAI_API_KEY="sk-..."
+set -gx OPENAI_API_KEY "sk-..."
 
 # Anthropic (optional if API key passed directly)
-export ANTHROPIC_API_KEY="sk-ant-..."
+set -gx ANTHROPIC_API_KEY "sk-ant-..."
 
 # Optional: Custom base URLs for proxy or self-hosted
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export ANTHROPIC_BASE_URL="https://api.anthropic.com"
+set -gx OPENAI_BASE_URL "https://api.openai.com/v1"
+set -gx ANTHROPIC_BASE_URL "https://api.anthropic.com"
 ```
 
 ## Running Examples
 
-```bash
+```fish
 # Set API keys
-export OPENAI_API_KEY="sk-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
+set -gx OPENAI_API_KEY "sk-..."
+set -gx ANTHROPIC_API_KEY "sk-ant-..."
 
 # Run main examples (tool-level — no API key required for most)
 python example.py

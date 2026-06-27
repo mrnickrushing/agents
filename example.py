@@ -2,8 +2,8 @@
 RushingTech Agents — Usage Examples
 
 Run any of these examples after setting API keys:
-    export OPENAI_API_KEY="sk-..."
-    export ANTHROPIC_API_KEY="sk-ant-..."
+    set -gx OPENAI_API_KEY "sk-..."
+    set -gx ANTHROPIC_API_KEY "sk-ant-..."
     python example.py
 """
 
@@ -180,7 +180,7 @@ def example_ui_generation():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         print("\n⚠️  Set ANTHROPIC_API_KEY to run this example:")
-        print("  export ANTHROPIC_API_KEY='sk-ant-...'")
+        print("  set -gx ANTHROPIC_API_KEY 'sk-ant-...'")
         print("\nShowing pattern instead:")
         
         # Show usage pattern
@@ -360,8 +360,8 @@ if __name__ == "__main__":
     print("✅ All examples complete!")
     print("=" * 60)
     print("\nTo use with APIs, set your keys and call agent.run():")
-    print('  export OPENAI_API_KEY="sk-..."')
-    print('  export ANTHROPIC_API_KEY="sk-ant-..."')
+    print('  set -gx OPENAI_API_KEY "sk-..."')
+    print('  set -gx ANTHROPIC_API_KEY "sk-ant-..."')
     print('  agent = SecurityAuditAgent(provider="openai")')
     print('  result = agent.run("Audit my app")')
     print('  print(result.content)')
