@@ -191,7 +191,7 @@ from agents import UIGenerationAgent
 agent = UIGenerationAgent(
     api_key=os.getenv("ANTHROPIC_API_KEY"),
     provider="anthropic",
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-6",
     temperature=0.7
 )
 
@@ -244,7 +244,7 @@ response = agent.process_wireframe(
     agent = UIGenerationAgent(
         api_key=api_key,
         provider="anthropic",
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-6",
         temperature=0.7
     )
     
@@ -309,7 +309,7 @@ def example_multi_provider():
     anthropic_agent = SecurityAuditAgent(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
         provider="anthropic",
-        model="claude-3-5-sonnet-20241022"
+        model="claude-sonnet-4-6"
     )
     print(f"  Provider: {anthropic_agent.provider}")
     print(f"  Model: {anthropic_agent.model}")

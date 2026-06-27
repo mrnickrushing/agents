@@ -10,7 +10,8 @@ setup(
     packages=find_packages(),
     python_requires=">=3.11",
     install_requires=[
-        "openai>=1.0.0",
+        "openai>=1.50.0",
+        "anthropic>=0.40.0",
     ],
     extras_require={
         "dev": ["pytest", "black", "ruff"],

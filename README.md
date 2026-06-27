@@ -59,7 +59,7 @@ from agents import SecurityAuditAgent
 # Uses ANTHROPIC_API_KEY from environment
 agent = SecurityAuditAgent(
     provider="anthropic",
-    model="claude-3-5-sonnet-20241022"
+    model="claude-sonnet-4-6"
 )
 
 result = agent.run("Audit this Stripe webhook handler for security issues")
@@ -74,7 +74,7 @@ from agents import UIGenerationAgent
 agent = UIGenerationAgent(
     api_key="sk-ant-...",
     provider="anthropic",
-    model="claude-3-5-sonnet-20241022"
+    model="claude-sonnet-4-6"
 )
 
 # Single turn — create a component
@@ -196,7 +196,7 @@ from agents import SecurityAuditAgent
 agent = SecurityAuditAgent(
     api_key="sk-...",
     provider="openai",
-    model="gpt-4o",
+    model="gpt-5",
     temperature=0.3,
 )
 
@@ -204,7 +204,7 @@ agent = SecurityAuditAgent(
 agent = SecurityAuditAgent(
     api_key="sk-ant-...",
     provider="anthropic",
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-6",
     temperature=0.7,
 )
 

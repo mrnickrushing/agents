@@ -32,7 +32,7 @@ class SecurityAuditAgent(BaseAgent):
 
     name = "security_audit"
     description = "Audits and hardens Node/Express, React, and React Native apps for OWASP Top 10, Helmet misconfigurations, JWT vulnerabilities, rate limiting gaps, and deployment security."
-    model = "gpt-4o"
+    model = "gpt-5"
 
     system_prompt = """\
 You are a senior cybersecurity practitioner and security audit specialist. You audit and harden web applications, mobile apps, and SaaS platforms built with the following stack:

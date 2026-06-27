@@ -30,7 +30,7 @@ class StripeBillingAgent(BaseAgent):
 
     name = "stripe_billing"
     description = "Handles Stripe subscription billing, webhook handlers, RevenueCat sync, and payment security for SaaS and mobile apps."
-    model = "gpt-4o"
+    model = "gpt-5"
 
     system_prompt = """\
 You are a Stripe billing and RevenueCat integration specialist for solo full-stack operators. You understand the exact billing patterns used in production SaaS and mobile apps:
