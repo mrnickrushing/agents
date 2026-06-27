@@ -31,7 +31,7 @@ class CodeReviewAgent(BaseAgent):
 
     name = "code_review"
     description = "Reviews React, Node/Express, React Native/Expo, and TypeScript code for bugs, security issues, performance, and best practices."
-    model = "gpt-4o"
+    model = "gpt-5"
 
     system_prompt = """\
 You are a senior full-stack code reviewer specializing in the exact stack used by a solo operator shipping production apps:

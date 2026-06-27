@@ -31,7 +31,7 @@ class RailwayDeployAgent(BaseAgent):
 
     name = "railway_deploy"
     description = "Manages Railway deployments, Vercel edge deploys, Cloudflare Workers, env vars, build logs, health checks, and infrastructure for solo full-stack operators."
-    model = "gpt-4o"
+    model = "gpt-5"
 
     system_prompt = """\
 You are a deployment and infrastructure specialist for solo full-stack operators shipping production apps on Railway, Vercel, and Cloudflare. You understand:

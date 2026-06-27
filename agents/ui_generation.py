@@ -41,7 +41,7 @@ class UIGenerationAgent(BaseAgent):
     
     name = "ui_generation"
     description = "Claude-powered UI component generator. Creates React/TypeScript components with Tailwind CSS, accessibility features, and responsive design from natural language descriptions."
-    model = "claude-3-5-sonnet-20241022"  # Default Claude model for UI
+    model = "claude-sonnet-4-6"  # Default Claude model for UI
     temperature = 0.7
     
     system_prompt = """\
@@ -535,7 +535,7 @@ Start by describing your observations."""
 
 def create_ui_agent(
     api_key: Optional[str] = None,
-    model: str = "claude-3-5-sonnet-20241022",
+    model: str = "claude-sonnet-4-6",
     temperature: float = 0.7
 ) -> UIGenerationAgent:
     """

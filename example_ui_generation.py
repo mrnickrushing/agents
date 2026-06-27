@@ -23,7 +23,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "sk-ant-test...")
 agent = UIGenerationAgent(
     api_key=ANTHROPIC_API_KEY,
     provider="anthropic",
-    model="claude-3-5-sonnet-20241022",
+    model="claude-sonnet-4-6",
     temperature=0.7
 )
 

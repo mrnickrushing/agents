@@ -32,7 +32,7 @@ class BaseAgent:
     name: str = "base_agent"
     description: str = "Base agent — override in subclass"
     system_prompt: str = "You are a helpful assistant."
-    model: str = "gpt-4o"
+    model: str = "gpt-5"
     temperature: float = 0.3
     max_tokens: int = 4096
 
@@ -54,7 +54,7 @@ class BaseAgent:
         if self.provider == "anthropic":
             self.base_url = base_url or os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
             if not self.model.startswith("claude-"):
-                self.model = "claude-3-5-sonnet-20241022"  # Default Claude model
+                self.model = "claude-sonnet-4-6"  # Default Claude model
         else:
             self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         
