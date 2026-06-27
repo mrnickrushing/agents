@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="rushingtech-agents",
-    version="1.0.0",
+    version="2.0.1",
     description="OpenAI-compatible AI agents for solo full-stack operators — security audit, Stripe billing, Railway deploy, code review, and project scaffolding.",
     author="Rushing Technologies",
     author_email="nickrushing@rushingtechnologies.com",

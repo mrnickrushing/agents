@@ -6,7 +6,7 @@ Six specialized agents that understand your exact stack — React/Node/Express, 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
-## 🆕 Version 2.0.0 — What's New
+## 🆕 Version 2.0.1 — What's New
 
 - **✨ Multi-Provider Support**: All agents now work with both OpenAI and Anthropic
 - **🎨 UI Generation Agent**: Claude-powered component builder with multi-turn conversations
@@ -29,8 +29,8 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 
 ```bash
 # Clone and install locally
-git clone https://github.com/mrnickrushing/rushingtech-agents.git
-cd rushingtech-agents
+git clone https://github.com/mrnickrushing/agents.git
+cd agents
 pip install -e .
 
 # Install dependencies

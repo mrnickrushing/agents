@@ -331,7 +331,7 @@ You're not just writing code — you're crafting experiences that work for every
             "content": content,
             "props_interface": props_interface,
             "features": features or [],
-            "usage_example": usage_example or f"<{component_name} {...props} />",
+            "usage_example": usage_example or f"<{component_name} />",
             "design_rationale": design_rationale or "Standard responsive component with accessibility features",
             "file_path": f"src/components/{component_name}.tsx",
             "typescript": True,

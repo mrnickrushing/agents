@@ -114,7 +114,62 @@ class BaseAgent:
         """Return tools in provider-native format."""
         if not self._tools:
             return None
-        return self._tools
+        return [self._normalize_tool_definition(tool) for tool in self._tools]
+
+    def _normalize_tool_definition(self, tool: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a tool definition into the schema expected by the current provider."""
+        normalized = dict(tool)
+        schema = normalized.pop("parameters", None)
+        input_schema = normalized.pop("input_schema", None)
+
+        if self.provider == "anthropic":
+            if input_schema is not None:
+                normalized["input_schema"] = input_schema
+            elif schema is not None:
+                normalized["input_schema"] = schema
+        else:
+            if schema is not None:
+                normalized["parameters"] = schema
+            elif input_schema is not None:
+                normalized["parameters"] = input_schema
+
+        return normalized
+
+    def _build_openai_messages(
+        self,
+        user_input: str,
+        context: Optional[str] = None,
+        conversation: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        messages = [{"role": "system", "content": self.system_prompt}]
+        if context:
+            messages.append({"role": "system", "content": f"Context:\n{context}"})
+        if conversation:
+            messages.extend(conversation)
+        messages.append({"role": "user", "content": user_input})
+        return messages
+
+    def _build_anthropic_messages(
+        self,
+        user_input: str,
+        conversation: Optional[List[Dict[str, Any]]] = None,
+        images: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        user_content: List[Dict[str, Any]] = [{"type": "text", "text": user_input}]
+        if images:
+            for img in images:
+                user_content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img["media_type"],
+                        "data": img["data"],
+                    },
+                })
+
+        messages = list(conversation or [])
+        messages.append({"role": "user", "content": user_content})
+        return messages
 
     # ── Execution ─────────────────────────────────────────────────────
 
@@ -153,14 +208,8 @@ class BaseAgent:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        
-        # Build messages with system prompt
-        messages = [{"role": "system", "content": self.system_prompt}]
-        if context:
-            messages.append({"role": "system", "content": f"Context:\n{context}"})
-        messages.extend(conversation)
-        messages.append({"role": "user", "content": user_input})
-        
+        messages = self._build_openai_messages(user_input, context, conversation)
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -180,27 +229,23 @@ class BaseAgent:
         # Handle tool calls
         if assistant_message.tool_calls:
             tool_results = self._execute_tool_calls(assistant_message.tool_calls)
-            
-            # Append user and assistant messages
-            conversation.append({"role": "user", "content": user_input})
-            conversation.append({
-                "role": "assistant", 
-                "content": assistant_message.content or "",
-                "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls]
-            })
-            
-            # Append tool results
+            tool_messages = [
+                {
+                    "role": "assistant",
+                    "content": assistant_message.content or "",
+                    "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls],
+                }
+            ]
             for tool_result in tool_results:
-                conversation.append({
-                    "role": "tool", 
+                tool_messages.append({
+                    "role": "tool",
                     "content": json.dumps(tool_result),
-                    "tool_call_id": tool_result["tool_call_id"]
+                    "tool_call_id": tool_result["tool_call_id"],
                 })
-            
-            # Second call with tool results
+
             second_payload = {
                 "model": self.model,
-                "messages": messages + conversation,
+                "messages": messages + tool_messages,
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
@@ -208,8 +253,16 @@ class BaseAgent:
             choice = response.choices[0]
             assistant_message = choice.message
 
-        conversation.append({"role": "user", "content": user_input})
-        conversation.append({"role": "assistant", "content": assistant_message.content or ""})
+            conversation.extend([
+                {"role": "user", "content": user_input},
+                *tool_messages,
+                {"role": "assistant", "content": assistant_message.content or ""},
+            ])
+        else:
+            conversation.extend([
+                {"role": "user", "content": user_input},
+                {"role": "assistant", "content": assistant_message.content or ""},
+            ])
 
         return AgentResponse(
             content=assistant_message.content or "",
@@ -229,23 +282,7 @@ class BaseAgent:
         import anthropic
 
         client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
-        
-        # Build user message — can include text + images
-        user_content: List[Dict[str, Any]] = [{"type": "text", "text": user_input}]
-        
-        if images:
-            for img in images:
-                user_content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img["media_type"],
-                        "data": img["data"]
-                    }
-                })
-        
-        messages = list(conversation)
-        messages.append({"role": "user", "content": user_content})
+        messages = self._build_anthropic_messages(user_input, conversation, images)
         
         # Add context to system prompt if provided
         system_prompt = self.system_prompt
@@ -271,7 +308,6 @@ class BaseAgent:
         text_content = "".join(b.text for b in response.content if b.type == "text")
         
         if tool_blocks:
-            # Execute tools
             tool_calls = []
             for block in tool_blocks:
                 tool_calls.append({
@@ -281,40 +317,42 @@ class BaseAgent:
                 })
             
             tool_results = self._execute_tool_calls_anthropic(tool_calls)
-            
-            # Append to conversation
-            conversation.append({"role": "user", "content": user_content})
-            conversation.append({
-                "role": "assistant",
-                "content": response.content
-            })
-            
-            # Append tool results
+            tool_messages = [
+                {"role": "assistant", "content": response.content},
+            ]
             for result in tool_results:
-                conversation.append({
+                result_content = result.get("result", {"error": result.get("error", "Tool execution failed")})
+                tool_messages.append({
                     "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
                             "tool_use_id": result["tool_use_id"],
-                            "content": json.dumps(result["result"])
+                            "content": json.dumps(result_content),
                         }
-                    ]
+                    ],
                 })
-            
-            # Second call with tool results
+
             response = client.messages.create(
                 model=self.model,
                 system=system_prompt,
-                messages=messages + conversation,
+                messages=messages + tool_messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 tools=tools if tools else None,
             )
             text_content = "".join(b.text for b in response.content if b.type == "text")
-        
-        conversation.append({"role": "user", "content": user_content})
-        conversation.append({"role": "assistant", "content": response.content})
+
+            conversation.extend([
+                {"role": "user", "content": messages[-1]["content"]},
+                *tool_messages,
+                {"role": "assistant", "content": response.content},
+            ])
+        else:
+            conversation.extend([
+                {"role": "user", "content": messages[-1]["content"]},
+                {"role": "assistant", "content": response.content},
+            ])
         
         return AgentResponse(
             content=text_content,

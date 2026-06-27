@@ -9,6 +9,7 @@ from agents.security_audit import SecurityAuditAgent
 from agents.stripe_billing import StripeBillingAgent
 from agents.railway_deploy import RailwayDeployAgent
 from agents.code_review import CodeReviewAgent
+from agents.ui_generation import UIGenerationAgent
 from agents.scaffolder import ScaffolderAgent
 
 __all__ = [
@@ -16,7 +17,8 @@ __all__ = [
     "StripeBillingAgent",
     "RailwayDeployAgent",
     "CodeReviewAgent",
+    "UIGenerationAgent",
     "ScaffolderAgent",
 ]
 
-__version__ = "1.0.0"
+__version__ = "2.0.1"
