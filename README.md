@@ -23,7 +23,7 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 | **RailwayDeployAgent** | OpenAI, Anthropic | CI/CD workflows (GitHub Actions, Codemagic, EAS), platform configs (Vercel, Cloudflare), Sentry integration, migrations, monitoring alerts, backup strategies |
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
-| **UIGenerationAgent** ⭐ NEW | Anthropic (Claude) | React/TypeScript component generation from natural language, multi-turn refinement, accessibility validation, design tokens |
+| **UIGenerationAgent** ⭐ UPGRADED | Anthropic (Claude) | World-class UI design — design system/theme generation (color theory, type scale, motion, elevation), React/TypeScript component generation, multi-turn refinement, accessibility validation |
 
 ## Install
 
@@ -356,20 +356,24 @@ agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 - `scaffold_fastapi_service` — FastAPI service scaffolding
 - `generate_env_template` — .env.example template generation
 
-### UIGenerationAgent ⭐ NEW
+### UIGenerationAgent ⭐ UPGRADED
 
-**Claude-Powered UI Component Building**
+**Claude-Powered UI Design & Component Building**
+
+A world-class product-design persona (the taste behind Linear/Stripe/Vercel-caliber apps), not just a component generator — it establishes a real design system before it writes components, so output is cohesive rather than one-off.
 
 **Tools:**
-- `generate_component` — Generate React/TypeScript components from natural language
+- `generate_design_system` — Establish a full design system/theme: color palette with rationale (primary + accent hue, neutral ramp, light/dark semantic tokens), type scale, spacing scale, radius scale, elevation/shadow scale, motion tokens
+- `generate_component` — Generate React/TypeScript components from natural language, built on top of the design system's tokens
 - `validate_accessibility` — WCAG 2.1 AA accessibility validation
 - `apply_design_token` — Apply design tokens for consistent styling
 
 **Key Features:**
+- 🎨 Design-system-first: color theory, type scales, elevation, motion tokens — not ad-hoc styling
 - ✨ Natural language to React components
-- 🎨 Tailwind CSS styling
-- ♿ Accessibility-first (WCAG 2.1 AA)
-- 🌓 Dark mode support
+- 💅 Tailwind CSS styling with restrained, premium use of gradients/glassmorphism/glow accents
+- ♿ Accessibility-first (WCAG 2.1 AA), including contrast verification in both light and dark
+- 🌓 Dark mode as a first-class palette, not an inverted afterthought
 - 📱 Mobile-first responsive design
 - 💬 Multi-turn conversation support
 - 👁️ Wireframe/screenshot analysis
@@ -378,6 +382,9 @@ agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 
 **Usage Patterns:**
 ```python
+# Establish the design system first
+theme = agent.run("Design a theme for a career-advancement platform — trustworthy but energetic")
+
 # Simple generation
 result = agent.run("Create a button component")
 

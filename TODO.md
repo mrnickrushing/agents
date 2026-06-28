@@ -5,6 +5,12 @@
 ### Core Infrastructure
 - [x] Updated base.py to support both OpenAI and Anthropic providers
 - [x] Created UIGenerationAgent (Claude-powered) with 3 tools and multi-turn support
+- [x] Upgraded UIGenerationAgent into a full design-systems-first agent: added `generate_design_system`
+      tool (color theory/palette + type/spacing/radius/elevation/motion tokens) and rewrote the system
+      prompt around visual craft (hierarchy, micro-interactions, dark-mode-as-first-class-palette,
+      restrained use of gradients/glassmorphism), not just component scaffolding
+- [x] Replaced the generic `ui-component-generator` Claude Code subagent with `ui-designer` — a
+      super-capable visual design persona, mirrored into both this repo and studyit's `.claude/agents/`
 - [x] Updated requirements.txt with anthropic>=0.40.0
 - [x] Updated __init__.py to export UIGenerationAgent
 - [x] Updated example.py with UI Generation Agent examples
