@@ -2,9 +2,18 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Eight specialized agents that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Eleven specialized agents (57 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
+
+## 🆕 Version 2.2.0 — What's New
+
+- **🌐 API Architect Agent**: pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation
+- **🗄️ Database Architect Agent**: index coverage on FK columns, migration safety against populated tables (Alembic + raw SQL), N+1 query detection, missing unique constraints
+- **📈 Infra Monitor Agent**: Sentry setup review (DSN handling, sampling, PII), health-check depth (does it verify the DB, or just return 200?), error boundary coverage, alert rule design
+- **🔎 6 new SecurityAuditAgent checks**: `audit_sql_injection`, `audit_xss_patterns`, `audit_csrf_protection`, `audit_input_validation`, `audit_file_upload`, `audit_websocket_auth` — these were listed in earlier docs but never actually implemented; now real and validated against production code
+- **CodeReviewAgent's existing tools wired into `cli.py scan`** — `review_express_route`, `review_react_component`, `review_drizzle_schema`, `review_zod_validation`, `review_expo_integration` now actually run as part of a scan instead of sitting unused
+- **More heuristic accuracy fixes found during this pass**: a case-mismatch bug that made the push-notification permission check fire 100% of the time regardless of whether permissions were requested; `expo` matching inside "export"; SQL-injection keyword matching bare English words ("update" in a sentence); a JS-route reviewer (`review_express_route`) firing on Python/FastAPI files because `@router.get(...)` coincidentally contains the same substring as Express's `router.get(`, telling Python code to "add Zod validation"
 
 ## 🆕 Version 2.1.0 — What's New
 
@@ -19,12 +28,15 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 
 | Agent | Provider | What It Does |
 |---|---|---|
-| **SecurityAuditAgent** | OpenAI, Anthropic | Helmet config (incl. raw source), OWASP Top 10, JWT vulnerabilities (Node + Python), rate limiting gaps, npm/pip dependency scanning, CORS (Express + FastAPI), deployment security |
-| **AuthSecurityAgent** ⭐ NEW | OpenAI, Anthropic | JWT refresh rotation/revocation, Apple Sign-In (nonce/JWKS/issuer/audience), Google OAuth CSRF, shared-secret app gates (x-api-key), biometric auth |
+| **SecurityAuditAgent** | OpenAI, Anthropic | Helmet config (incl. raw source), OWASP Top 10, JWT vulnerabilities (Node + Python), SQL injection, XSS, CSRF, file upload, WebSocket auth, dangerous-sink input validation, npm/pip dependency scanning, CORS (Express + FastAPI) |
+| **AuthSecurityAgent** | OpenAI, Anthropic | JWT refresh rotation/revocation, Apple Sign-In (nonce/JWKS/issuer/audience), Google OAuth CSRF, shared-secret app gates (x-api-key), biometric auth |
 | **StripeBillingAgent** | OpenAI, Anthropic | Webhook handler review, subscription model design, RevenueCat sync, billing security audit, receipt validation, dunning management, disputes, coupons, tax |
 | **RailwayDeployAgent** | OpenAI, Anthropic | CI/CD workflows (GitHub Actions, Codemagic, EAS), platform configs (Vercel, Cloudflare), Sentry integration, migrations, monitoring alerts, backup strategies |
-| **MobileDeployAgent** ⭐ NEW | OpenAI, Anthropic | EAS build profile review (hardcoded secrets, production hardening), Codemagic code-signing hygiene, App Store/Play submission checklists, RevenueCat SDK setup |
+| **MobileDeployAgent** | OpenAI, Anthropic | EAS build profile review (hardcoded secrets, production hardening), Codemagic code-signing hygiene, App Store/Play submission checklists, RevenueCat SDK setup |
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
+| **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
+| **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |
+| **InfraMonitorAgent** ⭐ NEW | OpenAI, Anthropic | Sentry setup (DSN, sampling, PII), health-check depth, React error boundary coverage, alert rule design |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
 | **UIGenerationAgent** | Anthropic (Claude) | React/TypeScript component generation from natural language, multi-turn refinement, accessibility validation, design tokens |
 

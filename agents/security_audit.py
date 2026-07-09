@@ -249,7 +249,73 @@ Format findings as structured reports with severity, location, description, and 
                     },
                     "required": ["endpoints"]
                 }
-            }
+            },
+            {
+                "name": "audit_sql_injection",
+                "description": "Detect SQL injection risk from string-built queries (template literals, concatenation, % / .format formatting) as opposed to parameterized queries.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The database query code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_xss_patterns",
+                "description": "Detect XSS risk from raw HTML injection (dangerouslySetInnerHTML, innerHTML, Jinja |safe / Markup()).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The frontend/template code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_csrf_protection",
+                "description": "Audit CSRF protection for cookie/session-based auth. Correctly does not apply to bearer-token/API-key auth, which isn't CSRF-vulnerable the same way.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The session/cookie handling code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_input_validation",
+                "description": "Detect unvalidated input flowing into dangerous sinks: eval/Function, shell exec with interpolated input, path operations built from unvalidated input (path traversal).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The code to audit for dangerous-sink usage"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_file_upload",
+                "description": "Audit file upload handling (multer, FastAPI UploadFile, etc.) for type/size validation and path traversal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The file upload handler code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_websocket_auth",
+                "description": "Audit a Socket.io/WebSocket connection handler for authentication on connect, not just on individual events.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The WebSocket/Socket.io handler code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -260,6 +326,12 @@ Format findings as structured reports with severity, location, description, and 
             "audit_cors_config": self._audit_cors_config,
             "generate_helmet_config": self._generate_helmet_config,
             "audit_rate_limiting": self._audit_rate_limiting,
+            "audit_sql_injection": self._audit_sql_injection,
+            "audit_xss_patterns": self._audit_xss_patterns,
+            "audit_csrf_protection": self._audit_csrf_protection,
+            "audit_input_validation": self._audit_input_validation,
+            "audit_file_upload": self._audit_file_upload,
+            "audit_websocket_auth": self._audit_websocket_auth,
         }
 
     # ── Tool handlers ──────────────────────────────────────────────────
@@ -341,7 +413,12 @@ Format findings as structured reports with severity, location, description, and 
         findings = []
         code_lower = code.lower()
 
-        if "hs256" in code_lower or "hmac" in code_lower:
+        # "hmac" alone is too broad — Python's hmac module is also the
+        # standard tool for constant-time comparisons (hmac.compare_digest)
+        # unrelated to JWT signing, and flagging that as "using weak HS256
+        # signing" is backwards (it's usually there *because* the code is
+        # doing something correctly, e.g. timing-safe nonce comparison).
+        if re.search(r"hs256|hs384|hs512", code_lower):
             findings.append({"severity": "HIGH", "issue": "Using HS256 (symmetric) — prefer RS256/ES256 (asymmetric) so the signing key isn't shared"})
         if "localstorage" in code_lower or "local storage" in code_lower:
             findings.append({"severity": "CRITICAL", "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies."})
@@ -540,3 +617,138 @@ Format findings as structured reports with severity, location, description, and 
                     recommendations.append({"endpoint": path, "severity": "MEDIUM", "issue": f"Rate limit too high ({limit}) for sensitive endpoint {path}", "recommended": "5 requests per 15 minutes"})
 
         return {"framework": backend_framework, "recommendations": recommendations, "total_issues": len(recommendations)}
+
+    def _audit_sql_injection(self, code: str) -> Dict[str, Any]:
+        """Detect SQL injection risk from string-built queries."""
+        findings = []
+        # Require actual SQL statement *shape* (SELECT..FROM, INSERT INTO,
+        # UPDATE..SET, DELETE FROM), not a bare keyword — "update"/"select"
+        # are common English words (e.g. an f-string like "Last case update
+        # recorded on {x}") and false-positived as SQL on ordinary prose.
+        sql_stmt = r"(SELECT\b.{0,300}?\bFROM\b|INSERT\s+INTO\b|UPDATE\s+\S+\s+SET\b|DELETE\s+FROM\b)"
+        # Interpolating a request value directly is unambiguous. An opaque
+        # variable name is genuinely ambiguous from static text alone — it's
+        # just as often a pre-built parameterized fragment or placeholder
+        # list (e.g. a bulk-insert VALUES(...) clause built from $1/$2/...
+        # placeholders while real data goes through a separate params array
+        # to db.query(sql, params), a common and safe pattern) as it is raw
+        # unsanitized input. Don't assert CRITICAL on a guess either way.
+        direct_input_re = re.compile(r"\$\{\s*(req|request|ctx)\.(body|params|query)|\{\s*(request|req)\.(query_params|path_params)", re.IGNORECASE)
+
+        for m in re.finditer(r"`([^`]*)`", code, re.DOTALL):
+            literal = m.group(1)
+            if re.search(sql_stmt, literal, re.IGNORECASE | re.DOTALL) and "${" in literal:
+                if direct_input_re.search(literal):
+                    findings.append({"severity": "CRITICAL", "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection", "fix": "Replace the interpolated value with a parameterized placeholder ($1/$2 or ?) passed via a separate args array"})
+                else:
+                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments/placeholder lists, not raw unsanitized data. A common, safe pattern is passing real values through a separate params array to db.query(sql, params) while only the SQL *structure* is interpolated.", "fix": "If any interpolated value could contain user input, replace it with a parameterized placeholder instead of string interpolation"})
+                break
+
+        for m in re.finditer(r"[\"']([^\"']*)[\"']\s*\+\s*\w", code):
+            literal = m.group(1)
+            if re.search(sql_stmt, literal, re.IGNORECASE):
+                findings.append({"severity": "CRITICAL", "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input", "fix": "Use parameterized placeholders instead of concatenating values into the query string"})
+                break
+
+        # Python: f-string or %/.format() with SQL statement shape
+        for m in re.finditer(r"f[\"']([^\"']*)[\"']", code):
+            literal = m.group(1)
+            if re.search(sql_stmt, literal, re.IGNORECASE) and "{" in literal:
+                if re.search(r"\{\s*(request|req)\.(query_params|path_params|json)", literal, re.IGNORECASE):
+                    findings.append({"severity": "CRITICAL", "issue": "SQL query f-string interpolates a request value directly — SQL injection", "fix": "Use parameterized queries (SQLAlchemy text() with bound params, or the DB driver's placeholder syntax) instead of an f-string"})
+                else:
+                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input", "fix": "Use parameterized queries (SQLAlchemy text() with bound params, or the DB driver's placeholder syntax) instead of f-strings"})
+                break
+        if re.search(rf"[\"'][^\"']*{sql_stmt}[^\"']*[\"']\s*%\s*[\(\w]", code, re.IGNORECASE):
+            findings.append({"severity": "HIGH", "issue": "SQL query built with %-formatting — use parameterized queries instead", "fix": "Pass values as query parameters, not via % string formatting"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_xss_patterns(self, code: str) -> Dict[str, Any]:
+        """Detect XSS risk from raw HTML injection."""
+        findings = []
+
+        for m in re.finditer(r"dangerouslySetInnerHTML\s*=\s*\{\{[^}]*__html\s*:\s*([^,}]+)", code, re.DOTALL):
+            value_expr = m.group(1)
+            user_controlled = bool(re.search(r"props\.|req\.|input|user|params|query|body", value_expr, re.IGNORECASE))
+            findings.append({
+                "severity": "CRITICAL" if user_controlled else "MEDIUM",
+                "issue": "dangerouslySetInnerHTML used" + (" with what looks like user/request-derived content — likely XSS" if user_controlled else " — verify the HTML is not derived from user input (a common, legitimate use is injecting static computed CSS)"),
+                "fix": "Sanitize with DOMPurify.sanitize() before assigning to __html, or avoid raw HTML injection entirely if the content isn't static",
+            })
+
+        if re.search(r"\.innerHTML\s*=(?!=)", code):
+            findings.append({"severity": "HIGH", "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled", "fix": "Use .textContent for plain text, or sanitize with DOMPurify before assigning HTML"})
+
+        if re.search(r"\|\s*safe\b", code) or re.search(r"Markup\(", code):
+            findings.append({"severity": "HIGH", "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value", "fix": "Only use |safe/Markup() on content you fully control; sanitize (bleach.clean()) anything derived from user input first"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_csrf_protection(self, code: str) -> Dict[str, Any]:
+        """Audit CSRF protection — only applicable to cookie/session-based auth."""
+        findings = []
+        # Bearer tokens / API keys sent via an Authorization or custom header
+        # aren't automatically attached by the browser the way cookies are,
+        # so classic CSRF doesn't apply the same way — don't demand a CSRF
+        # token for an API that's already immune to it by construction.
+        uses_session_cookie = bool(re.search(r"express-session|cookie-session|req\.session\b|connect\.sid", code))
+        if not uses_session_cookie:
+            return {"findings": [], "total_issues": 0, "note": "No cookie/session-based auth detected — CSRF tokens don't apply to bearer-token/API-key auth the same way"}
+
+        if not re.search(r"csurf|csrf", code, re.IGNORECASE):
+            findings.append({"severity": "HIGH", "issue": "Session-cookie auth found with no CSRF protection (csurf or equivalent) visible", "fix": "Add CSRF token validation for state-changing routes, or set cookies with SameSite=Strict/Lax if that's sufficient for your threat model"})
+        if re.search(r"sameSite\s*:\s*[\"']?none[\"']?", code, re.IGNORECASE) and not re.search(r"csurf|csrf", code, re.IGNORECASE):
+            findings.append({"severity": "CRITICAL", "issue": "Cookie set with SameSite=None and no CSRF protection — cross-site requests will include the cookie with no CSRF defense", "fix": "Add CSRF token validation, or avoid SameSite=None unless cross-site cookie delivery is truly required"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_input_validation(self, code: str) -> Dict[str, Any]:
+        """Detect unvalidated input flowing into dangerous sinks."""
+        findings = []
+
+        if re.search(r"\beval\s*\(", code):
+            findings.append({"severity": "CRITICAL", "issue": "eval() found — arbitrary code execution if any part of the evaluated string is influenced by user input", "fix": "Avoid eval() entirely; use JSON.parse() for data or a proper parser for expressions"})
+        if re.search(r"new Function\s*\(", code):
+            findings.append({"severity": "HIGH", "issue": "new Function() found — similar risk to eval(), executes dynamically constructed code", "fix": "Avoid constructing functions from strings; use static code paths"})
+
+        if re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*\$\{", code) or re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*[\"']\s*\+", code):
+            findings.append({"severity": "CRITICAL", "issue": "child_process.exec() called with interpolated/concatenated input — shell command injection risk", "fix": "Use execFile()/spawn() with an argument array instead of exec() with a built string, which goes through a shell"})
+        if re.search(r"subprocess\.(run|call|Popen)\([^)]*shell\s*=\s*True", code, re.DOTALL):
+            findings.append({"severity": "HIGH", "issue": "subprocess called with shell=True — shell command injection risk if any argument is influenced by user input", "fix": "Use shell=False with an argument list instead of a shell string"})
+        if re.search(r"os\.system\s*\(", code):
+            findings.append({"severity": "HIGH", "issue": "os.system() found — shell command injection risk if any part of the command is influenced by user input", "fix": "Use subprocess.run([...], shell=False) with an argument list instead"})
+
+        if re.search(r"path\.join\([^)]*req\.(body|params|query)", code) or re.search(r"os\.path\.join\([^)]*request\.", code):
+            findings.append({"severity": "HIGH", "issue": "Path built directly from request input — path traversal risk (e.g. '../../etc/passwd')", "fix": "Validate/sanitize the path segment (reject '..', normalize and confirm it stays within the intended base directory) before joining"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_file_upload(self, code: str) -> Dict[str, Any]:
+        """Audit file upload handling."""
+        findings = []
+        code_lower = code.lower()
+
+        is_multer = "multer" in code_lower
+        is_fastapi_upload = "uploadfile" in code_lower
+
+        if (is_multer or is_fastapi_upload) and not re.search(r"mimetype|content_type|content-type|filetype|file_type", code, re.IGNORECASE):
+            findings.append({"severity": "HIGH", "issue": "File upload with no MIME type / content-type validation visible", "fix": "Validate the uploaded file's mimetype against an allowlist server-side (don't trust the client-provided extension alone)"})
+        if (is_multer or is_fastapi_upload) and not re.search(r"limits|max_size|maxsize|max_length|content_length", code, re.IGNORECASE):
+            findings.append({"severity": "MEDIUM", "issue": "No file size limit visible — unbounded uploads can exhaust disk/memory (DoS)", "fix": "Set multer's limits.fileSize (Node) or check request content-length before reading the full body (Python)"})
+        if re.search(r"req\.(file|files)\.(originalname|filename)", code) and not re.search(r"sanitize|randomUUID|uuid|nanoid|basename", code, re.IGNORECASE):
+            findings.append({"severity": "HIGH", "issue": "Uploaded filename used directly (e.g. for the storage path) without sanitizing — path traversal / overwrite risk", "fix": "Generate a random filename (uuid) server-side rather than trusting the client-provided filename"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_websocket_auth(self, code: str) -> Dict[str, Any]:
+        """Audit Socket.io/WebSocket connection handler auth."""
+        findings = []
+
+        has_connection_handler = bool(re.search(r"\.on\(\s*[\"']connection[\"']|io\.use\(", code))
+        if has_connection_handler and not re.search(r"auth|token|jwt|verify", code, re.IGNORECASE):
+            findings.append({"severity": "CRITICAL", "issue": "WebSocket connection handler with no auth check visible — any client can connect and interact", "fix": "Add io.use((socket, next) => { verify token from socket.handshake.auth; next() }) before accepting connections"})
+        if re.search(r"\.on\(\s*[\"']connection[\"']", code) and not re.search(r"disconnect", code, re.IGNORECASE):
+            findings.append({"severity": "LOW", "issue": "No disconnect handler visible — confirm any per-connection state (room membership, presence) is cleaned up on disconnect", "fix": "Add socket.on('disconnect', () => { /* cleanup */ })"})
+
+        return {"findings": findings, "total_issues": len(findings)}

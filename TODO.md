@@ -1,5 +1,62 @@
 # Agent Development Status
 
+## ✅ COMPLETED (v2.2.0)
+
+### New agents
+- [x] APIArchitectAgent — pagination affordances, error response shape consistency, status code correctness,
+      OpenAPI stub generation
+- [x] DatabaseArchitectAgent — index coverage (Drizzle + SQLAlchemy 2.0 `Mapped[]` style), migration safety
+      against populated tables (Alembic `add_column`/`drop_column` + raw `ALTER TABLE`), N+1 query detection,
+      missing unique constraints
+- [x] InfraMonitorAgent — Sentry setup review (DSN/sampling/PII), health-check depth (DB connectivity, not just
+      "process is alive"), React error boundary coverage, alert rule generation
+
+### SecurityAuditAgent: implemented the tools the README already promised but the code never delivered
+- [x] `audit_sql_injection`, `audit_xss_patterns`, `audit_csrf_protection`, `audit_input_validation`,
+      `audit_file_upload`, `audit_websocket_auth` — all validated against real code, calibrated to distinguish
+      direct request-input interpolation (CRITICAL) from ambiguous opaque-variable interpolation (MEDIUM,
+      "verify") rather than asserting a vulnerability the tool can't actually confirm from static text alone
+
+### CodeReviewAgent tools wired into `cli.py scan` (existed but were never exercised by the scanner)
+- [x] `review_express_route`, `review_react_component`, `review_drizzle_schema`, `review_zod_validation`,
+      `review_expo_integration` (push_notifications/healthkit/location)
+
+### More heuristic bugs found and fixed during this pass (same bug classes as v2.1.0, found by re-validating
+against real Vitality/shield-ai code after each new check, same discipline as the CodeReviewAgent d1a4760 fix)
+- [x] `code_review._review_expo_integration`: case-mismatch bug (`"getPermissionsAsync" not in code_lower` —
+      comparing a mixed-case literal against an all-lowercase string can never match) made the push-notification
+      permission check, the RevenueCat CustomerInfo check, and the location-cleanup check all fire far more
+      often than intended, in one case unconditionally
+- [x] `auth_security._review_oauth_flow`: "expo" matched inside "export" (JS keyword); lookaround fix, then found
+      it needed line-scoping too (a settings file mentioning "Expo push notifications" in an unrelated comment
+      falsely implicated an unrelated `client_secret` field elsewhere in the same file)
+- [x] `auth_security._audit_shared_secret_auth`: `===`/`==` timing-safe-compare check wasn't scoped to lines
+      actually mentioning the secret, so an unrelated `hostname === 'localhost'` comparison 40 lines away read as
+      an insecure secret compare
+- [x] `auth_security._review_refresh_token_rotation`: persistence-verb regex matched `create_refresh_token(`
+      (a token-*generation* function name) as if it were a database persistence call
+- [x] `security_audit._audit_sql_injection`: bare SQL keywords ("update"/"select") matched ordinary English
+      prose in f-strings; also initially flagged two textbook-correct parameterized-query patterns (bulk insert
+      via generated placeholder lists, dynamic WHERE-clause composition from static fragments) as CRITICAL
+      injection — now requires actual SQL statement shape and downgrades to MEDIUM/"verify" for opaque-variable
+      interpolation instead of asserting CRITICAL without evidence the value is user-controlled
+- [x] `security_audit.check_jwt_implementation`: "hmac" alone flagged Python's `hmac.compare_digest` (a
+      *correct*, recommended timing-safe comparison) as evidence of weak HS256 JWT signing
+- [x] `database_architect`: two nested-parens truncation bugs (`op.add_column(...)` and SQLAlchemy `Column(...)`
+      regexes stopped at the first inner `)`, silently missing the actual unsafe/unindexed case entirely);
+      DROP COLUMN check fired on every migration's idiomatic `downgrade()` (which is supposed to drop what
+      upgrade added); index/constraint checks didn't handle SQLAlchemy 2.0's `Mapped[]` annotation style at all
+      (silent 100% false-negative on this stack's actual model files); constraint check's `\w*email\w*` matched
+      `email_enabled` (a boolean) and `sender_email`/`reply_to_email` (legitimately non-unique per-row fields)
+- [x] `api_architect._review_error_response_shape`: compared *all* `res.json()` call shapes in a file (business
+      responses included) against a low distinctness threshold — flagged nearly every route file with 3+
+      endpoints, since different endpoints legitimately return different data; rescoped to only compare the
+      shape of the error value itself (string vs nested object)
+- [x] CLI: `review_express_route`'s trigger (`router\.get\(` etc.) coincidentally matches FastAPI's
+      `@router.get(...)` decorator syntax — was telling Python/FastAPI routes to "Add Zod validation" (a JS-only
+      library). Added a per-tool file-extension allowlist so JS-specific tools can't fire on Python files even
+      when the trigger regex happens to match
+
 ## ✅ COMPLETED (v2.1.0)
 
 ### Reliability / correctness pass
@@ -45,11 +102,6 @@
 
 ## 🔄 NOT STARTED
 
-- [ ] APIArchitectAgent — REST API design, OpenAPI specs, pagination, versioning (no project on this box is
-      currently blocked on this; lower priority than the above)
-- [ ] DatabaseArchitectAgent — schema design, migrations, index optimization (same — lower priority)
-- [ ] InfraMonitorAgent — Sentry setup, alert rules, performance monitoring (partially covered today by
-      RailwayDeployAgent's deployment_checklist `has_sentry` flag)
 - [ ] Real static-analysis integration (shell out to `npm audit`/ESLint/Semgrep and synthesize results) — not
       pursued because Vitality and shield-ai already run Trivy + Semgrep SAST + npm-audit-fix in CI; these
       agents are more valuable adding stack-specific semantic checks generic SAST doesn't know about

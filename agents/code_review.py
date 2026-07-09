@@ -315,7 +315,7 @@ Always provide the fix with code, not just a description of what's wrong.
         code_lower = code.lower()
 
         if integration_type == "push_notifications":
-            if "getPermissionsAsync" not in code_lower and "requestPermissionsAsync" not in code_lower:
+            if "getpermissionsasync" not in code_lower and "requestpermissionsasync" not in code_lower:
                 findings.append({"severity": "HIGH", "issue": "No permission request before push notification registration", "fix": "Call Notifications.requestPermissionsAsync() before getExpoPushTokenAsync()"})
             if "foreground" not in code_lower:
                 findings.append({"severity": "MEDIUM", "issue": "No foreground notification handler — notifications won't show when app is active", "fix": "Add Notifications.setNotificationHandler({ handleNotification: async () => ({ shouldShowAlert: true }) })"})
@@ -327,7 +327,7 @@ Always provide the fix with code, not just a description of what's wrong.
                 findings.append({"severity": "CRITICAL", "issue": "Apple identity token not validated server-side", "fix": "Send identity token to backend, verify with Apple's public keys, extract email/sub"})
 
         elif integration_type == "revenuecat":
-            if "customerInfo" not in code_lower and "offerings" not in code_lower:
+            if "customerinfo" not in code_lower and "offerings" not in code_lower:
                 findings.append({"severity": "MEDIUM", "issue": "Not checking CustomerInfo for entitlements — relying on purchase state", "fix": "Use Purchases.getCustomerInfo() and check .entitlements.active"})
             if "server" not in code_lower and "backend" not in code_lower:
                 findings.append({"severity": "HIGH", "issue": "No server-side receipt validation — client-trusted purchase state", "fix": "Send receipt to backend, validate via RevenueCat REST API, set entitlement server-side"})
@@ -339,8 +339,14 @@ Always provide the fix with code, not just a description of what's wrong.
         elif integration_type == "location":
             if "foreground" not in code_lower and "background" not in code_lower:
                 findings.append({"severity": "HIGH", "issue": "No foreground/background permission distinction", "fix": "Request foreground first, then background with TaskManager.defineTask()"})
-            if "stopsUpdating" not in code_lower and "remove" not in code_lower:
+            if "stopsupdating" not in code_lower and "remove" not in code_lower:
                 findings.append({"severity": "MEDIUM", "issue": "No location tracking cleanup — continues draining battery after unmount", "fix": "Call Location.stopLocationUpdatesAsync(taskName) in cleanup"})
+
+        elif integration_type == "healthkit":
+            if not re.search(r"platform\.os", code, re.IGNORECASE):
+                findings.append({"severity": "HIGH", "issue": "No Platform.OS guard found — HealthKit is iOS-only and will crash or no-op unexpectedly on Android without an explicit platform check", "fix": "Guard every HealthKit call with `if (Platform.OS !== 'ios') return;` (or route to expo-health-connect/react-native-health-connect on Android)"})
+            if not re.search(r"requestauthorization|requestpermission", code, re.IGNORECASE):
+                findings.append({"severity": "HIGH", "issue": "No authorization/permission request found before HealthKit access", "fix": "Call requestAuthorization() (or the equivalent permission request) before reading/writing HealthKit data"})
 
         return {"integration_type": integration_type, "findings": findings, "total_issues": len(findings)}
 
