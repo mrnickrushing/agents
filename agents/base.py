@@ -9,7 +9,20 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional
+
+# Exception class names that indicate a transient, retryable failure.
+# Matched by name (not isinstance) so we don't need to hard-import the
+# openai/anthropic SDKs at module load time — both raise similarly-named
+# errors for rate limits, timeouts, and connection failures.
+_RETRYABLE_ERROR_NAMES = {
+    "RateLimitError",
+    "APIConnectionError",
+    "APITimeoutError",
+    "InternalServerError",
+    "APIStatusError",
+}
 
 
 class BaseAgent:
@@ -35,6 +48,8 @@ class BaseAgent:
     model: str = "gpt-5"
     temperature: float = 0.3
     max_tokens: int = 4096
+    max_tool_rounds: int = 5
+    max_retries: int = 3
 
     def __init__(
         self,
@@ -86,29 +101,6 @@ class BaseAgent:
         return list(self._get_conversation())
 
     # ── Message Formatting (Unified) ────────────────────────────────
-
-    def format_messages(
-        self, 
-        user_input: str, 
-        context: Optional[str] = None,
-        conversation_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Format messages in provider-native format."""
-        conversation = self._get_conversation(conversation_id)
-        
-        if self.provider == "anthropic":
-            # Anthropic format: requires system as separate param
-            messages = list(conversation)
-            messages.append({"role": "user", "content": user_input})
-            return messages
-        else:
-            # OpenAI format: system included in messages array
-            messages = [{"role": "system", "content": self.system_prompt}]
-            if context:
-                messages.append({"role": "system", "content": f"Context:\n{context}"})
-            messages.extend(conversation)
-            messages.append({"role": "user", "content": user_input})
-            return messages
 
     def format_tools(self) -> Optional[List[Dict[str, Any]]]:
         """Return tools in provider-native format."""
@@ -198,71 +190,72 @@ class BaseAgent:
                 raw=None,
             )
 
+    def _call_with_retries(self, fn: Callable[[], Any]) -> Any:
+        """Call an SDK method, retrying transient failures with exponential backoff."""
+        attempt = 0
+        while True:
+            try:
+                return fn()
+            except Exception as e:
+                attempt += 1
+                if attempt > self.max_retries or type(e).__name__ not in _RETRYABLE_ERROR_NAMES:
+                    raise
+                time.sleep(min(2 ** attempt, 20))
+
     def _run_openai(
-        self, 
-        user_input: str, 
-        conversation: List[Dict[str, Any]], 
+        self,
+        user_input: str,
+        conversation: List[Dict[str, Any]],
         context: Optional[str] = None
     ) -> AgentResponse:
-        """Run using OpenAI API."""
+        """Run using OpenAI API. Loops on tool calls until the model stops
+        requesting them or max_tool_rounds is reached."""
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         messages = self._build_openai_messages(user_input, context, conversation)
 
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-        
         tools = self.format_tools()
-        if tools:
-            payload["tools"] = [{"type": "function", "function": t} for t in tools]
-            payload["tool_choice"] = "auto"
+        turn_messages: List[Dict[str, Any]] = []
+        response = None
+        assistant_message = None
 
-        response = client.chat.completions.create(**payload)
-        choice = response.choices[0]
-        assistant_message = choice.message
+        for round_num in range(self.max_tool_rounds + 1):
+            payload = {
+                "model": self.model,
+                "messages": messages + turn_messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            if tools:
+                payload["tools"] = [{"type": "function", "function": t} for t in tools]
+                payload["tool_choice"] = "auto"
 
-        # Handle tool calls
-        if assistant_message.tool_calls:
+            response = self._call_with_retries(lambda: client.chat.completions.create(**payload))
+            choice = response.choices[0]
+            assistant_message = choice.message
+
+            if not assistant_message.tool_calls or round_num == self.max_tool_rounds:
+                turn_messages.append({"role": "assistant", "content": assistant_message.content or ""})
+                break
+
             tool_results = self._execute_tool_calls(assistant_message.tool_calls)
-            tool_messages = [
-                {
-                    "role": "assistant",
-                    "content": assistant_message.content or "",
-                    "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls],
-                }
-            ]
+            turn_messages.append({
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls],
+            })
             for tool_result in tool_results:
-                tool_messages.append({
+                turn_messages.append({
                     "role": "tool",
                     "content": json.dumps(tool_result),
                     "tool_call_id": tool_result["tool_call_id"],
                 })
 
-            second_payload = {
-                "model": self.model,
-                "messages": messages + tool_messages,
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
-            response = client.chat.completions.create(**second_payload)
-            choice = response.choices[0]
-            assistant_message = choice.message
-
-            conversation.extend([
-                {"role": "user", "content": user_input},
-                *tool_messages,
-                {"role": "assistant", "content": assistant_message.content or ""},
-            ])
-        else:
-            conversation.extend([
-                {"role": "user", "content": user_input},
-                {"role": "assistant", "content": assistant_message.content or ""},
-            ])
+        conversation.extend([
+            {"role": "user", "content": user_input},
+            *turn_messages,
+        ])
 
         return AgentResponse(
             content=assistant_message.content or "",
@@ -272,95 +265,79 @@ class BaseAgent:
         )
 
     def _run_anthropic(
-        self, 
-        user_input: str, 
-        conversation: List[Dict[str, Any]], 
+        self,
+        user_input: str,
+        conversation: List[Dict[str, Any]],
         context: Optional[str] = None,
         images: Optional[List[Dict[str, Any]]] = None
     ) -> AgentResponse:
-        """Run using Anthropic (Claude) API."""
+        """Run using Anthropic (Claude) API. Loops on tool use until the model
+        stops requesting tools or max_tool_rounds is reached."""
         import anthropic
 
         client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
         messages = self._build_anthropic_messages(user_input, conversation, images)
-        
+
         # Add context to system prompt if provided
         system_prompt = self.system_prompt
         if context:
             system_prompt = f"{system_prompt}\n\nContext:\n{context}"
-        
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-        
-        tools = self.format_tools()
-        if tools:
-            payload["tools"] = tools
-        
-        response = client.messages.create(**payload)
-        
-        # Handle tool use
-        tool_blocks = [b for b in response.content if b.type == "tool_use"]
-        text_content = "".join(b.text for b in response.content if b.type == "text")
-        
-        if tool_blocks:
-            tool_calls = []
-            for block in tool_blocks:
-                tool_calls.append({
-                    "id": block.id,
-                    "name": block.name,
-                    "arguments": block.input
-                })
-            
-            tool_results = self._execute_tool_calls_anthropic(tool_calls)
-            tool_messages = [
-                {"role": "assistant", "content": response.content},
-            ]
-            for result in tool_results:
-                result_content = result.get("result", {"error": result.get("error", "Tool execution failed")})
-                tool_messages.append({
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": result["tool_use_id"],
-                            "content": json.dumps(result_content),
-                        }
-                    ],
-                })
 
-            response = client.messages.create(
-                model=self.model,
-                system=system_prompt,
-                messages=messages + tool_messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                tools=tools if tools else None,
-            )
+        tools = self.format_tools()
+        turn_messages: List[Dict[str, Any]] = []
+        response = None
+        text_content = ""
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        for round_num in range(self.max_tool_rounds + 1):
+            payload = {
+                "model": self.model,
+                "system": system_prompt,
+                "messages": messages + turn_messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            if tools:
+                payload["tools"] = tools
+
+            response = self._call_with_retries(lambda: client.messages.create(**payload))
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
+
+            tool_blocks = [b for b in response.content if b.type == "tool_use"]
             text_content = "".join(b.text for b in response.content if b.type == "text")
 
-            conversation.extend([
-                {"role": "user", "content": messages[-1]["content"]},
-                *tool_messages,
-                {"role": "assistant", "content": response.content},
-            ])
-        else:
-            conversation.extend([
-                {"role": "user", "content": messages[-1]["content"]},
-                {"role": "assistant", "content": response.content},
-            ])
-        
+            if not tool_blocks or round_num == self.max_tool_rounds:
+                turn_messages.append({"role": "assistant", "content": response.content})
+                break
+
+            tool_calls = [{"id": b.id, "name": b.name, "arguments": b.input} for b in tool_blocks]
+            tool_results = self._execute_tool_calls_anthropic(tool_calls)
+
+            turn_messages.append({"role": "assistant", "content": response.content})
+            result_blocks = []
+            for result in tool_results:
+                result_content = result.get("result", {"error": result.get("error", "Tool execution failed")})
+                result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": result["tool_use_id"],
+                    "content": json.dumps(result_content),
+                })
+            turn_messages.append({"role": "user", "content": result_blocks})
+
+        conversation.extend([
+            {"role": "user", "content": messages[-1]["content"]},
+            *turn_messages,
+        ])
+
         return AgentResponse(
             content=text_content,
             model=response.model,
             usage={
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens,
             },
             raw=response,
         )

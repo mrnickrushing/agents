@@ -350,72 +350,74 @@ You're not just writing code — you're crafting experiences that work for every
         issues: List[Dict[str, str]] = []
         score = 100
         recommendations: List[str] = []
-        
-        # Check for common accessibility issues
-        checks = [
-            # Critical issues
-            {
-                "pattern": r'<img(?!\s+(alt|src)=)',
-                "severity": "critical",
-                "issue": "Images missing alt text",
-                "wcag": "1.1.1 Non-text Content",
-                "fix": "Add alt attribute with descriptive text to all img elements"
-            },
-            {
-                "pattern": r'onClick\s*=\s*{\s*\w+}',
-                "severity": "critical",
-                "issue": "Clickable element lacks keyboard support",
-                "wcag": "2.1.1 Keyboard",
-                "fix": "Add tabIndex={0} and onKeyDown handler, or use button/anchor element"
-            },
-            # Serious issues
-            {
-                "pattern": r'<h\d>\s*</h\d>',
-                "severity": "serious",
-                "issue": "Empty heading",
-                "wcag": "2.4.6 Headings and Labels",
-                "fix": "Add descriptive text to heading or remove if not needed"
-            },
-            {
-                "pattern": r'<div.*role="button"',
-                "severity": "serious",
-                "issue": "Div used as button without ARIA attributes",
-                "wcag": "4.1.2 Name, Role, Value",
-                "fix": "Use <button> element or add aria-label and proper keyboard handlers"
-            },
-            # Moderate issues
-            {
-                "pattern": r'placeholder="(?!.*[pP]laceholder)',
-                "severity": "moderate",
-                "issue": "Placeholder text used for form labels",
-                "wcag": "2.4.6 Headings and Labels",
-                "fix": "Add proper label element associated with input"
-            },
-            # Color contrast would need a more sophisticated check
-        ]
-        
+
         import re
-        
+
         severity_order = ["critical", "serious", "moderate", "minor"]
         max_severity_idx = severity_order.index(severity)
-        
-        for check in checks:
-            if re.search(check["pattern"], component_code, re.IGNORECASE):
-                check_severity_idx = severity_order.index(check["severity"])
-                if check_severity_idx <= max_severity_idx:
-                    issues.append({
-                        "severity": check["severity"],
-                        "issue": check["issue"],
-                        "wcag_criterion": check["wcag"],
-                        "fix": check["fix"]
-                    })
-                    # Deduct points based on severity
-                    if check["severity"] == "critical":
-                        score -= 20
-                    elif check["severity"] == "serious":
-                        score -= 10
-                    elif check["severity"] == "moderate":
-                        score -= 5
+
+        def add_issue(sev: str, issue: str, wcag: str, fix: str) -> None:
+            if severity_order.index(sev) <= max_severity_idx:
+                issues.append({"severity": sev, "issue": issue, "wcag_criterion": wcag, "fix": fix})
+
+        # ── Tag-aware checks ──────────────────────────────────────────
+        # These parse individual tags rather than scanning raw substrings —
+        # scanning the whole blob for e.g. "alt=" anywhere lets one accessible
+        # <img alt="..."> hide a second, genuinely broken one, and naive
+        # lookaheads only checking the attribute immediately after the tag
+        # name misfire whenever attributes aren't in that exact order (the
+        # common case for anything formatted by prettier).
+        img_tags = re.findall(r"<img\b[^>]*/?>", component_code, re.IGNORECASE)
+        missing_alt = [t for t in img_tags if not re.search(r"\balt\s*=", t, re.IGNORECASE)]
+        if missing_alt:
+            add_issue("critical", f"{len(missing_alt)} <img> element(s) missing alt text",
+                       "1.1.1 Non-text Content", "Add alt attribute with descriptive text to all img elements")
+
+        # Attrs can contain "{() => fn()}" — the "=>" arrow has a literal ">" in it,
+        # so a plain [^>]* stops there. Treat up to two levels of {..} nesting as
+        # atomic so we don't truncate the attribute list mid-JSX-expression.
+        tag_pattern = r"<([a-zA-Z][\w.]*)\b((?:[^{}>]|\{(?:[^{}]|\{[^{}]*\})*\})*)>"
+        all_tags = re.findall(tag_pattern, component_code)
+
+        clickable_no_keyboard = []
+        for tag_name, attrs in all_tags:
+            if tag_name.lower() in ("button", "a", "input", "textarea", "select"):
+                continue
+            if not re.search(r"\bonClick\s*=", attrs):
+                continue
+            if re.search(r"\btabIndex\b", attrs) or re.search(r"\bonKeyDown\b", attrs) or re.search(r"\brole\s*=", attrs):
+                continue
+            clickable_no_keyboard.append(tag_name)
+        if clickable_no_keyboard:
+            add_issue("critical", f"Clickable <{clickable_no_keyboard[0]}> lacks keyboard support (no tabIndex/onKeyDown/role)",
+                       "2.1.1 Keyboard", "Add tabIndex={0} and an onKeyDown handler, or use a button/anchor element")
+
+        for tag in re.findall(r"<h\d>\s*</h\d>", component_code):
+            add_issue("serious", "Empty heading", "2.4.6 Headings and Labels",
+                       "Add descriptive text to heading or remove if not needed")
+            break
+
+        for tag_name, attrs in all_tags:
+            if re.search(r'role\s*=\s*"button"', attrs, re.IGNORECASE) and not re.search(r"aria-label", attrs, re.IGNORECASE):
+                add_issue("serious", f"<{tag_name} role=\"button\"> without ARIA attributes",
+                           "4.1.2 Name, Role, Value", "Use <button> element or add aria-label and proper keyboard handlers")
+                break
+
+        # A placeholder alone isn't a label — flag inputs that use one without
+        # any <label>/aria-label/aria-labelledby anywhere in the component.
+        has_placeholder_input = re.search(r"<(input|textarea)\b[^>]*\bplaceholder\s*=", component_code, re.IGNORECASE)
+        has_label = re.search(r"<label\b|aria-label\s*=|aria-labelledby\s*=", component_code, re.IGNORECASE)
+        if has_placeholder_input and not has_label:
+            add_issue("moderate", "Placeholder text used in place of a form label", "2.4.6 Headings and Labels",
+                       "Add a proper <label> (or aria-label) associated with the input — placeholders disappear on input and aren't a reliable label for screen readers")
+
+        for sev in [i["severity"] for i in issues]:
+            if sev == "critical":
+                score -= 20
+            elif sev == "serious":
+                score -= 10
+            elif sev == "moderate":
+                score -= 5
         
         # Generate recommendations
         if score < 100:

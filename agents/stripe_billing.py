@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
@@ -293,7 +294,15 @@ When reviewing billing code or answering billing questions:
             findings.append({"severity": "INFO", "issue": "No Stripe publishable key found — ensure it's loaded from environment, not hardcoded"})
         if "receipt" in code_lower and "verify" not in code_lower and "validate" not in code_lower:
             findings.append({"severity": "CRITICAL", "issue": "Receipt data handled without server-side validation — client-trusted purchase state is exploitable"})
-        if "customer" in code_lower and "update" in code_lower and "auth" not in code_lower:
+        # Look for an actual auth marker, not just the substring "auth" — that also
+        # matches "author", unrelated "Authorization" header echoing, etc., which made
+        # this check nearly impossible to trigger even when auth really was missing.
+        has_auth_marker = re.search(
+            r"requireauth|require_auth|authenticate|authoriz|req\.user|current_user|get_current_user|@login_required|isauthenticated",
+            integration_code,
+            re.IGNORECASE,
+        )
+        if "customer" in code_lower and "update" in code_lower and not has_auth_marker:
             findings.append({"severity": "HIGH", "issue": "Customer update without auth check — any user could modify another's billing info"})
 
         return {"findings": findings, "concerns": concerns, "total_issues": len(findings)}

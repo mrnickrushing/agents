@@ -2,28 +2,50 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Six specialized agents that understand your exact stack — React/Node/Express, React Native/Expo, Stripe, Railway, Helmet, and security-hardened everything. Now with dual-provider support and Claude-powered UI component generation.
+Eight specialized agents that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
-## 🆕 Version 2.0.1 — What's New
+## 🆕 Version 2.1.0 — What's New
 
-- **✨ Multi-Provider Support**: All agents now work with both OpenAI and Anthropic
-- **🎨 UI Generation Agent**: Claude-powered component builder with multi-turn conversations
-- **🔧 Expanded Tooling**: SecurityAudit (15 domains), StripeBilling (14 tools), RailwayDeploy (14 tools), CodeReview (14 tools)
-- **💬 Conversation Support**: Multi-turn conversations with conversation IDs
-- **👁️ Vision Input**: Wireframe/screenshot analysis for UI components
+- **🔐 Auth Security Agent**: JWT refresh rotation, Apple Sign-In (nonce/JWKS/audience), Google OAuth, shared-secret app gates, biometric auth
+- **📱 Mobile Deploy Agent**: EAS build config (incl. hardcoded-secret detection), Codemagic workflows, App Store/Play submission checklists, RevenueCat setup
+- **🖥️ CLI**: `python -m agents.cli` calls the deterministic tool handlers directly — no LLM API key needed. `scan` auto-discovers relevant files in a project and runs the matching checks.
+- **🔁 Multi-round tool calling**: `run()` now loops on chained tool calls instead of stopping after one round trip
+- **🩹 Heuristic accuracy fixes**: several checks (JWT expiry, CORS, accessibility, billing auth) previously matched on overly broad substrings (e.g. "exp" matching "express") and rarely fired — tightened across the board and validated against real code
+- **🐍 Python/FastAPI awareness**: `scan_dependencies` now handles `requirements.txt`, `analyze_helmet_config` scans raw source (not just hand-built JSON), `audit_cors_config` recognizes FastAPI's `CORSMiddleware`
 
 ## The Agents
 
 | Agent | Provider | What It Does |
 |---|---|---|
-| **SecurityAuditAgent** | OpenAI, Anthropic | Helmet config, OWASP Top 10, JWT vulnerabilities, rate limiting gaps, dependency scanning, deployment security, mobile hardening, WebSocket auth |
+| **SecurityAuditAgent** | OpenAI, Anthropic | Helmet config (incl. raw source), OWASP Top 10, JWT vulnerabilities (Node + Python), rate limiting gaps, npm/pip dependency scanning, CORS (Express + FastAPI), deployment security |
+| **AuthSecurityAgent** ⭐ NEW | OpenAI, Anthropic | JWT refresh rotation/revocation, Apple Sign-In (nonce/JWKS/issuer/audience), Google OAuth CSRF, shared-secret app gates (x-api-key), biometric auth |
 | **StripeBillingAgent** | OpenAI, Anthropic | Webhook handler review, subscription model design, RevenueCat sync, billing security audit, receipt validation, dunning management, disputes, coupons, tax |
 | **RailwayDeployAgent** | OpenAI, Anthropic | CI/CD workflows (GitHub Actions, Codemagic, EAS), platform configs (Vercel, Cloudflare), Sentry integration, migrations, monitoring alerts, backup strategies |
+| **MobileDeployAgent** ⭐ NEW | OpenAI, Anthropic | EAS build profile review (hardcoded secrets, production hardening), Codemagic code-signing hygiene, App Store/Play submission checklists, RevenueCat SDK setup |
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
-| **UIGenerationAgent** ⭐ NEW | Anthropic (Claude) | React/TypeScript component generation from natural language, multi-turn refinement, accessibility validation, design tokens |
+| **UIGenerationAgent** | Anthropic (Claude) | React/TypeScript component generation from natural language, multi-turn refinement, accessibility validation, design tokens |
+
+## CLI — use the checks without an API key
+
+The tool handlers behind each agent are plain Python (regex/heuristic checks over a string), separate from the LLM planning loop. The CLI calls them directly:
+
+```fish
+# List every agent and its tools
+python -m agents.cli list
+
+# Run one check against a real file
+python -m agents.cli run security_audit check_jwt_implementation --file code=backend/src/routes/auth.ts
+python -m agents.cli run security_audit scan_dependencies --file package_json=backend/requirements.txt
+
+# Auto-discover relevant files in a project and run the matching checks
+python -m agents.cli scan --path ~/Vitality
+python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_security --out report.json
+```
+
+`scan` walks the project (skipping `node_modules`, `.git`, `dist`, `.venv`, etc.), matches files by name (`package.json`, `eas.json`, `codemagic.yaml`) or content (helmet/cors/jwt/RevenueCat/Apple Sign-In patterns), runs the corresponding tool handler, and prints a severity-sorted report.
 
 ## Install
 
@@ -36,6 +58,8 @@ pip install -e .
 # Install dependencies
 pip install openai>=1.0.0 anthropic>=0.40.0
 ```
+
+All shell snippets below are `fish`. All `python` blocks are Python code, not shell commands, and should be run with `python` or saved to a `.py` file first.
 
 ## Quick Start
 
@@ -253,6 +277,22 @@ agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 - `audit_mobile_security` — iOS/Android security patterns
 - `generate_pen_test_report` — Penetration test report template
 
+### AuthSecurityAgent ⭐ NEW
+
+**Auth Flow Coverage:**
+- JWT access/refresh rotation and reuse detection
+- Apple Sign-In server-side verification (nonce, JWKS, issuer, audience)
+- Google/social OAuth CSRF (state param) and token exchange security
+- Shared-secret app gates (x-api-key pattern) — timing-safe comparison, no hardcoded fallback
+- Biometric auth (Face ID / LocalAuthentication) — fallback and credential binding
+
+**Key Tools:**
+- `review_refresh_token_rotation` — refresh token reuse/rotation/hashing and algorithm-confusion checks
+- `review_apple_sign_in` — nonce, JWKS signature verification, issuer/audience validation
+- `review_oauth_flow` — CSRF state param, server-side token exchange, audience validation
+- `audit_shared_secret_auth` — timing-safe comparison, hardcoded fallback detection
+- `review_biometric_auth` — enrollment/fallback checks, credential binding (not a bare local gate)
+
 ### StripeBillingAgent
 
 **Billing Lifecycle (14 areas):**
@@ -290,27 +330,20 @@ agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 
 ### RailwayDeployAgent
 
-**Deployment Orchestration (14 tools):**
-
-**CI/CD & Build:**
-- `diagnose_build_failure` — Railway/Vercel/Cloudflare/EAS build failure analysis
-- `generate_github_actions` — CI/CD workflows (node_ci, python_ci, deployment pipelines)
-- `generate_codemagic_config` — React Native iOS/Android build configs
-- `generate_eas_config` — Expo managed workflow build configs
-
-**Platform Configs:**
+**Deployment Orchestration:**
+- `diagnose_build_failure` — Railway/Vercel/Cloudflare/EAS build failure analysis from build logs
 - `generate_railway_toml` — Railway deployment configuration
-- `generate_vercel_config` — Vercel deployment configuration
-- `generate_cloudflare_workers` — Cloudflare Workers + Hono config
+- `generate_docker_compose` — Docker Compose with Postgres/Redis/Celery services
+- `deployment_checklist` — Pre-deployment checklist (Stripe, Sentry, CORS, rate limiting)
+- `setup_env_vars` — Required environment variables for a given stack + integration set
 
-**Infrastructure:**
-- `generate_docker_compose` — Docker Compose with health checks and Celery
-- `generate_migration_runner` — Zero-downtime migration scripts
-- `setup_sentry_integration` — Sentry error monitoring setup
-- `setup_monitoring_alerts` — Health checks and alert rules
-- `setup_backup_strategy` — Backup and disaster recovery
-- `setup_ssl_domain` — SSL/TLS and domain configuration
-- `deployment_checklist` — Pre-deployment checklist
+### MobileDeployAgent ⭐ NEW
+
+**EAS / Codemagic / App Store Readiness:**
+- `review_eas_config` — flags literal secrets committed into `eas.json` build profiles, missing production hardening (autoIncrement, submit config)
+- `review_codemagic_config` — code-signing hygiene (no inlined keys), trigger scoping, TestFlight/App Store submission steps
+- `app_store_submission_checklist` — App Store/Play submission checklist (privacy labels, ATT, HealthKit disclosures, IAP readiness) by app category
+- `review_revenuecat_setup` — Purchases.configure() timing, offerings error handling, restorePurchases(), entitlement-gated purchase flow
 
 ### CodeReviewAgent
 
@@ -509,4 +542,4 @@ MIT
 
 Built by [Rushing Technologies](https://rushingtechnologies.com) — solo operator, full stack + security + AI.
 
-**Version 2.0.0** — Multi-provider support with Claude-powered UI generation.
+**Version 2.1.0** — Auth security + mobile deploy agents, no-API-key CLI, multi-round tool calling, heuristic accuracy fixes.

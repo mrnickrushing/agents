@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
@@ -168,13 +169,13 @@ Format findings as structured reports with severity, location, description, and 
             },
             {
                 "name": "scan_dependencies",
-                "description": "Analyze a package.json for known vulnerable dependencies.",
+                "description": "Analyze a dependency manifest for known risky/vulnerable dependencies. Accepts either an npm package.json or a Python requirements.txt (auto-detected).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "package_json": {
                             "type": "string",
-                            "description": "The contents of package.json"
+                            "description": "The contents of package.json OR requirements.txt"
                         },
                         "severity_threshold": {
                             "type": "string",
@@ -264,13 +265,22 @@ Format findings as structured reports with severity, location, description, and 
     # ── Tool handlers ──────────────────────────────────────────────────
 
     def _analyze_helmet_config(self, config_json: str, framework: str = "express") -> Dict[str, Any]:
-        """Analyze Helmet config — returns structured findings."""
-        try:
-            config = json.loads(config_json)
-        except json.JSONDecodeError:
-            config = {"raw": config_json}
+        """Analyze a Helmet configuration.
 
-        findings = []
+        Accepts either a hand-built JSON config object (original behavior) or
+        raw source code that calls helmet() — real files call `app.use(helmet())`
+        or `app.use(helmet({...}))` directly, which isn't valid JSON, so a
+        config_json-only tool couldn't actually scan a real index.ts.
+        """
+        text = config_json.strip()
+        config: Optional[Dict[str, Any]] = None
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                config = parsed
+        except json.JSONDecodeError:
+            config = None
+
         checks = {
             "contentSecurityPolicy": "CSP is not configured — allows inline scripts and styles from any source",
             "hsts": "HSTS is not set — browsers won't enforce HTTPS",
@@ -282,21 +292,49 @@ Format findings as structured reports with severity, location, description, and 
             "crossOriginResourcePolicy": "CORP is not set — resources may be loaded cross-origin",
         }
 
-        for key, warning in checks.items():
-            if key not in config:
-                findings.append({"severity": "MEDIUM", "setting": key, "issue": warning})
+        findings = []
 
-        # Check for dangerously permissive CSP
-        if "contentSecurityPolicy" in config:
-            csp = config["contentSecurityPolicy"]
-            if isinstance(csp, dict) and "directives" in csp:
-                directives = csp["directives"]
-                if directives.get("scriptSrc") and "'unsafe-inline'" in str(directives.get("scriptSrc", [])):
-                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-inline scripts — XSS risk"})
-                if directives.get("scriptSrc") and "'unsafe-eval'" in str(directives.get("scriptSrc", [])):
+        if config is not None:
+            # A hand-built options object was passed directly.
+            for key, warning in checks.items():
+                if key not in config:
+                    findings.append({"severity": "MEDIUM", "setting": key, "issue": warning})
+
+            if "contentSecurityPolicy" in config:
+                csp = config["contentSecurityPolicy"]
+                if isinstance(csp, dict) and "directives" in csp:
+                    directives = csp["directives"]
+                    if directives.get("scriptSrc") and "'unsafe-inline'" in str(directives.get("scriptSrc", [])):
+                        findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-inline scripts — XSS risk"})
+                    if directives.get("scriptSrc") and "'unsafe-eval'" in str(directives.get("scriptSrc", [])):
+                        findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-eval — code injection risk"})
+            mode = "config"
+        elif not re.search(r"\bhelmet\s*\(", text):
+            findings.append({"severity": "CRITICAL", "setting": "helmet", "issue": "No helmet() call found in this source — the app likely has no security headers applied at all"})
+            mode = "source"
+        else:
+            mode = "source"
+            if re.search(r"helmet\s*\(\s*\)", text):
+                findings.append({
+                    "severity": "INFO", "setting": "helmet",
+                    "issue": "helmet() is called with no options, which uses Helmet's secure defaults (CSP, HSTS, X-Frame-Options, etc. are all enabled). Verify the default CSP actually allows the domains you need (Stripe.js, image CDNs) rather than assuming it's a gap.",
+                })
+            else:
+                if re.search(r"contentSecurityPolicy\s*:\s*false", text, re.IGNORECASE):
+                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy", "issue": "contentSecurityPolicy is explicitly disabled — this turns off Helmet's strongest XSS mitigation"})
+                elif not re.search(r"contentSecurityPolicy\s*:", text):
+                    findings.append({"severity": "MEDIUM", "setting": "contentSecurityPolicy", "issue": checks["contentSecurityPolicy"]})
+                if re.search(r"['\"]unsafe-inline['\"]", text):
+                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-inline — XSS risk"})
+                if re.search(r"['\"]unsafe-eval['\"]", text):
                     findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-eval — code injection risk"})
+                for key, warning in checks.items():
+                    if key == "contentSecurityPolicy":
+                        continue
+                    if not re.search(rf"\b{key}\s*:", text):
+                        findings.append({"severity": "MEDIUM", "setting": key, "issue": warning})
 
-        return {"framework": framework, "findings": findings, "total_issues": len(findings)}
+        return {"framework": framework, "mode": mode, "findings": findings, "total_issues": len(findings)}
 
     def _check_jwt_implementation(self, code: str, concerns: str = "") -> Dict[str, Any]:
         """Check JWT code for common vulnerabilities."""
@@ -307,11 +345,20 @@ Format findings as structured reports with severity, location, description, and 
             findings.append({"severity": "HIGH", "issue": "Using HS256 (symmetric) — prefer RS256/ES256 (asymmetric) so the signing key isn't shared"})
         if "localstorage" in code_lower or "local storage" in code_lower:
             findings.append({"severity": "CRITICAL", "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies."})
-        if "expiresin" not in code_lower and "exp" not in code_lower:
+        # Matches expiresIn/expires_delta/exp claim/maxAge patterns. Plain "exp" as a
+        # substring is too broad — it matches "express"/"expo", which appear in nearly
+        # every file in this stack and silently disabled this check.
+        if not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\bexp\s*[:=]", code, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "No token expiration set — tokens are valid forever"})
-        if "verify" not in code_lower:
+        # PyJWT/python-jose verify implicitly via jwt.decode() (it raises on a bad
+        # signature) — there's no literal "verify" call, so the old substring check
+        # flagged every correct Python decode_token()-style function as unverified.
+        if not re.search(r"verify|jwt\.decode\(|jwt_decode\(|jose\.jwt\.decode\(|\.decode\(\s*token", code, re.IGNORECASE):
             findings.append({"severity": "CRITICAL", "issue": "Token verification not found — tokens may not be validated server-side"})
-        if "none" in code_lower and "algorithm" in code_lower:
+        # Require an actual algorithms:["none"] / alg=none pattern, not just the
+        # words "none" and "algorithm" appearing anywhere (e.g. CSS "display: none"
+        # alongside an unrelated "algorithm" comment would previously false-positive).
+        if re.search(r"algorithms?\s*[:=]\s*\[?\s*[\"']none[\"']", code, re.IGNORECASE):
             findings.append({"severity": "CRITICAL", "issue": "Algorithm 'none' detected — this allows unauthenticated token forgery"})
         if concerns:
             findings.append({"severity": "INFO", "issue": f"Specific concern noted: {concerns}"})
@@ -319,56 +366,104 @@ Format findings as structured reports with severity, location, description, and 
         return {"jwt_findings": findings, "total_issues": len(findings)}
 
     def _scan_dependencies(self, package_json: str, severity_threshold: str = "medium") -> Dict[str, Any]:
-        """Scan package.json for known risky patterns."""
-        try:
-            pkg = json.loads(package_json)
-        except json.JSONDecodeError:
-            return {"error": "Invalid package.json"}
+        """Scan a dependency manifest for known risky patterns.
+
+        Despite the parameter name (kept for tool-schema/backward compatibility),
+        this accepts either an npm package.json or a Python requirements.txt —
+        the content is auto-detected, since Python backends (FastAPI/Flask) in
+        this stack have no package.json at all.
+        """
+        manifest = package_json.strip()
+        ecosystem = "npm"
+        deps: Dict[str, str] = {}
+
+        if manifest.startswith("{"):
+            try:
+                pkg = json.loads(manifest)
+            except json.JSONDecodeError:
+                return {"error": "Invalid package.json"}
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+        else:
+            ecosystem = "pip"
+            for line in manifest.splitlines():
+                line = line.split("#", 1)[0].strip()
+                if not line or line.startswith("-"):
+                    continue
+                match = re.match(r"^([A-Za-z0-9_.\-\[\]]+)\s*(==|>=|<=|~=|!=|>|<)?\s*([\w.\-]*)", line)
+                if match:
+                    deps[match.group(1).lower()] = match.group(3) or ""
 
         findings = []
-        deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
 
-        # Known risky packages
-        risky = {
-            "express": {"note": "Ensure express is updated to 4.21+ or 5.x for security patches", "severity": "INFO"},
-            "helmet": {"note": "If helmet is missing, the app has no security headers", "severity": "HIGH", "if_missing": True},
-            "jsonwebtoken": {"note": "Verify you're using RS256/ES256, not HS256 with a weak secret", "severity": "MEDIUM"},
-            "bcrypt": {"note": "Ensure bcrypt rounds >= 12 for modern hardware", "severity": "MEDIUM"},
-            "cors": {"note": "Ensure origin is not set to '*' in production", "severity": "HIGH"},
-            "body-parser": {"note": "Set size limits to prevent denial-of-service via large payloads", "severity": "MEDIUM"},
-        }
+        if ecosystem == "npm":
+            risky = {
+                "express": {"note": "Ensure express is updated to 4.21+ or 5.x for security patches", "severity": "INFO"},
+                "jsonwebtoken": {"note": "Verify you're using RS256/ES256, not HS256 with a weak secret", "severity": "MEDIUM"},
+                "bcrypt": {"note": "Ensure bcrypt rounds >= 12 for modern hardware", "severity": "MEDIUM"},
+                "cors": {"note": "Ensure origin is not set to '*' in production", "severity": "HIGH"},
+                "body-parser": {"note": "Set size limits to prevent denial-of-service via large payloads", "severity": "MEDIUM"},
+            }
+            # Helmet is Express-specific middleware — flagging it as missing
+            # from a mobile (Expo/React Native) or frontend package.json that
+            # has no server to harden in the first place is a false alarm.
+            if "express" in deps and "helmet" not in deps:
+                findings.append({"severity": "HIGH", "package": "helmet", "issue": "helmet is not installed — no security headers applied"})
+            for name, info in risky.items():
+                if name in deps:
+                    findings.append({"severity": info["severity"], "package": name, "issue": info["note"]})
+        else:
+            risky = {
+                "fastapi": {"note": "Ensure request bodies are Pydantic models (never raw dict) at every route boundary", "severity": "INFO"},
+                "flask": {"note": "Flask ships no security headers by default — add flask-talisman or equivalent", "severity": "MEDIUM"},
+                "django": {"note": "Confirm DEBUG=False and ALLOWED_HOSTS is restricted in production settings", "severity": "MEDIUM"},
+                "pyjwt": {"note": "Confirm algorithms=[...] is passed explicitly to jwt.decode() — omitting it lets a token choose its own algorithm", "severity": "HIGH"},
+                "python-jose": {"note": "Confirm algorithms=[...] is passed explicitly to jwt.decode() — omitting it lets a token choose its own algorithm", "severity": "HIGH"},
+                "bcrypt": {"note": "Ensure bcrypt inputs are truncated/handled for the 72-byte limit", "severity": "LOW"},
+                "pyyaml": {"note": "Ensure yaml.safe_load() is used, never yaml.load() with the default Loader", "severity": "HIGH"},
+                "requests": {"note": "Ensure outbound requests set a timeout — requests has no default and will hang forever", "severity": "MEDIUM"},
+                "sqlalchemy": {"note": "Ensure raw SQL (text()) uses bound parameters, never f-string/format interpolation", "severity": "MEDIUM"},
+            }
+            for name, info in risky.items():
+                if name in deps:
+                    findings.append({"severity": info["severity"], "package": name, "issue": info["note"]})
+            if not any(p in deps for p in ("fastapi", "flask", "django")) :
+                findings.append({"severity": "INFO", "package": "-", "issue": "No recognized Python web framework found — dependency checks may be incomplete"})
 
-        if "helmet" not in deps:
-            findings.append({"severity": "HIGH", "package": "helmet", "issue": "helmet is not installed — no security headers applied"})
-
-        for name, info in risky.items():
-            if name in deps and name != "helmet":
-                findings.append({"severity": info["severity"], "package": name, "issue": info["note"]})
-
-        if "cors" in deps:
-            findings.append({"severity": "HIGH", "package": "cors", "issue": "cors is installed — verify origin is not '*' in production"})
-
-        return {"dependencies_count": len(deps), "findings": findings, "threshold": severity_threshold}
+        return {"ecosystem": ecosystem, "dependencies_count": len(deps), "findings": findings, "threshold": severity_threshold}
 
     def _audit_cors_config(self, cors_code: str, allowed_origins: str = "") -> Dict[str, Any]:
-        """Audit CORS configuration."""
+        """Audit CORS configuration — Express cors() or FastAPI/Starlette CORSMiddleware."""
         findings = []
         code_lower = cors_code.lower()
+        is_fastapi = "corsmiddleware" in code_lower
 
-        if '"*"' in cors_code or "'*'" in cors_code:
+        wildcard = (
+            '"*"' in cors_code or "'*'" in cors_code
+            or bool(re.search(r"allow_origins\s*=\s*\[\s*[\"']\*[\"']", cors_code))
+        )
+        if wildcard:
             findings.append({"severity": "CRITICAL", "issue": "CORS origin is '*' — any domain can make requests to this API"})
-        if "credentials" in code_lower and "true" in code_lower:
-            if '"*"' in cors_code or "'*'" in cors_code:
-                findings.append({"severity": "CRITICAL", "issue": "credentials: true with origin: '*' — this combination is actually blocked by browsers, but indicates misconfiguration intent"})
-        if "methods" not in code_lower:
+
+        credentials_true = (
+            bool(re.search(r"credentials\s*:\s*true", cors_code, re.IGNORECASE))
+            or bool(re.search(r"allow_credentials\s*=\s*true", cors_code, re.IGNORECASE))
+        )
+        if credentials_true and wildcard:
+            findings.append({"severity": "CRITICAL", "issue": "credentials/allow_credentials=true with origin '*' — browsers reject this combination outright (CORS spec forbids it), so requests will fail; it also signals the origin allowlist wasn't actually locked down"})
+
+        if is_fastapi:
+            if not re.search(r"allow_methods\s*=", cors_code):
+                findings.append({"severity": "MEDIUM", "issue": "No allow_methods restriction — all HTTP methods are allowed"})
+        elif "methods" not in code_lower:
             findings.append({"severity": "MEDIUM", "issue": "No methods restriction — all HTTP methods are allowed"})
+
         if allowed_origins:
             origins = [o.strip() for o in allowed_origins.split(",")]
             non_https = [o for o in origins if o.startswith("http://")]
             if non_https:
                 findings.append({"severity": "MEDIUM", "issue": f"Non-HTTPS origins allowed: {non_https}"})
 
-        return {"cors_findings": findings, "total_issues": len(findings)}
+        return {"cors_findings": findings, "framework": "fastapi" if is_fastapi else "express", "total_issues": len(findings)}
 
     def _generate_helmet_config(self, app_type: str = "saas_platform", domains: str = "", cdn_used: bool = False, stripe_enabled: bool = False) -> Dict[str, Any]:
         """Generate a production Helmet config."""
