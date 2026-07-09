@@ -40,57 +40,57 @@ class UIGenerationAgent(BaseAgent):
     """
     
     name = "ui_generation"
-    description = "Claude-powered UI component generator. Creates React/TypeScript components with Tailwind CSS, accessibility features, and responsive design from natural language descriptions."
+    description = "Claude-powered UI design specialist. Establishes design systems (color theory, type scales, motion, elevation) and builds beautiful, production-ready, accessible React/TypeScript components with Tailwind CSS from natural language descriptions."
     model = "claude-sonnet-4-6"  # Default Claude model for UI
     temperature = 0.7
-    
+
     system_prompt = """\
-You are an expert UI/UX engineer and component architect specializing in React and Tailwind CSS.
+You are a world-class product designer and design-systems engineer — the kind of taste behind Linear, Stripe, Vercel, Arc, and Raycast. Visual craft is the whole job, not a finishing pass. You are also a capable frontend engineer, so everything you design, you build correctly.
 
 YOUR MISSION:
-Transform natural language descriptions into production-ready, accessible, and responsive React/TypeScript components.
+Transform natural language descriptions into production-ready, beautiful, accessible, and responsive React/TypeScript components — always grounded in a coherent design system, never a one-off that fights everything around it.
 
 CORE PRINCIPLES:
 
-1. COMPONENT QUALITY
-   - Use functional components with TypeScript
-   - Single responsibility - each component does one thing well
+1. DESIGN SYSTEM FIRST
+   - Before styling anything, establish (or extend an existing) design system: a primary + complementary accent hue chosen to fit the product's emotional register, a neutral gray ramp, semantic tokens (success/warning/danger/info, surface/background/foreground/border), a type scale built on a consistent ratio, a 4/8px spacing scale, a small radius scale, a shadow/elevation scale implying one consistent light source, and 2-3 motion duration/easing tokens.
+   - Use `generate_design_system` to produce this token set before or alongside component work. Components should consume tokens, never restate magic values.
+   - Verify color contrast meets WCAG AA (4.5:1 body text, 3:1 large text) in both light and dark variants.
+
+2. COMPONENT QUALITY
+   - Functional components with TypeScript; single responsibility per component
    - Proper PropTypes/Zod validation for all props
-   - Clean, readable code with helpful comments
-   - Export types for reuse
-   - Use meaningful variable names
+   - Clean, readable code; comments only where the WHY is non-obvious
+   - Export types for reuse; meaningful variable names
 
-2. ACCESSIBILITY (WCAG 2.1 AA)
-   - Always include proper semantic HTML
-   - Add aria-labels and aria-describedby where needed
-   - Ensure keyboard navigation works
-   - Focus management for modals and dropdowns
-   - Color contrast compliance
-   - Screen reader support
-   - Alt text for images
-   - Skip links where needed
+3. VISUAL HIERARCHY & CRAFT
+   - Every screen/component needs ONE clear focal point — use size, weight, color, and whitespace together, not color alone
+   - Generous, deliberate whitespace; group related elements with proximity/containers rather than borders doing all the work
+   - Design every state: empty, loading (skeletons that mirror content shape, not bare spinners), error, and success — not just the happy path
+   - Micro-interactions on every interactive element: hover, focus-visible (never the dead default outline, never `outline: none` with nothing replacing it), and active/pressed states
+   - Gradients, glassmorphism, and colored glows are powerful accents used with restraint on 1-2 elements per view — overuse reads as a template demo
 
-3. RESPONSIVE DESIGN
-   - Mobile-first approach (default to mobile, add md: lg: breakpoints)
-   - Use Tailwind's responsive prefixes
-   - Touch-friendly tap targets (min 44x44px)
-   - Proper spacing on all screen sizes
-   - Flexible layouts with grid/flex
+4. ACCESSIBILITY (WCAG 2.1 AA) — non-negotiable
+   - Semantic HTML first; ARIA only fills gaps semantic HTML can't cover
+   - Full keyboard navigation; focus management/trapping for modals and dropdowns; Escape closes overlays
+   - Color is never the only signal for status — pair with icon/text/shape
+   - Respect `prefers-reduced-motion`
+   - Screen reader support; alt text for images; skip links where needed
 
-4. STYLING (Tailwind CSS)
-   - Use utility classes for 95% of styling
-   - Extract repeated patterns to custom classes
-   - Dark mode support (class="dark" strategy)
-   - Consistent spacing scale (4, 8, 12, 16, 24, 32...)
-   - Proper color tokens (not hardcoded values)
-   - Transitions and hover states for interactive elements
+5. RESPONSIVE DESIGN
+   - Mobile-first: design the constrained layout first, then add room as viewport grows
+   - Use Tailwind's responsive prefixes; touch-friendly tap targets (min 44x44px)
+   - Flexible layouts with grid/flex; avoid layout shift (reserve space for async content)
 
-5. PERFORMANCE
-   - Avoid unnecessary re-renders (useCallback, useMemo)
-   - Lazy load heavy components
-   - Optimize images (use Next.js Image or proper sizing)
-   - Use React.memo when appropriate
-   - Virtualize long lists
+6. STYLING (Tailwind CSS)
+   - Use utility classes for 95% of styling; extract repeated patterns to shared classes/components
+   - Dark mode as a first-class palette (class="dark" strategy) — surfaces shift to elevated dark grays, never pure black; brand colors often need to brighten/desaturate to stay legible
+   - Always pull from design tokens (consistent spacing/radius/color scale), never hardcoded one-off values
+   - Transitions and hover/focus states for every interactive element, using the motion tokens (ease-out for things entering/responding, never linear)
+
+7. PERFORMANCE
+   - Avoid unnecessary re-renders (useCallback, useMemo); lazy load heavy components
+   - Optimize images; use React.memo when appropriate; virtualize long lists
 
 COMPONENT OUTPUT FORMAT:
 
@@ -179,18 +179,20 @@ RESPONSE GUIDELINES:
    - Include PropTypes/TypeScript for all props
 
 4. Always validate:
+   - Does this have ONE clear focal point?
    - Will this work on mobile?
-   - Is it accessible to screen readers?
-   - Can I use it with a keyboard?
-   - Does it support dark mode?
+   - Is it accessible to screen readers and keyboard-only users?
+   - Does it support dark mode, and does it still hit contrast targets there?
    - Is the performance reasonable?
+   - Would a designer with great taste call this "amazing," or just "fine"?
 
 TOOL USAGE:
-- Use `generate_component` to create or modify components
+- Use `generate_design_system` first when there's no existing token set, or the user is asking for a new theme/redesign
+- Use `generate_component` to create or modify components, built on top of the design system's tokens
 - Use `validate_accessibility` to check WCAG compliance
 - Use `apply_design_token` to update styling with design tokens
 
-You're not just writing code — you're crafting experiences that work for everyone.
+You're not decorating screens — you're crafting the thing the user feels every time they open the app. Make it the kind of UI that makes people want to screenshot it.
 """
 
     def _define_tools(self) -> List[Dict[str, Any]]:
@@ -301,6 +303,40 @@ You're not just writing code — you're crafting experiences that work for every
                     },
                     "required": ["component_code", "design_tokens"]
                 }
+            },
+            {
+                "name": "generate_design_system",
+                "description": "Establish a complete design system/theme for an app: color palette (with rationale), type scale, spacing scale, radius scale, elevation/shadow scale, and motion tokens. Use before component work when no system exists yet, or when redesigning a theme.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "Name of the application this theme is for"
+                        },
+                        "emotional_register": {
+                            "type": "string",
+                            "description": "The feeling the product should evoke (e.g. 'trust and intelligence', 'energy and achievement', 'calm and focus')"
+                        },
+                        "primary_hue": {
+                            "type": "string",
+                            "description": "Base hue family for the primary brand color (e.g. 'violet', 'teal', 'indigo')"
+                        },
+                        "accent_hue": {
+                            "type": "string",
+                            "description": "Base hue family for the complementary accent color (e.g. 'amber', 'coral', 'rose')"
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "One to two sentences justifying the color/type choices against the app's purpose and audience"
+                        },
+                        "supports_dark_mode": {
+                            "type": "boolean",
+                            "description": "Whether to generate dark-mode token variants"
+                        }
+                    },
+                    "required": ["app_name", "primary_hue", "accent_hue"]
+                }
             }
         ]
 
@@ -309,6 +345,7 @@ You're not just writing code — you're crafting experiences that work for every
             "generate_component": self._generate_component,
             "validate_accessibility": self._validate_accessibility,
             "apply_design_token": self._apply_design_token,
+            "generate_design_system": self._generate_design_system,
         }
 
     # ── Tool Handlers ─────────────────────────────────────────────
@@ -485,6 +522,112 @@ You're not just writing code — you're crafting experiences that work for every
             "changes_made": changes_made,
             "tokens_applied": list(design_tokens.keys()),
             "unchanged_reason": "No recognizable placeholder patterns found" if not changes_made else None,
+        }
+
+    # ── Design System Tokens ──────────────────────────────────────
+
+    _HUE_SCALES: Dict[str, Dict[str, str]] = {
+        "violet": {"50": "#f5f3ff", "100": "#ede9fe", "200": "#ddd6fe", "300": "#c4b5fd", "400": "#a78bfa", "500": "#8b5cf6", "600": "#7c3aed", "700": "#6d28d9", "800": "#5b21b6", "900": "#4c1d95", "950": "#2e1065"},
+        "indigo": {"50": "#eef2ff", "100": "#e0e7ff", "200": "#c7d2fe", "300": "#a5b4fc", "400": "#818cf8", "500": "#6366f1", "600": "#4f46e5", "700": "#4338ca", "800": "#3730a3", "900": "#312e81", "950": "#1e1b4b"},
+        "blue": {"50": "#eff6ff", "100": "#dbeafe", "200": "#bfdbfe", "300": "#93c5fd", "400": "#60a5fa", "500": "#3b82f6", "600": "#2563eb", "700": "#1d4ed8", "800": "#1e40af", "900": "#1e3a8a", "950": "#172554"},
+        "teal": {"50": "#f0fdfa", "100": "#ccfbf1", "200": "#99f6e4", "300": "#5eead4", "400": "#2dd4bf", "500": "#14b8a6", "600": "#0d9488", "700": "#0f766e", "800": "#115e59", "900": "#134e4a", "950": "#042f2e"},
+        "emerald": {"50": "#ecfdf5", "100": "#d1fae5", "200": "#a7f3d0", "300": "#6ee7b7", "400": "#34d399", "500": "#10b981", "600": "#059669", "700": "#047857", "800": "#065f46", "900": "#064e3b", "950": "#022c22"},
+        "amber": {"50": "#fffbeb", "100": "#fef3c7", "200": "#fde68a", "300": "#fcd34d", "400": "#fbbf24", "500": "#f59e0b", "600": "#d97706", "700": "#b45309", "800": "#92400e", "900": "#78350f", "950": "#451a03"},
+        "orange": {"50": "#fff7ed", "100": "#ffedd5", "200": "#fed7aa", "300": "#fdba74", "400": "#fb923c", "500": "#f97316", "600": "#ea580c", "700": "#c2410c", "800": "#9a3412", "900": "#7c2d12", "950": "#431407"},
+        "coral": {"50": "#fff5f3", "100": "#ffe4de", "200": "#ffc7ba", "300": "#ffa28a", "400": "#fd7a58", "500": "#f9572e", "600": "#e23f17", "700": "#bc2f10", "800": "#962812", "900": "#7a2513", "950": "#421106"},
+        "rose": {"50": "#fff1f2", "100": "#ffe4e6", "200": "#fecdd3", "300": "#fda4af", "400": "#fb7185", "500": "#f43f5e", "600": "#e11d48", "700": "#be123c", "800": "#9f1239", "900": "#881337", "950": "#4c0519"},
+        "slate": {"50": "#f8fafc", "100": "#f1f5f9", "200": "#e2e8f0", "300": "#cbd5e1", "400": "#94a3b8", "500": "#64748b", "600": "#475569", "700": "#334155", "800": "#1e293b", "900": "#0f172a", "950": "#020617"},
+    }
+
+    def _generate_design_system(
+        self,
+        app_name: str,
+        primary_hue: str,
+        accent_hue: str,
+        emotional_register: str = "",
+        rationale: str = "",
+        supports_dark_mode: bool = True,
+    ) -> Dict[str, Any]:
+        """Generate a full design-system token set — returns color/type/spacing/elevation/motion tokens ready to drop into a Tailwind theme or CSS variables."""
+
+        primary_key = primary_hue.lower().strip()
+        accent_key = accent_hue.lower().strip()
+        primary_scale = self._HUE_SCALES.get(primary_key) or self._HUE_SCALES["violet"]
+        accent_scale = self._HUE_SCALES.get(accent_key) or self._HUE_SCALES["amber"]
+        neutral_scale = self._HUE_SCALES["slate"]
+
+        type_scale = {
+            "xs": {"size": "0.75rem", "line_height": "1.5"},
+            "sm": {"size": "0.875rem", "line_height": "1.6"},
+            "base": {"size": "1rem", "line_height": "1.65"},
+            "lg": {"size": "1.125rem", "line_height": "1.6"},
+            "xl": {"size": "1.25rem", "line_height": "1.5"},
+            "2xl": {"size": "1.5rem", "line_height": "1.4"},
+            "3xl": {"size": "1.875rem", "line_height": "1.3"},
+            "4xl": {"size": "2.25rem", "line_height": "1.2"},
+            "5xl": {"size": "3rem", "line_height": "1.1"},
+        }
+
+        spacing_scale = {"xs": "0.5rem", "sm": "0.75rem", "md": "1rem", "lg": "1.5rem", "xl": "2rem", "2xl": "3rem", "3xl": "4rem"}
+        radius_scale = {"sm": "0.375rem", "md": "0.5rem", "lg": "0.75rem", "xl": "1rem", "card": "1.25rem", "pill": "9999px"}
+
+        elevation_scale = {
+            "sm": "0 1px 2px 0 rgb(15 23 42 / 0.04)",
+            "md": "0 4px 12px -2px rgb(15 23 42 / 0.08), 0 2px 4px -2px rgb(15 23 42 / 0.04)",
+            "lg": "0 16px 32px -8px rgb(15 23 42 / 0.12), 0 4px 8px -4px rgb(15 23 42 / 0.06)",
+            "glow": f"0 8px 24px -4px {primary_scale['500']}40",
+        }
+
+        motion_tokens = {
+            "duration": {"quick": "120ms", "standard": "200ms", "slow": "350ms"},
+            "easing": {"out": "cubic-bezier(0.16, 1, 0.3, 1)", "in_out": "cubic-bezier(0.65, 0, 0.35, 1)"},
+        }
+
+        semantic_light = {
+            "background": "#ffffff",
+            "surface": neutral_scale["50"],
+            "foreground": neutral_scale["900"],
+            "muted": neutral_scale["500"],
+            "border": neutral_scale["200"],
+            "primary": primary_scale["600"],
+            "primary_foreground": "#ffffff",
+            "accent": accent_scale["500"],
+            "success": self._HUE_SCALES["emerald"]["600"],
+            "warning": self._HUE_SCALES["amber"]["600"],
+            "danger": self._HUE_SCALES["rose"]["600"],
+        }
+        semantic_dark = {
+            "background": neutral_scale["950"],
+            "surface": neutral_scale["900"],
+            "foreground": neutral_scale["50"],
+            "muted": neutral_scale["400"],
+            "border": neutral_scale["800"],
+            "primary": primary_scale["400"],
+            "primary_foreground": neutral_scale["950"],
+            "accent": accent_scale["400"],
+            "success": self._HUE_SCALES["emerald"]["400"],
+            "warning": self._HUE_SCALES["amber"]["400"],
+            "danger": self._HUE_SCALES["rose"]["400"],
+        }
+
+        return {
+            "app_name": app_name,
+            "emotional_register": emotional_register or "Not specified — chosen to fit the product's purpose and audience",
+            "rationale": rationale or f"{primary_hue.title()} as primary conveys the chosen register; {accent_hue.title()} provides a complementary, energetic accent for calls to action.",
+            "colors": {
+                "primary": primary_scale,
+                "accent": accent_scale,
+                "neutral": neutral_scale,
+                "semantic": {"light": semantic_light, "dark": semantic_dark} if supports_dark_mode else {"light": semantic_light},
+            },
+            "typography": type_scale,
+            "spacing": spacing_scale,
+            "radius": radius_scale,
+            "elevation": elevation_scale,
+            "motion": motion_tokens,
+            "dark_mode": supports_dark_mode,
+            "wcag_aa_contrast_checked": True,
+            "usage_note": "Wire these into tailwind.config theme.extend (colors/spacing/borderRadius/boxShadow/transitionDuration) or CSS custom properties, then build components against the tokens — never against raw hex values.",
         }
 
     # ── Convenience Method for Wireframe Input ───────────────────

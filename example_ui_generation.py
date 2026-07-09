@@ -33,6 +33,26 @@ print("=" * 60)
 print()
 
 # ============================================================================
+# EXAMPLE 0: Design System Generation (no API key needed — direct tool call)
+# ============================================================================
+
+print("EXAMPLE 0: Establish a Design System/Theme")
+print("-" * 60)
+
+design_system = agent._tool_handlers["generate_design_system"](
+    app_name="StudyIt",
+    emotional_register="trust and intelligence, with energy for achievement",
+    primary_hue="violet",
+    accent_hue="amber",
+    rationale="Violet signals focus and credibility for a learning platform; amber adds energy to career-advancement CTAs.",
+)
+print(f"Primary 600: {design_system['colors']['primary']['600']}")
+print(f"Accent 500: {design_system['colors']['accent']['500']}")
+print(f"Type scale steps: {list(design_system['typography'].keys())}")
+print(f"Dark mode tokens included: {design_system['dark_mode']}")
+print()
+
+# ============================================================================
 # EXAMPLE 1: Single-Turn Component Generation
 # ============================================================================
 

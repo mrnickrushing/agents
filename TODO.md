@@ -11,6 +11,14 @@
 - [x] InfraMonitorAgent — Sentry setup review (DSN/sampling/PII), health-check depth (DB connectivity, not just
       "process is alive"), React error boundary coverage, alert rule generation
 
+### UI Generation Agent, upgraded in parallel on another branch
+- [x] Upgraded UIGenerationAgent into a full design-systems-first agent: added `generate_design_system`
+      tool (color theory/palette + type/spacing/radius/elevation/motion tokens) and rewrote the system
+      prompt around visual craft (hierarchy, micro-interactions, dark-mode-as-first-class-palette,
+      restrained use of gradients/glassmorphism), not just component scaffolding
+- [x] Replaced the generic `ui-component-generator` Claude Code subagent with `ui-designer` — a
+      super-capable visual design persona, mirrored into both this repo and studyit's `.claude/agents/`
+
 ### SecurityAuditAgent: implemented the tools the README already promised but the code never delivered
 - [x] `audit_sql_injection`, `audit_xss_patterns`, `audit_csrf_protection`, `audit_input_validation`,
       `audit_file_upload`, `audit_websocket_auth` — all validated against real code, calibrated to distinguish
