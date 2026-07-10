@@ -14,6 +14,11 @@ Usage:
     python -m agents.cli run security_audit scan_dependencies --file package_json=backend/package.json
     python -m agents.cli scan --path ~/Vitality
     python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_security --out report.json
+
+`scan` findings are heuristic and can false-positive on context outside the one
+file being checked. If ANTHROPIC_API_KEY or OPENAI_API_KEY is set, scan
+automatically runs a second-pass LLM triage over the findings (override with
+--triage/--no-triage) — see agents/triage.py.
 """
 
 from __future__ import annotations
@@ -333,6 +338,12 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
     return {"project": root, "files_matched": len(results), "results": results, "summary": summary}
 
 
+def _entry_findings(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    result = entry["result"]
+    findings = result.get("findings") or result.get("jwt_findings") or result.get("cors_findings") or result.get("diagnoses") or []
+    return [f for f in findings if isinstance(f, dict)]
+
+
 def _format_report(report: Dict[str, Any]) -> str:
     lines = [f"Scan: {report['project']}", f"Files with findings: {report['files_matched']}", ""]
     sev_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
@@ -340,26 +351,50 @@ def _format_report(report: Dict[str, Any]) -> str:
         lines.append("Summary: " + ", ".join(f"{s}={report['summary'][s]}" for s in sev_order if s in report["summary"]))
         lines.append("")
 
+    triage_summary = report.get("triage_summary")
+    if triage_summary:
+        lines.append(
+            f"Triage: {triage_summary['confirmed']} confirmed, "
+            f"{triage_summary['false_positive']} dismissed as false positives, "
+            f"{triage_summary['unknown']} unverified"
+        )
+        lines.append("")
+
     def sort_key(entry):
-        findings = entry["result"].get("findings") or entry["result"].get("jwt_findings") or entry["result"].get("cors_findings") or entry["result"].get("diagnoses") or []
-        sevs = [SEVERITY_RANK.get(f.get("severity", "INFO"), 9) for f in findings if isinstance(f, dict)]
+        sevs = [SEVERITY_RANK.get(f.get("severity", "INFO"), 9) for f in _entry_findings(entry)]
         return min(sevs) if sevs else 9
 
-    for entry in sorted(report["results"], key=sort_key):
-        findings = entry["result"].get("findings") or entry["result"].get("jwt_findings") or entry["result"].get("cors_findings") or entry["result"].get("diagnoses") or []
+    # Findings triage confirmed (or that weren't triaged at all) stay front
+    # and center; ones triage dismissed move to a short section at the end
+    # instead of disappearing outright, so the verdict itself stays
+    # auditable rather than silently swallowing the heuristic's output.
+    dismissed = [e for e in report["results"] if e.get("triage", {}).get("verdict") == "FALSE_POSITIVE"]
+    dismissed_ids = {id(e) for e in dismissed}
+    active = [e for e in report["results"] if id(e) not in dismissed_ids]
+
+    for entry in sorted(active, key=sort_key):
         if entry["result"].get("error"):
             lines.append(f"[{entry['agent']}.{entry['tool']}] {entry['file']}  ERROR: {entry['result']['error']}")
             continue
         lines.append(f"[{entry['agent']}.{entry['tool']}] {entry['file']}")
-        for f in findings:
-            if not isinstance(f, dict):
-                continue
+        for f in _entry_findings(entry):
             sev = f.get("severity", "INFO")
             issue = f.get("issue", "")
             fix = f.get("fix", "")
             lines.append(f"  {sev:<8} {issue}")
             if fix:
                 lines.append(f"           fix: {fix}")
+        triage = entry.get("triage")
+        if triage:
+            lines.append(f"           triage: {triage['verdict']} — {triage['reason']}")
+        lines.append("")
+
+    if dismissed:
+        lines.append(f"── Dismissed as false positives by triage ({len(dismissed)}) ──")
+        lines.append("")
+        for entry in dismissed:
+            lines.append(f"[{entry['agent']}.{entry['tool']}] {entry['file']}")
+            lines.append(f"  {entry['triage']['reason']}")
         lines.append("")
 
     return "\n".join(lines)
@@ -368,6 +403,23 @@ def _format_report(report: Dict[str, Any]) -> str:
 def cmd_scan(args: argparse.Namespace) -> None:
     agent_filter = [a.strip() for a in args.agents.split(",")] if args.agents else None
     report = _run_scan(args.path, agent_filter)
+
+    triage_on = args.triage
+    if triage_on is None:
+        # Auto-detect: only turn on when a key is actually present, so the
+        # "no API key needed" promise still holds for anyone who hasn't set
+        # one up — and holds automatically wherever one has, with no extra
+        # flag to remember when wiring this into a new project.
+        triage_on = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY"))
+
+    if triage_on:
+        provider = args.triage_provider or ("anthropic" if os.getenv("ANTHROPIC_API_KEY") else "openai")
+        try:
+            from agents.triage import triage_report
+            report = triage_report(report, provider=provider, model=args.triage_model)
+        except ImportError as e:
+            print(f"Triage skipped ({e}); falling back to heuristic-only results.", file=sys.stderr)
+
     print(_format_report(report))
     if args.out:
         with open(os.path.expanduser(args.out), "w") as fh:
@@ -393,6 +445,17 @@ def main() -> None:
     p_scan.add_argument("--path", required=True, help="Project root to scan")
     p_scan.add_argument("--agents", help="Comma-separated agent keys to restrict the scan to")
     p_scan.add_argument("--out", help="Write the full JSON report to this path")
+    p_scan.add_argument(
+        "--triage", dest="triage", action="store_true", default=None,
+        help="Force LLM triage of findings on (requires ANTHROPIC_API_KEY or OPENAI_API_KEY). "
+             "On by default when one of those is set.",
+    )
+    p_scan.add_argument(
+        "--no-triage", dest="triage", action="store_false",
+        help="Force triage off, even if an API key is present in the environment.",
+    )
+    p_scan.add_argument("--triage-provider", choices=["anthropic", "openai"], help="Provider for triage (default: auto-detect from env)")
+    p_scan.add_argument("--triage-model", help="Override the default triage model")
     p_scan.set_defaults(func=cmd_scan)
 
     args = parser.parse_args()

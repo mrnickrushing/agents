@@ -6,6 +6,10 @@ Eleven specialized agents (57 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.3.0 — What's New
+
+- **🔬 LLM triage for `scan`**: the heuristic checks are fast and free but can't see outside the one file they're looking at, so a decent share of what they flag turns out to be handled correctly in a different file (a nonce hashed client-side and verified server-side, a token whose expiration is enforced by the layer that issues it rather than the layer that only verifies it, etc.). `scan` now automatically runs a second-pass triage over its own findings with a real model — one that can read other project files via a `read_project_file` tool before deciding — whenever `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set. No key set → nothing changes, still fully heuristic. See `agents/triage.py` and `--triage`/`--no-triage` below.
+
 ## 🆕 Version 2.2.0 — What's New
 
 - **🌐 API Architect Agent**: pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation
@@ -58,6 +62,24 @@ python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_securi
 ```
 
 `scan` walks the project (skipping `node_modules`, `.git`, `dist`, `.venv`, etc.), matches files by name (`package.json`, `eas.json`, `codemagic.yaml`) or content (helmet/cors/jwt/RevenueCat/Apple Sign-In patterns), runs the corresponding tool handler, and prints a severity-sorted report.
+
+### Triage — cut the false positives with a real model
+
+Heuristics only ever see the one file they matched. That's enough to *find candidates* but not enough to know, say, that a file which merely verifies a JWT doesn't need to be the one setting its expiration — some other file issues the token and does that correctly. Triage re-examines every flagged file with an LLM that can pull in other project files on demand before it confirms or dismisses each finding.
+
+```fish
+# Runs automatically if ANTHROPIC_API_KEY or OPENAI_API_KEY is set — no flag needed
+python -m agents.cli scan --path ~/Vitality
+
+# Force it on/off explicitly
+python -m agents.cli scan --path ~/Vitality --triage
+python -m agents.cli scan --path ~/Vitality --no-triage
+
+# Pick a provider/model
+python -m agents.cli scan --path ~/Vitality --triage-provider openai --triage-model gpt-5
+```
+
+Confirmed findings stay in the main report with a `triage: CONFIRMED — <reason>` line; dismissed ones move to a "Dismissed as false positives by triage" section at the end with the model's reasoning, instead of vanishing outright — the verdict itself stays auditable. This is opt-out-by-presence-of-key rather than a flag you have to remember: wire `agents` into a new project with an API key already in the environment (CI secret, local `.env`, whatever) and triage is just on.
 
 ## Install
 
