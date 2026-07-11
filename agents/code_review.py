@@ -261,13 +261,19 @@ Always provide the fix with code, not just a description of what's wrong.
         """Review React/React Native component."""
         findings = []
         code_lower = code.lower()
+        has_use_effect = "useeffect" in code_lower
+        has_effect_cleanup = bool(re.search(r"return\s*(?:\(\s*)?(?:\(\s*\)\s*=>|function\b)", code_lower))
+        has_abort_cleanup = "abortcontroller" in code_lower or "abort()" in code_lower or "abort.signal" in code_lower
+        has_timer_side_effect = "setinterval(" in code_lower or "settimeout(" in code_lower
+        has_timer_cleanup = "clearinterval(" in code_lower or "cleartimeout(" in code_lower
 
         if ": any" in code or "as any" in code:
             findings.append({"severity": "MEDIUM", "issue": "TypeScript 'any' type used — loses type safety", "fix": "Replace with proper type definitions"})
-        if "usestate" in code_lower and "useeffect" in code_lower:
-            if "fetch" in code_lower or "axios" in code_lower:
-                if "cleanup" not in code_lower and "abort" not in code_lower:
-                    findings.append({"severity": "MEDIUM", "issue": "Fetch in useEffect without cleanup — potential memory leak on unmount", "fix": "Add AbortController for fetch cleanup in useEffect return"})
+        if has_use_effect and ("fetch(" in code_lower or "apifetch(" in code_lower or "axios" in code_lower):
+            if not (has_effect_cleanup and has_abort_cleanup):
+                findings.append({"severity": "MEDIUM", "issue": "Network request in useEffect without abort-aware cleanup — state can update after unmount or route change", "fix": "Create an AbortController inside the effect, pass signal to fetch/apiFetch, and abort it in the cleanup return"})
+        if has_use_effect and has_timer_side_effect and not (has_effect_cleanup and has_timer_cleanup):
+            findings.append({"severity": "MEDIUM", "issue": "Timer started in useEffect without cleanup — interval/timeout can keep running after unmount", "fix": "Return a cleanup function that calls clearInterval()/clearTimeout()"})
         if "console.log" in code_lower:
             findings.append({"severity": "LOW", "issue": "console.log in production code", "fix": "Remove or replace with proper logger"})
         if is_native and "onpress" not in code_lower and "onclick" in code_lower:
