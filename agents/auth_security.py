@@ -151,6 +151,19 @@ When reviewing code, always cite the specific flow step that's missing (not just
         findings = []
         has_refresh = bool(re.search(r"refresh[_-]?token", code, re.IGNORECASE))
 
+        # Rotation is the *issuer's* job. A file that only stores tokens it
+        # received (SecureStore/Keychain/AsyncStorage-backed helpers) and
+        # never itself signs/creates one isn't where rotation logic would
+        # live — that's a mobile client file calling a backend /refresh
+        # endpoint implemented in a different service entirely, not
+        # reachable via this file's imports.
+        is_pure_client_consumer = (
+            not re.search(r"jwt\.sign\(|create.*refresh.*token|jose\.sign", code, re.IGNORECASE)
+            and re.search(r"securestore|keychain|asyncstorage|savetoken|accepttokens", code, re.IGNORECASE)
+        )
+        if has_refresh and is_pure_client_consumer:
+            return {"language": language, "findings": findings, "total_issues": len(findings)}
+
         if has_refresh and not re.search(r"rotat|revoke|blacklist|reuse|invalidat|session_?id|family", code, re.IGNORECASE):
             findings.append({
                 "severity": "HIGH",
@@ -211,6 +224,20 @@ When reviewing code, always cite the specific flow step that's missing (not just
         if "nonce" not in code_lower:
             findings.append({"severity": "HIGH", "issue": "No nonce handling found — vulnerable to identity token replay", "fix": "Generate a random nonce client-side, SHA256-hash it for the Apple request, and verify the raw nonce server-side against the token's nonce claim"})
 
+        # Expo's client SDK (AppleAuthentication.signInAsync) only *obtains*
+        # the identity token — verifying its signature/issuer/audience is a
+        # backend responsibility. A file that gets the token this way and
+        # never itself attempts a JWT decode/verify isn't the place that
+        # logic belongs; it's forwarding the token to an API that (should)
+        # verify it elsewhere, in a different file this one has no import
+        # relationship to (mobile app vs. backend service).
+        is_client_token_acquisition = (
+            re.search(r"signinasync\s*\(", code_lower.replace(" ", "")) is not None
+            and not re.search(r"jwt\.(decode|verify)\(|jwtverify\(|createremotejwkset", code, re.IGNORECASE)
+        )
+        if is_client_token_acquisition:
+            return {"findings": findings, "total_issues": len(findings)}
+
         uses_jwks = bool(re.search(r"jwks|pyjwkclient|get_signing_key", code, re.IGNORECASE))
         unverified_decode = bool(re.search(r"verify_signature[\"']?\s*:\s*false|jwt\.decode\([^)]*verify\s*=\s*false", code, re.IGNORECASE))
         if unverified_decode:
@@ -221,7 +248,7 @@ When reviewing code, always cite the specific flow step that's missing (not just
         if not re.search(r"appleid\.apple\.com", code, re.IGNORECASE):
             findings.append({"severity": "MEDIUM", "issue": "No issuer check against https://appleid.apple.com found", "fix": "Verify the decoded token's iss claim equals https://appleid.apple.com"})
 
-        if not re.search(r"\baud\b", code, re.IGNORECASE):
+        if not re.search(r"\baud\b|audience\s*[:=]", code, re.IGNORECASE):
             findings.append({"severity": "MEDIUM", "issue": "No audience (aud) claim check found", "fix": "Verify the decoded token's aud claim equals your app's bundle identifier"})
 
         return {"findings": findings, "total_issues": len(findings)}

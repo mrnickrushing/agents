@@ -514,9 +514,14 @@ Format findings as structured reports with severity, location, description, and 
         code_lower = cors_code.lower()
         is_fastapi = "corsmiddleware" in code_lower
 
-        wildcard = (
-            '"*"' in cors_code or "'*'" in cors_code
-            or bool(re.search(r"allow_origins\s*=\s*\[\s*[\"']\*[\"']", cors_code))
+        # Scope the wildcard check to the origin parameter itself. A blind
+        # substring search for '*' anywhere in the snippet also matches
+        # allow_methods=["*"] / allow_headers=["*"] (both fine, common
+        # config), producing a CRITICAL false positive on a CORS setup
+        # whose actual origin is a locked-down allowlist.
+        wildcard = bool(
+            re.search(r"allow_origins\s*=\s*\[\s*[\"']\*[\"']\s*\]", cors_code)
+            or re.search(r"\borigin\s*:\s*[\"']\*[\"']", cors_code, re.IGNORECASE)
         )
         if wildcard:
             findings.append({"severity": "CRITICAL", "issue": "CORS origin is '*' — any domain can make requests to this API"})

@@ -127,8 +127,35 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         code_lower = code.lower()
 
         has_limit_param = bool(re.search(r"\blimit\b|\bpage\b|\bcursor\b|\boffset\b", code_lower))
+
+        # An endpoint built entirely from SQL aggregate functions returns a
+        # handful of scalar numbers (counts/sums), not a row list — pagination
+        # applies to "which rows matched", not "how many rows matched".
+        aggregate_calls = len(re.findall(r"\b(count|sum|avg|min|max)\s*\(", code_lower))
+        has_row_select = bool(re.search(r"\.all\(\)|\.fetchall\(\)|select\s+\*|res\.json\(\s*(rows|results|items)\b", code_lower))
+        is_aggregate_only = aggregate_calls > 0 and not has_row_select
+
+        # A query scoped to the requesting user's own id/session returns at
+        # most that one user's rows — bounded by their own usage, not "the
+        # entire table" the way an unscoped multi-tenant query would be.
+        # (Common false positive: personal blocklists, contacts, API keys,
+        # "export my data" endpoints — all naturally small per user.)
+        is_user_scoped = bool(re.search(
+            r"user_?id\s*={2,3}\s*\$?\{?\s*(req\.|current_)?user\.id"
+            r"|eq\([^)]*user_?id[^)]*,\s*\{?\s*(req\.)?user\.id\s*\)"
+            r"|res\.locals\.userid\b"
+            r"|req\.user\.id\b"
+            r"|current_user\.id\b",
+            code_lower,
+        ))
+
         if not has_limit_param:
-            findings.append({"severity": "HIGH", "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table", "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query"})
+            if is_aggregate_only:
+                pass  # not a row-list endpoint; pagination doesn't apply
+            elif is_user_scoped:
+                findings.append({"severity": "LOW", "issue": "No limit/page/cursor/offset parameter found, but the query appears scoped to the requesting user's own rows — bounded by that user's usage, not the whole table. Still worth capping defensively if this list could grow large for a single user.", "fix": "Accept an optional limit (capped, e.g. max 100) and cursor/offset param for defense-in-depth"})
+            else:
+                findings.append({"severity": "HIGH", "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table", "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query"})
 
         returns_array = bool(re.search(r"res\.json\(\s*\[|\.json\(\s*rows\)|\.json\(\s*results\)|\.json\(\s*items\)", code))
         has_meta = bool(re.search(r"hasMore|nextCursor|next_cursor|totalCount|total_count|has_next", code, re.IGNORECASE))
