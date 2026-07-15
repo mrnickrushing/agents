@@ -218,10 +218,25 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
             rf"{field_re}\s*:\s*\w+\([\"'][\w_]+[\"']\)",
             rf"{field_re}\s*:\s*Mapped\[[^\]]+\]\s*=\s*(?:mapped_column|Column)\(",
         ]
+        # An "email" field only needs to be globally unique on the
+        # account/identity table itself — a denormalized copy on a related
+        # record (a linked social identity, a monitored contact, a cached
+        # breach lookup, an alert log) is legitimately repeated across rows
+        # and isn't the login identity. Track the nearest enclosing
+        # `class Foo(...)` / `pgTable('foo', ...)` name for each match and
+        # only flag when that name looks like the user/account table.
+        table_markers = [
+            (mm.start(), next(g for g in mm.groups() if g))
+            for mm in re.finditer(r"class\s+(\w+)\s*\(|pgTable\(\s*[\"'](\w+)[\"']|sqliteTable\(\s*[\"'](\w+)[\"']", schema_code)
+        ]
         for pattern in patterns:
             for m in re.finditer(pattern, schema_code, re.IGNORECASE):
                 nearby = schema_code[m.start():m.start() + 200]
-                if not re.search(r"\.unique\(\)|unique\s*=\s*True", nearby):
-                    findings.append({"severity": "MEDIUM", "column": "email", "issue": "'email' column has no visible unique constraint — application-level uniqueness checks can still race under concurrent inserts", "fix": "Add .unique() to the column definition (Drizzle) or unique=True (SQLAlchemy) so the DB enforces it"})
+                if re.search(r"\.unique\(\)|unique\s*=\s*True", nearby):
+                    continue
+                enclosing = next((name for start, name in reversed(table_markers) if start < m.start()), "")
+                if not re.search(r"^users?$|^accounts?$", enclosing, re.IGNORECASE):
+                    continue
+                findings.append({"severity": "MEDIUM", "column": "email", "issue": "'email' column has no visible unique constraint — application-level uniqueness checks can still race under concurrent inserts", "fix": "Add .unique() to the column definition (Drizzle) or unique=True (SQLAlchemy) so the DB enforces it"})
 
         return {"findings": findings, "total_issues": len(findings)}

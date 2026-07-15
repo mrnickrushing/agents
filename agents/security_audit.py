@@ -514,15 +514,31 @@ Format findings as structured reports with severity, location, description, and 
         code_lower = cors_code.lower()
         is_fastapi = "corsmiddleware" in code_lower
 
-        wildcard = (
-            '"*"' in cors_code or "'*'" in cors_code
-            or bool(re.search(r"allow_origins\s*=\s*\[\s*[\"']\*[\"']", cors_code))
+        # Scope the wildcard check to the origin parameter itself. A blind
+        # substring search for '*' anywhere in the snippet also matches
+        # allow_methods=["*"] / allow_headers=["*"] (both fine, common
+        # config), producing a CRITICAL false positive on a CORS setup
+        # whose actual origin is a locked-down allowlist. But '*' can appear
+        # anywhere inside the origin list itself too — a trailing comma
+        # (allow_origins=["*",]) or a mixed list (["https://x.com", "*"]) —
+        # so check the whole list's contents, not just "list of exactly one
+        # wildcard element with nothing else".
+        origin_list = re.search(r"allow_origins\s*=\s*\[([^\]]*)\]", cors_code)
+        fastapi_wildcard = bool(origin_list and re.search(r"[\"']\*[\"']", origin_list.group(1)))
+        # The "origin" key can be a bare identifier (JS object literal shorthand)
+        # or itself quoted (JSON-style: "origin": "*") — allow an optional
+        # quote on either side of the key name.
+        express_origin_list = re.search(r"[\"']?\borigin\b[\"']?\s*:\s*\[([^\]]*)\]", cors_code, re.IGNORECASE)
+        express_wildcard = bool(
+            re.search(r"[\"']?\borigin\b[\"']?\s*:\s*[\"']\*[\"']", cors_code, re.IGNORECASE)
+            or (express_origin_list and re.search(r"[\"']\*[\"']", express_origin_list.group(1)))
         )
+        wildcard = fastapi_wildcard or express_wildcard
         if wildcard:
             findings.append({"severity": "CRITICAL", "issue": "CORS origin is '*' — any domain can make requests to this API"})
 
         credentials_true = (
-            bool(re.search(r"credentials\s*:\s*true", cors_code, re.IGNORECASE))
+            bool(re.search(r"[\"']?\bcredentials\b[\"']?\s*:\s*true", cors_code, re.IGNORECASE))
             or bool(re.search(r"allow_credentials\s*=\s*true", cors_code, re.IGNORECASE))
         )
         if credentials_true and wildcard:

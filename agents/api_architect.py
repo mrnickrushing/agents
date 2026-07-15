@@ -127,8 +127,49 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         code_lower = code.lower()
 
         has_limit_param = bool(re.search(r"\blimit\b|\bpage\b|\bcursor\b|\boffset\b", code_lower))
+
+        # An endpoint built entirely from SQL aggregate functions returns a
+        # handful of scalar numbers (counts/sums), not a row list — pagination
+        # applies to "which rows matched", not "how many rows matched". A
+        # GROUP BY still returns one row per group, though — that's a growing
+        # list like any other, not a single scalar response.
+        # Exclude Math.min/Math.max — pagination-adjacent arithmetic like
+        # Math.max(0, offset), not a SQL aggregate.
+        aggregate_calls = len(re.findall(r"(?<!math\.)\b(count|sum|avg|min|max)\s*\(", code_lower))
+        has_row_select = bool(re.search(r"\.all\(\)|\.fetchall\(\)|select\s+\*|res\.json\(\s*\{?\s*(rows|results|items)\b", code_lower))
+        has_group_by = bool(re.search(r"\.groupby\(|group\s+by\b", code_lower))
+        is_aggregate_only = aggregate_calls > 0 and not has_row_select and not has_group_by
+
+        # A query scoped to the requesting user's own id/session returns at
+        # most that one user's rows — bounded by their own usage, not "the
+        # entire table" the way an unscoped multi-tenant query would be.
+        # (Common false positive: personal blocklists, contacts, API keys,
+        # "export my data" endpoints — all naturally small per user.)
+        # The user-id reference must appear inside an actual query-building
+        # call (filter/where/eq/select), not just anywhere in the handler —
+        # a route that logs req.user.id for an audit trail while still
+        # running a fully unscoped query elsewhere isn't scoped just because
+        # the user's id shows up somewhere in the function.
+        # The reference must specifically be the *requester's own* id (a
+        # literal user.id / req.user.id / current_user.id / res.locals.userId
+        # token) — not just any column named user_id/userId, which would
+        # also match an unrelated grouped column (e.g. .groupBy(items.userId)
+        # grouping by *someone else's* id, not scoping to the requester).
+        query_construct_re = r"(?:\.filter\(|\.where\(|\beq\(|db\.query\(|db\.select\(|\.query\.\w+\.find)"
+        requester_id_re = r"(?:req\.user\.id|current_user\.id|user\.id|res\.locals\.user_?id)"
+        is_user_scoped = bool(re.search(
+            rf"{query_construct_re}[^\n]{{0,80}}{requester_id_re}"
+            rf"|{requester_id_re}[^\n]{{0,80}}{query_construct_re}",
+            code_lower,
+        ))
+
         if not has_limit_param:
-            findings.append({"severity": "HIGH", "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table", "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query"})
+            if is_aggregate_only:
+                pass  # not a row-list endpoint; pagination doesn't apply
+            elif is_user_scoped:
+                findings.append({"severity": "LOW", "issue": "No limit/page/cursor/offset parameter found, but the query appears scoped to the requesting user's own rows — bounded by that user's usage, not the whole table. Still worth capping defensively if this list could grow large for a single user.", "fix": "Accept an optional limit (capped, e.g. max 100) and cursor/offset param for defense-in-depth"})
+            else:
+                findings.append({"severity": "HIGH", "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table", "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query"})
 
         returns_array = bool(re.search(r"res\.json\(\s*\[|\.json\(\s*rows\)|\.json\(\s*results\)|\.json\(\s*items\)", code))
         has_meta = bool(re.search(r"hasMore|nextCursor|next_cursor|totalCount|total_count|has_next", code, re.IGNORECASE))

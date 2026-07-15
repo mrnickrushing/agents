@@ -147,6 +147,103 @@ def _read(path: str) -> str:
         return fh.read()
 
 
+# Some checks review a call site whose actual logic lives one hop away in an
+# imported helper (a paywall screen that calls `Purchases.configure()`
+# through a shared `lib/revenuecat.ts` wrapper, rather than inline). Judged
+# alone, the call site looks like it's missing the setup it's actually
+# delegating to that helper. For these tools, follow local imports one level
+# deep and let the check see the imported file's content too.
+CROSS_FILE_TOOLS = {"review_revenuecat_setup"}
+
+_JS_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_JS_LOCAL_IMPORT_RE = re.compile(r"""from\s+["'](\.{1,2}/[^"']+|@/[^"']+)["']""")
+_PY_LOCAL_IMPORT_RE = re.compile(r"^\s*from\s+([.\w]+)\s+import", re.MULTILINE)
+
+
+def _find_alias_root(start_dir: str) -> str:
+    """A `@/...` import conventionally resolves against the nearest ancestor
+    directory that has a package.json — walk up to find it."""
+    current = start_dir
+    for _ in range(6):
+        if os.path.isfile(os.path.join(current, "package.json")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return start_dir
+
+
+def _alias_base_dir(alias_root: str) -> str:
+    """Read tsconfig.json's `@/*` path mapping (e.g. "./app/*") if present —
+    it doesn't always point at the project root itself (Expo Router
+    projects commonly map it to ./app/*) — falling back to the root."""
+    try:
+        with open(os.path.join(alias_root, "tsconfig.json")) as fh:
+            tsconfig = json.load(fh)
+        pattern = tsconfig.get("compilerOptions", {}).get("paths", {}).get("@/*", ["./*"])[0]
+        return os.path.normpath(os.path.join(alias_root, pattern.rstrip("*")))
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        # Malformed/missing tsconfig.json, unexpected `paths` shape, or an
+        # empty paths list ([0] on []) — any of these just means "couldn't
+        # read a real alias mapping," fall back to the root guess.
+        return alias_root
+
+
+def _resolve_js_import(spec: str, from_dir: str) -> Optional[str]:
+    if spec.startswith("@/"):
+        base = os.path.join(_alias_base_dir(_find_alias_root(from_dir)), spec[2:])
+    else:
+        base = os.path.normpath(os.path.join(from_dir, spec))
+    candidates = [base] + [base + ext for ext in _JS_EXTS] + [os.path.join(base, "index" + ext) for ext in _JS_EXTS]
+    return next((c for c in candidates if os.path.isfile(c)), None)
+
+
+def _resolve_py_import(module: str, from_dir: str, root: str) -> Optional[str]:
+    parts = [p for p in module.split(".") if p]
+    if not parts:
+        return None
+    for base in (root, from_dir):
+        candidate = os.path.join(base, *parts) + ".py"
+        if os.path.isfile(candidate):
+            return candidate
+        # A package import (e.g. `from app.models import User`) resolves to
+        # the package directory's __init__.py, not a same-named .py file.
+        candidate_init = os.path.join(base, *parts, "__init__.py")
+        if os.path.isfile(candidate_init):
+            return candidate_init
+    return None
+
+
+def _inline_local_imports(path: str, content: str, root: str, max_files: int = 3) -> str:
+    """Append up to `max_files` locally-imported helper modules' content to
+    `content`, so a single-file regex check can see logic that actually
+    lives one import away instead of judging the call site in isolation."""
+    from_dir = os.path.dirname(path)
+    ext = os.path.splitext(path)[1]
+    resolved: List[str] = []
+
+    if ext in _JS_EXTS:
+        for spec in _JS_LOCAL_IMPORT_RE.findall(content):
+            found = _resolve_js_import(spec, from_dir)
+            if found and found != path:
+                resolved.append(found)
+    elif ext == ".py":
+        for module in _PY_LOCAL_IMPORT_RE.findall(content):
+            found = _resolve_py_import(module, from_dir, root)
+            if found and found != path:
+                resolved.append(found)
+
+    comment_prefix = "#" if ext == ".py" else "//"
+    combined = content
+    for found in resolved[:max_files]:
+        try:
+            combined += f"\n\n{comment_prefix} --- imported from {os.path.relpath(found, root)} ---\n" + _read(found)
+        except OSError:
+            continue
+    return combined
+
+
 _TEST_PATH_RE = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)(test_\w+|\w+_test|\w+\.(test|spec))\.\w+$")
 
 
@@ -312,7 +409,8 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
             try:
                 agent = _get_agent(agent_key)
                 handler = agent._tool_handlers[tool_name]
-                kwargs = arg_builder(path, content)
+                effective_content = _inline_local_imports(path, content, root) if tool_name in CROSS_FILE_TOOLS else content
+                kwargs = arg_builder(path, effective_content)
                 result = handler(**kwargs)
             except Exception as e:
                 result = {"error": str(e)}
