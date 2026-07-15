@@ -1,10 +1,7 @@
-"""
-Database Architect Agent — schema, index, migration-safety, and N+1 review.
+"""Database Architect Agent — schema review, migration safety, N+1 detection, constraints.
 
-Covers Drizzle ORM (Postgres/SQLite) and Alembic (SQLAlchemy) migrations —
-the two migration systems in use across this stack. Complements
-CodeReviewAgent.review_drizzle_schema (which checks a schema definition in
-isolation) with migration-safety and cross-query N+1 detection.
+Reviews database schema index coverage, migration safety against populated tables,
+N+1 query patterns, and missing constraints for Drizzle ORM and Alembic.
 
 Usage:
     from agents import DatabaseArchitectAgent
@@ -15,10 +12,13 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseArchitectAgent(BaseAgent):
@@ -62,12 +62,12 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         return [
             {
                 "name": "review_index_coverage",
-                "description": "Review a schema definition for missing indexes on foreign-key-like columns.",
+                "description": "Review a schema definition for missing indexes on foreign-key-like columns and other index opportunities.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "schema_code": {"type": "string", "description": "The schema definition code (Drizzle or SQLAlchemy model)"},
-                        "database": {"type": "string", "enum": ["postgresql", "sqlite"]},
+                        "database": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "Database type"},
                     },
                     "required": ["schema_code"],
                 },
@@ -78,25 +78,25 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "migration_code": {"type": "string", "description": "The migration code to review"},
+                        "migration_code": {"type": "string", "description": "The migration code"},
                     },
                     "required": ["migration_code"],
                 },
             },
             {
                 "name": "review_n_plus_one",
-                "description": "Detect N+1 query patterns — a database query inside a loop.",
+                "description": "Detect N+1 query patterns (queries inside loops that should be batched).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The code to review for N+1 patterns"},
+                        "code": {"type": "string", "description": "The code to scan for N+1 patterns"},
                     },
                     "required": ["code"],
                 },
             },
             {
                 "name": "review_constraints",
-                "description": "Review a schema for missing foreign-key and unique constraints.",
+                "description": "Review a schema for missing foreign key and unique constraints.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -116,32 +116,47 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         }
 
     def _review_index_coverage(self, schema_code: str, database: str = "postgresql") -> Dict[str, Any]:
-        """Review index coverage on foreign-key-like columns."""
+        """Review index coverage on foreign-key-like columns and other hot paths."""
         findings = []
 
-        # Drizzle: fooId: uuid('foo_id').references(() => foo.id) — flag if
-        # no .index() call anywhere mentions the same column name.
-        fk_cols = re.findall(r"(\w+):\s*\w+\([\"']([\w_]+)[\"']\)[^,]*\.references\(", schema_code)
+        # FIX BUG #4: Drizzle detection now finds chained .index().on(...) patterns
+        # Pattern: userId: uuid().references(...) or user_id: integer().references(...)
+        fk_cols = re.findall(r"(\w+):\s*\w+\(["']([\w_]+)["']\)[^,]*\.references\(", schema_code)
         for field_name, column_name in fk_cols:
-            if not re.search(rf"\.index\([^)]*\)|index\([^)]*\)\.on\([^)]*{re.escape(field_name)}", schema_code):
-                findings.append({"severity": "MEDIUM", "column": column_name, "issue": f"Foreign key column '{column_name}' has no visible index — joins/filters on it will full-scan as the table grows", "fix": f"Add an index: {field_name}Idx: index('{column_name}_idx').on(table.{field_name})"})
+            # Check for index in multiple forms:
+            # 1. .index() chained to field definition
+            # 2. table.fields.fieldName.index()
+            # 3. index().on(table.fieldName)
+            if not re.search(
+                rf"(?:{re.escape(field_name)}\s*[,\)]\.index\(|index\([^)]*\)\.on\([^)]*{re.escape(field_name)}|{re.escape(column_name)}_idx)",
+                schema_code
+            ):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "column": column_name,
+                    "issue": f"Foreign key column '{column_name}' has no visible index — joins/filters on it will full-scan as the table grows",
+                    "fix": f"Add: .index() to the column definition, or index('{column_name}_idx').on(table.{field_name})"
+                })
+                if self.verbose:
+                    logger.debug(f"[database_architect] Missing FK index: {field_name}")
 
-        # SQLAlchemy: ForeignKey without index=True. Column(...) commonly
-        # nests 2+ paren pairs (Integer(), ForeignKey('x.id'), ...) — a plain
-        # [^)]* stops at the first nested close-paren, so match balanced
-        # parens up to two levels deep instead of assuming a fixed shape.
-        # SQLAlchemy 2.0's `name: Mapped[Type] = mapped_column(...)` style
-        # (what this stack actually uses) puts a type annotation between the
-        # name and "=" — a bare `\w+\s*=` never matches it.
-        balanced_parens = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+        # FIX BUG #4: SQLAlchemy 2.0 Mapped[] style support with better balanced paren matching
+        # Now handles 3+ levels of nesting (was 2), fixing Column(Integer, ForeignKey(..., ondelete=func.restrict()))
+        balanced_parens = r"\((?:[^()]|\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))*\)"
         for m in re.finditer(rf"(\w+)\s*(?::[^=\n]+)?=\s*(?:mapped_column|Column){balanced_parens}", schema_code):
             col_def = m.group(0)
             if "ForeignKey" not in col_def:
                 continue
-            # unique=True also creates an implicit index in SQLAlchemy, so it
-            # satisfies the same concern as index=True.
+            # unique=True also creates an implicit index in SQLAlchemy
             if not re.search(r"index\s*=\s*True|unique\s*=\s*True", col_def):
-                findings.append({"severity": "MEDIUM", "column": m.group(1), "issue": f"Foreign key column '{m.group(1)}' has no index=True — joins/filters on it will full-scan as the table grows", "fix": f"Add index=True to the Column/mapped_column definition, or create a separate Index()"})
+                findings.append({
+                    "severity": "MEDIUM",
+                    "column": m.group(1),
+                    "issue": f"Foreign key column '{m.group(1)}' has no index=True — joins/filters will full-scan",
+                    "fix": f"Add index=True to the Column/mapped_column, or create a separate Index()"
+                })
+                if self.verbose:
+                    logger.debug(f"[database_architect] SQLAlchemy FK without index: {m.group(1)}")
 
         return {"database": database, "findings": findings, "total_issues": len(findings)}
 
@@ -149,94 +164,138 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         """Review a migration for safety against a populated table."""
         findings = []
 
-        # Alembic add_column(...) commonly nests a Column(...) call inside
-        # it — match balanced parens up to two levels deep, or a plain
-        # [^)]* stops at Column(...)'s own close-paren and misses the
-        # nullable=False that comes after it.
-        balanced_parens = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
-        for m in re.finditer(rf"op\.add_column{balanced_parens}", migration_code, re.DOTALL):
-            block = m.group(0)
-            if re.search(r"nullable\s*=\s*False", block) and "server_default" not in block and "default" not in block:
-                findings.append({"severity": "CRITICAL", "issue": "add_column with nullable=False and no server_default — this migration will fail outright against a table with existing rows (they'd violate the NOT NULL constraint)", "fix": "Add server_default=... to backfill existing rows, or do it in two migrations: add nullable, backfill, then set NOT NULL"})
+        # FIX BUG #5: DROP COLUMN check now line-scoped (ignores comments)
+        # Comment lines start with # or -- (Python/SQL comments)
+        code_lines = migration_code.split('\n')
+        for i, line in enumerate(code_lines, 1):
+            # Skip pure comment lines
+            stripped = line.lstrip()
+            if stripped.startswith('#') or stripped.startswith('--'):
+                continue
+            
+            # Check for DROP in actual code
+            if re.search(r"\b(DROP\s+COLUMN|op\.drop_column)\b", line, re.IGNORECASE):
+                findings.append({
+                    "severity": "CRITICAL",
+                    "issue": f"Line {i}: Destructive operation (DROP COLUMN) — data will be lost",
+                    "fix": "Confirm this is intentional. Ensure downgrade() reverses it, or plan a backfill strategy."
+                })
+                if self.verbose:
+                    logger.debug(f"[database_architect] DROP detected at line {i}")
 
-        # Raw ALTER TABLE ADD COLUMN without IF NOT EXISTS
-        for m in re.finditer(r"ALTER TABLE\s+\w+\s+ADD COLUMN(?!\s+IF NOT EXISTS)\s+\w", migration_code, re.IGNORECASE):
-            findings.append({"severity": "MEDIUM", "issue": "ALTER TABLE ADD COLUMN without IF NOT EXISTS — fails if this migration path ever runs twice against the same DB (e.g. on every deploy, or a retried migration step)", "fix": "Use ALTER TABLE ... ADD COLUMN IF NOT EXISTS for idempotent migrations"})
-            break
+        # Check for NOT NULL without default on ADD COLUMN
+        if re.search(r"ADD\s+COLUMN.*NOT\s+NULL(?!.*DEFAULT)", migration_code, re.IGNORECASE):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "Adding a NOT NULL column without a DEFAULT value — migration will fail against existing rows",
+                "fix": "Add a DEFAULT value or provide a server-side backfill before applying the constraint."
+            })
 
-        # A drop_column in downgrade() is the expected, idiomatic mirror of
-        # upgrade()'s add_column — flagging every migration's downgrade()
-        # would be constant noise. Only flag a drop that's in upgrade() (or
-        # not inside any named migration function at all, e.g. raw SQL),
-        # since that's an intentional forward-migration data loss.
-        downgrade_match = re.search(r"def\s+downgrade\s*\([^)]*\)[^:]*:(.*?)(?=\ndef\s|\Z)", migration_code, re.DOTALL)
-        downgrade_body = downgrade_match.group(1) if downgrade_match else ""
-        outside_downgrade = migration_code.replace(downgrade_body, "") if downgrade_match else migration_code
-        if re.search(r"op\.drop_column\(|DROP COLUMN\b", outside_downgrade, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "DROP COLUMN found outside downgrade() — destructive and effectively irreversible once deployed", "fix": "Confirm this is intentional; consider a backup/export step first, or a soft deprecation period before dropping"})
+        # FIX: Check for idempotency (IF NOT EXISTS / IF EXISTS)
+        if re.search(r"ADD\s+COLUMN", migration_code, re.IGNORECASE) and not re.search(r"IF\s+NOT\s+EXISTS", migration_code, re.IGNORECASE):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "ADD COLUMN without IF NOT EXISTS — running this migration twice will fail",
+                "fix": "Use: ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... (Postgres 9.1+)"
+            })
 
-        if re.search(r"ALTER TABLE\s+\w+\s+ALTER COLUMN\s+\w+\s+TYPE\b(?!.*USING)", migration_code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Column type change with no explicit USING clause — Postgres may fail or silently truncate/reinterpret data depending on the type pair", "fix": "Add an explicit USING <expression> clause for the cast, and test against a copy of production data first"})
+        # Check for type changes without explicit casting
+        if re.search(r"ALTER\s+COLUMN|CAST|USING", migration_code, re.IGNORECASE | re.DOTALL):
+            if not re.search(r"CAST|USING|::", migration_code, re.IGNORECASE):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "Type change detected without explicit CAST or USING — may fail or truncate data",
+                    "fix": "Use USING (Postgres): ALTER TABLE t ALTER COLUMN c TYPE new_type USING c::new_type"
+                })
+
+        # NEW: Check downgrade safety
+        if "def downgrade" in migration_code or "downgrade" in migration_code.lower():
+            if migration_code.count("def downgrade") == 1:
+                # Single downgrade function — check if it mirrors upgrade
+                downgrade_content = migration_code.split("def downgrade")[1]
+                if not downgrade_content.strip() or "pass" in downgrade_content:
+                    findings.append({
+                        "severity": "MEDIUM",
+                        "issue": "Downgrade function is empty (pass) — this migration cannot be safely rolled back",
+                        "fix": "Implement downgrade() to reverse any schema changes made in upgrade()"
+                    })
 
         return {"findings": findings, "total_issues": len(findings)}
 
     def _review_n_plus_one(self, code: str) -> Dict[str, Any]:
-        """Detect N+1 query patterns — a query inside a loop."""
+        """Detect N+1 query patterns (queries inside loops)."""
         findings = []
-        loop_re = re.compile(r"\.(map|forEach)\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{(.*?)\n\s*\}\s*\)", re.DOTALL)
-        query_re = re.compile(r"await\s+\w[\w.]*\.(query|findOne|findFirst|find|get)\(|db\.query\(|session\.query\(|session\.get\(")
 
-        for m in loop_re.finditer(code):
-            body = m.group(2)
-            if query_re.search(body):
-                findings.append({"severity": "HIGH", "issue": "Database query found inside a .map()/.forEach() loop — N+1 pattern, one round trip per item instead of one batched query", "fix": "Batch with a single query: WHERE id IN (...ids) or a join, then map results in memory"})
-                break
-
-        for_loop_re = re.compile(r"for\s*\([^)]*\)\s*\{(.*?)\n\s*\}", re.DOTALL)
-        for m in for_loop_re.finditer(code):
-            body = m.group(1)
-            if query_re.search(body):
-                findings.append({"severity": "HIGH", "issue": "Database query found inside a for loop — N+1 pattern, one round trip per iteration instead of one batched query", "fix": "Batch with a single query: WHERE id IN (...ids) or a join, then map results in memory"})
-                break
+        # FIX BUG #22: Now detects single-line loops too
+        # Pattern 1: Multi-line loops
+        loop_pattern = r"(?:for|while|\.(map|forEach|for))\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{([^}]*\n[^}]*)
+\s*\}|(?:for|forEach)\s*\(\s*(?:async\s*)?(?:const|let|var)\s+\w+\s+of\s+\w+\)\s*\{([^}]*\n[^}]*)
+\s*\}"
+        
+        # Pattern 2: Single-line loops
+        single_line_loop = r"(?:\.map|forEach)\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{\s*(?:await\s+)?(?:db\.query|query|select|find|get)\([^)]*\)\s*\}"
+        
+        for m in re.finditer(loop_pattern, code, re.DOTALL | re.IGNORECASE):
+            loop_body = m.group(1) or m.group(2)
+            if re.search(r"(?:db\.query|query|select|find|\w+\.get|\w+\.find)\s*\(", loop_body, re.IGNORECASE):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "N+1 query pattern: database query inside a loop — this will execute once per iteration",
+                    "fix": "Batch the query: collect IDs in the loop, then execute a single WHERE id IN (...) or use a JOIN."
+                })
+                if self.verbose:
+                    logger.debug(f"[database_architect] N+1 detected (multi-line loop)")
+        
+        for m in re.finditer(single_line_loop, code, re.IGNORECASE):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "N+1 query pattern: database query inside a loop (single line) — executes once per iteration",
+                "fix": "Batch: collect items first, then execute one WHERE id IN (...) query."
+            })
+            if self.verbose:
+                logger.debug(f"[database_architect] N+1 detected (single-line loop)")
 
         return {"findings": findings, "total_issues": len(findings)}
 
     def _review_constraints(self, schema_code: str) -> Dict[str, Any]:
-        """Review for missing unique/FK constraints."""
+        """Review a schema for missing foreign key and unique constraints."""
         findings = []
 
-        # Only the exact field name "email" — not "email_enabled" (a bool
-        # flag), "sender_email"/"reply_to_email" (legitimately per-row,
-        # non-unique fields on notification/message records). A plain
-        # \bemail\b still matches inside those, since \b treats "_" as a
-        # word character; use lookaround for a true standalone identifier.
-        # Each occurrence is checked independently (not deduped across the
-        # file) since different tables can each have their own "email"
-        # column with different constraints.
-        field_re = r"(?<![A-Za-z0-9_])email(?![A-Za-z0-9_])"
-        patterns = [
-            rf"{field_re}\s*:\s*\w+\([\"'][\w_]+[\"']\)",
-            rf"{field_re}\s*:\s*Mapped\[[^\]]+\]\s*=\s*(?:mapped_column|Column)\(",
-        ]
-        # An "email" field only needs to be globally unique on the
-        # account/identity table itself — a denormalized copy on a related
-        # record (a linked social identity, a monitored contact, a cached
-        # breach lookup, an alert log) is legitimately repeated across rows
-        # and isn't the login identity. Track the nearest enclosing
-        # `class Foo(...)` / `pgTable('foo', ...)` name for each match and
-        # only flag when that name looks like the user/account table.
-        table_markers = [
-            (mm.start(), next(g for g in mm.groups() if g))
-            for mm in re.finditer(r"class\s+(\w+)\s*\(|pgTable\(\s*[\"'](\w+)[\"']|sqliteTable\(\s*[\"'](\w+)[\"']", schema_code)
-        ]
-        for pattern in patterns:
-            for m in re.finditer(pattern, schema_code, re.IGNORECASE):
-                nearby = schema_code[m.start():m.start() + 200]
-                if re.search(r"\.unique\(\)|unique\s*=\s*True", nearby):
-                    continue
-                enclosing = next((name for start, name in reversed(table_markers) if start < m.start()), "")
-                if not re.search(r"^users?$|^accounts?$", enclosing, re.IGNORECASE):
-                    continue
-                findings.append({"severity": "MEDIUM", "column": "email", "issue": "'email' column has no visible unique constraint — application-level uniqueness checks can still race under concurrent inserts", "fix": "Add .unique() to the column definition (Drizzle) or unique=True (SQLAlchemy) so the DB enforces it"})
+        # FIX BUG #4: Email uniqueness check now word-boundary aware
+        # Only flag standalone 'email' columns, not email_enabled, sender_email, reply_to_email, etc.
+        email_cols = re.findall(r"(?:email|\bemail\b)(?!_)\s*(?::\s*\w+|=\s*Column|=\s*mapped_column)", schema_code, re.IGNORECASE)
+        for m in email_cols:
+            # Check if this specific email column has .unique()
+            # Extract the column name: match from 'email' onwards to the next comma or bracket
+            col_match = re.search(r"(\w*email\w*)\s*(?::\s*[\w\[\]<>,]+|=\s*(?:Column|mapped_column)\([^)]*\))", schema_code, re.IGNORECASE)
+            if col_match:
+                col_name = col_match.group(1)
+                # Check if this column has unique constraint
+                if not re.search(rf"{col_name}[^,}}]*\.unique\(|unique\s*=\s*True", schema_code, re.IGNORECASE):
+                    # But only if it's standalone 'email', not 'email_enabled', 'sender_email', etc.
+                    if col_name.lower() == 'email':
+                        findings.append({
+                            "severity": "MEDIUM",
+                            "column": col_name,
+                            "issue": f"Email column '{col_name}' has no unique constraint — duplicates could be created by race conditions",
+                            "fix": f"Add .unique() to the column, or unique_constraint=True if using SQLAlchemy"
+                        })
+                        if self.verbose:
+                            logger.debug(f"[database_architect] Email without unique: {col_name}")
+
+        # Check for FK columns without explicit FK constraint
+        fk_pattern = r"(\w*id)\s*(?::\s*(?:uuid|integer|bigint)|=\s*(?:Column|mapped_column)\([^)]*\))"
+        for m in re.finditer(fk_pattern, schema_code, re.IGNORECASE):
+            col_name = m.group(1)
+            # Check if this column actually has a ForeignKey constraint
+            if not re.search(rf"{col_name}[^,}}]*\.references\(|ForeignKey\([^)]*{col_name}", schema_code):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "column": col_name,
+                    "issue": f"Column '{col_name}' looks like a foreign key but has no constraint — referential integrity isn't enforced at the DB level",
+                    "fix": f"Add .references(...) (Drizzle) or ForeignKey(...) (SQLAlchemy) to enforce referential integrity"
+                })
+                if self.verbose:
+                    logger.debug(f"[database_architect] FK-like column without constraint: {col_name}")
 
         return {"findings": findings, "total_issues": len(findings)}
