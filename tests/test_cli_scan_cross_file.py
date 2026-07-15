@@ -66,3 +66,23 @@ def test_inline_local_imports_no_matching_import_is_noop(tmp_path):
     _write(caller_path, content)
     combined = _inline_local_imports(caller_path, content, root)
     assert combined == content
+
+
+def test_inline_local_imports_python_package_resolves_to_init(tmp_path):
+    """`from app.lib import apple` should resolve to app/lib/__init__.py
+    (a package), not just app/lib.py (a same-named module) — and the
+    inlined marker comment should use Python's "#" syntax, not "//"."""
+    root = str(tmp_path)
+    _write(
+        os.path.join(root, "app", "lib", "__init__.py"),
+        "def verify_apple_identity_token(): return jwks_verify()\n",
+    )
+    caller_path = os.path.join(root, "app", "auth.py")
+    caller_content = "from app.lib import verify_apple_identity_token\n"
+    _write(caller_path, caller_content)
+
+    combined = _inline_local_imports(caller_path, caller_content, root)
+
+    assert "jwks_verify" in combined
+    assert "\n# --- imported from" in combined
+    assert "// ---" not in combined

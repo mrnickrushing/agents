@@ -31,3 +31,18 @@ def test_drizzle_schema_still_flags_real_schema_missing_primary_key():
     result = agent._review_drizzle_schema(code)
     issues = [f["issue"] for f in result["findings"]]
     assert any("primary key" in i.lower() for i in issues)
+
+
+def test_drizzle_schema_detects_table_definition_with_whitespace():
+    """pgTable ('widgets', ...) with a space before the paren is still a
+    real table definition — an exact "pgtable(" substring match would miss
+    it and silently skip a schema file that does have a real problem."""
+    agent = CodeReviewAgent()
+    code = """
+    export const widgets = pgTable ('widgets', {
+      name: text('name').notNull(),
+    });
+    """
+    result = agent._review_drizzle_schema(code)
+    issues = [f["issue"] for f in result["findings"]]
+    assert any("primary key" in i.lower() for i in issues)

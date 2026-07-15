@@ -293,7 +293,7 @@ Always provide the fix with code, not just a description of what's wrong.
         # table — that's a route, service, or db-client file, not a schema.
         # The checks below (primary key, indexes, timestamps) only make
         # sense once an actual table definition exists in this file.
-        if "pgtable(" not in code_lower and "sqlitetable(" not in code_lower:
+        if not re.search(r"(?:pg|sqlite)table\s*\(", code_lower):
             return {"database": database, "findings": [], "total_issues": 0}
 
         if "index" not in code_lower and ("where" in code_lower or "find" in code_lower):

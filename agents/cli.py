@@ -183,7 +183,10 @@ def _alias_base_dir(alias_root: str) -> str:
             tsconfig = json.load(fh)
         pattern = tsconfig.get("compilerOptions", {}).get("paths", {}).get("@/*", ["./*"])[0]
         return os.path.normpath(os.path.join(alias_root, pattern.rstrip("*")))
-    except Exception:
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        # Malformed/missing tsconfig.json, unexpected `paths` shape, or an
+        # empty paths list ([0] on []) — any of these just means "couldn't
+        # read a real alias mapping," fall back to the root guess.
         return alias_root
 
 
@@ -204,6 +207,11 @@ def _resolve_py_import(module: str, from_dir: str, root: str) -> Optional[str]:
         candidate = os.path.join(base, *parts) + ".py"
         if os.path.isfile(candidate):
             return candidate
+        # A package import (e.g. `from app.models import User`) resolves to
+        # the package directory's __init__.py, not a same-named .py file.
+        candidate_init = os.path.join(base, *parts, "__init__.py")
+        if os.path.isfile(candidate_init):
+            return candidate_init
     return None
 
 
@@ -226,10 +234,11 @@ def _inline_local_imports(path: str, content: str, root: str, max_files: int = 3
             if found and found != path:
                 resolved.append(found)
 
+    comment_prefix = "#" if ext == ".py" else "//"
     combined = content
     for found in resolved[:max_files]:
         try:
-            combined += f"\n\n// --- imported from {os.path.relpath(found, root)} ---\n" + _read(found)
+            combined += f"\n\n{comment_prefix} --- imported from {os.path.relpath(found, root)} ---\n" + _read(found)
         except OSError:
             continue
     return combined

@@ -40,3 +40,28 @@ def test_cors_wildcard_origin_express_still_flagged():
     result = agent._audit_cors_config(code)
     severities = [f["severity"] for f in result["cors_findings"]]
     assert severities.count("CRITICAL") == 2
+
+
+def test_cors_wildcard_origin_trailing_comma_fastapi():
+    agent = SecurityAuditAgent()
+    code = 'app.add_middleware(CORSMiddleware, allow_origins=["*",], allow_credentials=True)'
+    result = agent._audit_cors_config(code)
+    severities = [f["severity"] for f in result["cors_findings"]]
+    assert severities.count("CRITICAL") == 2
+
+
+def test_cors_wildcard_origin_mixed_list_fastapi():
+    agent = SecurityAuditAgent()
+    code = 'app.add_middleware(CORSMiddleware, allow_origins=["https://trusted.example", "*"], allow_credentials=True)'
+    result = agent._audit_cors_config(code)
+    severities = [f["severity"] for f in result["cors_findings"]]
+    assert severities.count("CRITICAL") == 2
+
+
+def test_cors_wildcard_origin_quoted_key_express():
+    """JSON-style quoted key ("origin": "*") rather than a bare identifier."""
+    agent = SecurityAuditAgent()
+    code = '{ "origin": "*", "credentials": true }'
+    result = agent._audit_cors_config(code)
+    severities = [f["severity"] for f in result["cors_findings"]]
+    assert severities.count("CRITICAL") == 2
