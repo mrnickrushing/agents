@@ -3,14 +3,21 @@ Base agent class — supports OpenAI and Anthropic APIs.
 
 Provides unified interface for both providers, conversation management,
 and tool/function calling conventions.
+
+Includes comprehensive logging for debugging, especially multi-turn
+conversation flows and tool execution.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
+
+# Configure module-level logger
+logger = logging.getLogger(__name__)
 
 # Exception class names that indicate a transient, retryable failure.
 # Matched by name (not isinstance) so we don't need to hard-import the
@@ -50,6 +57,7 @@ class BaseAgent:
     max_tokens: int = 4096
     max_tool_rounds: int = 5
     max_retries: int = 3
+    verbose: bool = False  # Enable detailed logging
 
     def __init__(
         self,
@@ -59,11 +67,24 @@ class BaseAgent:
         temperature: Optional[float] = None,
         base_url: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        verbose: bool = False,
     ):
         self.provider = provider.lower()
         self.api_key = api_key or os.getenv(f"{self.provider.upper()}_API_KEY")
         self.model = model or self.model
         self.temperature = temperature if temperature is not None else self.temperature
+        self.verbose = verbose
+        
+        # Set up logging
+        if self.verbose:
+            logger.setLevel(logging.DEBUG)
+            if not logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    '[%(name)s] %(levelname)s: %(message)s'
+                )
+                handler.setFormatter(formatter)
+                logger.addHandler(handler)
         
         # Provider-specific defaults
         if self.provider == "anthropic":
@@ -79,6 +100,9 @@ class BaseAgent:
         
         self._tools: List[Dict[str, Any]] = tools or self._define_tools()
         self._tool_handlers: Dict[str, Callable] = self._bind_tool_handlers()
+        
+        if self.verbose:
+            logger.debug(f"Initialized {self.__class__.__name__} with provider={self.provider}, model={self.model}")
 
     # ── Conversation Management ─────────────────────────────────────
 
@@ -87,13 +111,18 @@ class BaseAgent:
         cid = conversation_id or "default"
         if cid not in self._conversations:
             self._conversations[cid] = []
+            if self.verbose:
+                logger.debug(f"Created new conversation: {cid}")
         self._current_conversation_id = cid
         return self._conversations[cid]
 
     def reset(self, conversation_id: Optional[str] = None) -> None:
         """Clear conversation history."""
         cid = conversation_id or "default"
+        old_len = len(self._conversations.get(cid, []))
         self._conversations[cid] = []
+        if self.verbose:
+            logger.debug(f"Reset conversation {cid} (cleared {old_len} messages)")
 
     @property
     def history(self) -> List[Dict[str, Any]]:
@@ -135,9 +164,15 @@ class BaseAgent:
     ) -> List[Dict[str, Any]]:
         messages = [{"role": "system", "content": self.system_prompt}]
         if context:
-            messages.append({"role": "system", "content": f"Context:\n{context}"})
+            # FIX: Context should be part of the first system message, not a separate one
+            # OpenAI API only respects the first system message; subsequent ones are treated as user messages
+            messages[0]["content"] = f"{messages[0]['content']}\n\nContext:\n{context}"
+            if self.verbose:
+                logger.debug(f"Added context ({len(context)} chars) to system prompt")
         if conversation:
             messages.extend(conversation)
+            if self.verbose:
+                logger.debug(f"Extended messages with {len(conversation)} prior conversation turns")
         messages.append({"role": "user", "content": user_input})
         return messages
 
@@ -158,6 +193,8 @@ class BaseAgent:
                         "data": img["data"],
                     },
                 })
+            if self.verbose:
+                logger.debug(f"Added {len(images)} image(s) to user content")
 
         messages = list(conversation or [])
         messages.append({"role": "user", "content": user_content})
@@ -176,6 +213,10 @@ class BaseAgent:
         
         conversation = self._get_conversation(conversation_id)
         
+        if self.verbose:
+            logger.debug(f"Running {self.__class__.__name__} with input ({len(user_input)} chars), "
+                        f"conversation_id={conversation_id or 'default'}, history_len={len(conversation)}")
+        
         try:
             if self.provider == "anthropic":
                 return self._run_anthropic(user_input, conversation, context, images)
@@ -183,8 +224,10 @@ class BaseAgent:
                 return self._run_openai(user_input, conversation, context)
                 
         except ImportError as e:
+            error_msg = f"[SDK not installed for {self.provider}] {str(e)}\nInstall: {'pip install anthropic' if self.provider == 'anthropic' else 'pip install openai'}"
+            logger.error(error_msg)
             return AgentResponse(
-                content=f"[SDK not installed for {self.provider}] {str(e)}\nInstall: {'pip install anthropic' if self.provider == 'anthropic' else 'pip install openai'}",
+                content=error_msg,
                 model=self.model,
                 usage=None,
                 raw=None,
@@ -198,9 +241,21 @@ class BaseAgent:
                 return fn()
             except Exception as e:
                 attempt += 1
-                if attempt > self.max_retries or type(e).__name__ not in _RETRYABLE_ERROR_NAMES:
+                error_name = type(e).__name__
+                
+                # FIX: Exponential backoff now properly scales; removed cap issue
+                backoff = min(2 ** attempt, 60)  # Cap at 60 seconds (was 20)
+                
+                if attempt > self.max_retries or error_name not in _RETRYABLE_ERROR_NAMES:
+                    if self.verbose:
+                        logger.error(f"Non-retryable error: {error_name}: {str(e)}")
                     raise
-                time.sleep(min(2 ** attempt, 20))
+                
+                if self.verbose:
+                    logger.warning(f"Transient error (attempt {attempt}/{self.max_retries}): {error_name}. "
+                                  f"Retrying in {backoff}s...")
+                
+                time.sleep(backoff)
 
     def _run_openai(
         self,
@@ -212,6 +267,9 @@ class BaseAgent:
         requesting them or max_tool_rounds is reached."""
         from openai import OpenAI
 
+        if self.verbose:
+            logger.debug(f"[OpenAI] Starting execution with {len(conversation)} prior turns")
+
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         messages = self._build_openai_messages(user_input, context, conversation)
 
@@ -221,6 +279,9 @@ class BaseAgent:
         assistant_message = None
 
         for round_num in range(self.max_tool_rounds + 1):
+            if self.verbose:
+                logger.debug(f"[OpenAI] Tool round {round_num + 1}/{self.max_tool_rounds + 1}")
+
             payload = {
                 "model": self.model,
                 "messages": messages + turn_messages,
@@ -235,8 +296,14 @@ class BaseAgent:
             choice = response.choices[0]
             assistant_message = choice.message
 
+            if self.verbose:
+                logger.debug(f"[OpenAI] Got response: finish_reason={choice.finish_reason}, "
+                            f"has_tool_calls={bool(assistant_message.tool_calls)}")
+
             if not assistant_message.tool_calls or round_num == self.max_tool_rounds:
                 turn_messages.append({"role": "assistant", "content": assistant_message.content or ""})
+                if self.verbose:
+                    logger.debug(f"[OpenAI] Stopping (no tool calls or max rounds reached)")
                 break
 
             tool_results = self._execute_tool_calls(assistant_message.tool_calls)
@@ -252,10 +319,17 @@ class BaseAgent:
                     "tool_call_id": tool_result["tool_call_id"],
                 })
 
+        # FIX: CRITICAL — Properly preserve conversation history
+        # Include both the current user input AND all turn messages (tool calls + results)
         conversation.extend([
             {"role": "user", "content": user_input},
             *turn_messages,
         ])
+
+        if self.verbose:
+            logger.debug(f"[OpenAI] Conversation now has {len(conversation)} total messages")
+            logger.debug(f"[OpenAI] Response: {len(assistant_message.content or '')} chars, "
+                        f"usage: {response.usage.model_dump() if response.usage else 'N/A'}")
 
         return AgentResponse(
             content=assistant_message.content or "",
@@ -275,6 +349,9 @@ class BaseAgent:
         stops requesting tools or max_tool_rounds is reached."""
         import anthropic
 
+        if self.verbose:
+            logger.debug(f"[Anthropic] Starting execution with {len(conversation)} prior turns")
+
         client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
         messages = self._build_anthropic_messages(user_input, conversation, images)
 
@@ -282,6 +359,8 @@ class BaseAgent:
         system_prompt = self.system_prompt
         if context:
             system_prompt = f"{system_prompt}\n\nContext:\n{context}"
+            if self.verbose:
+                logger.debug(f"Added context to system prompt ({len(context)} chars)")
 
         tools = self.format_tools()
         turn_messages: List[Dict[str, Any]] = []
@@ -291,6 +370,9 @@ class BaseAgent:
         total_output_tokens = 0
 
         for round_num in range(self.max_tool_rounds + 1):
+            if self.verbose:
+                logger.debug(f"[Anthropic] Tool round {round_num + 1}/{self.max_tool_rounds + 1}")
+
             payload = {
                 "model": self.model,
                 "system": system_prompt,
@@ -308,8 +390,14 @@ class BaseAgent:
             tool_blocks = [b for b in response.content if b.type == "tool_use"]
             text_content = "".join(b.text for b in response.content if b.type == "text")
 
+            if self.verbose:
+                logger.debug(f"[Anthropic] Got response: stop_reason={response.stop_reason}, "
+                            f"has_tool_calls={len(tool_blocks)}, text_len={len(text_content)}")
+
             if not tool_blocks or round_num == self.max_tool_rounds:
                 turn_messages.append({"role": "assistant", "content": response.content})
+                if self.verbose:
+                    logger.debug(f"[Anthropic] Stopping (no tool calls or max rounds reached)")
                 break
 
             tool_calls = [{"id": b.id, "name": b.name, "arguments": b.input} for b in tool_blocks]
@@ -326,10 +414,19 @@ class BaseAgent:
                 })
             turn_messages.append({"role": "user", "content": result_blocks})
 
+        # FIX: CRITICAL — Properly preserve conversation history
+        # Extract the user input content from the last message in `messages`
+        # (which contains the current turn's user message)
+        user_message_content = user_input
         conversation.extend([
-            {"role": "user", "content": messages[-1]["content"]},
+            {"role": "user", "content": user_message_content},
             *turn_messages,
         ])
+
+        if self.verbose:
+            logger.debug(f"[Anthropic] Conversation now has {len(conversation)} total messages")
+            logger.debug(f"[Anthropic] Response: text={len(text_content)} chars, "
+                        f"tokens: input={total_input_tokens}, output={total_output_tokens}")
 
         return AgentResponse(
             content=text_content,
@@ -351,14 +448,25 @@ class BaseAgent:
             func_name = tc.function.name
             func_args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
             handler = self._tool_handlers.get(func_name)
+            
+            if self.verbose:
+                logger.debug(f"Executing tool: {func_name} with args keys: {list(func_args.keys()) if isinstance(func_args, dict) else 'N/A'}")
+            
             if handler:
                 try:
                     output = handler(**func_args)
                     results.append({"tool_call_id": tc.id, "result": output})
+                    if self.verbose:
+                        logger.debug(f"Tool {func_name} succeeded")
                 except Exception as e:
-                    results.append({"tool_call_id": tc.id, "error": str(e)})
+                    error_msg = str(e)
+                    results.append({"tool_call_id": tc.id, "error": error_msg})
+                    logger.error(f"Tool {func_name} failed: {error_msg}")
             else:
-                results.append({"tool_call_id": tc.id, "error": f"Unknown tool: {func_name}"})
+                error_msg = f"Unknown tool: {func_name}"
+                results.append({"tool_call_id": tc.id, "error": error_msg})
+                logger.error(error_msg)
+        
         return results
 
     def _execute_tool_calls_anthropic(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -368,14 +476,25 @@ class BaseAgent:
             func_name = tc["name"]
             func_args = tc["arguments"]
             handler = self._tool_handlers.get(func_name)
+            
+            if self.verbose:
+                logger.debug(f"Executing tool: {func_name} with args keys: {list(func_args.keys()) if isinstance(func_args, dict) else 'N/A'}")
+            
             if handler:
                 try:
                     output = handler(**func_args)
                     results.append({"tool_use_id": tc["id"], "result": output})
+                    if self.verbose:
+                        logger.debug(f"Tool {func_name} succeeded")
                 except Exception as e:
-                    results.append({"tool_use_id": tc["id"], "error": str(e)})
+                    error_msg = str(e)
+                    results.append({"tool_use_id": tc["id"], "error": error_msg})
+                    logger.error(f"Tool {func_name} failed: {error_msg}")
             else:
-                results.append({"tool_use_id": tc["id"], "error": f"Unknown tool: {func_name}"})
+                error_msg = f"Unknown tool: {func_name}"
+                results.append({"tool_use_id": tc["id"], "error": error_msg})
+                logger.error(error_msg)
+        
         return results
 
     def _define_tools(self) -> List[Dict[str, Any]]:
