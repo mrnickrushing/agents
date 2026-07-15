@@ -16,10 +16,13 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 class SecurityAuditAgent(BaseAgent):
@@ -316,6 +319,39 @@ Format findings as structured reports with severity, location, description, and 
                     "required": ["code"],
                 },
             },
+            {
+                "name": "audit_hardcoded_secrets",
+                "description": "NEW: Scan code for hardcoded secrets (API keys, tokens, passwords) with advanced pattern matching.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The code to scan for secrets"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_error_handling",
+                "description": "NEW: Check for proper error handling that doesn't leak sensitive info (stack traces, internal paths).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The error handling code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_logging_security",
+                "description": "NEW: Verify logging doesn't capture or expose sensitive data (passwords, tokens, PII).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The logging code to audit"},
+                    },
+                    "required": ["code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -332,6 +368,9 @@ Format findings as structured reports with severity, location, description, and 
             "audit_input_validation": self._audit_input_validation,
             "audit_file_upload": self._audit_file_upload,
             "audit_websocket_auth": self._audit_websocket_auth,
+            "audit_hardcoded_secrets": self._audit_hardcoded_secrets,
+            "audit_error_handling": self._audit_error_handling,
+            "audit_logging_security": self._audit_logging_security,
         }
 
     # ── Tool handlers ──────────────────────────────────────────────────
@@ -389,7 +428,7 @@ Format findings as structured reports with severity, location, description, and 
             if re.search(r"helmet\s*\(\s*\)", text):
                 findings.append({
                     "severity": "INFO", "setting": "helmet",
-                    "issue": "helmet() is called with no options, which uses Helmet's secure defaults (CSP, HSTS, X-Frame-Options, etc. are all enabled). Verify the default CSP actually allows the domains you need (Stripe.js, image CDNs) rather than assuming it's a gap.",
+                    "issue": "helmet() is called with no options, which uses Helmet's secure defaults (CSP, HSTS, X-Frame-Options, etc. are all enabled). Verify the default CSP actually allows the frameworks/CDNs you use"
                 })
             else:
                 if re.search(r"contentSecurityPolicy\s*:\s*false", text, re.IGNORECASE):
@@ -413,30 +452,35 @@ Format findings as structured reports with severity, location, description, and 
         findings = []
         code_lower = code.lower()
 
-        # "hmac" alone is too broad — Python's hmac module is also the
+        # FIX BUG #2: "hmac" alone is too broad — Python's hmac module is also the
         # standard tool for constant-time comparisons (hmac.compare_digest)
         # unrelated to JWT signing, and flagging that as "using weak HS256
         # signing" is backwards (it's usually there *because* the code is
         # doing something correctly, e.g. timing-safe nonce comparison).
-        if re.search(r"hs256|hs384|hs512", code_lower):
+        # NEW: Only flag if HS256/HS384/HS512 appears with actual JWT signing context
+        if re.search(r"(?:jwt|token).*\bhs(?:256|384|512)\b|hs(?:256|384|512)\b.*(?:sign|encode)", code_lower, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "Using HS256 (symmetric) — prefer RS256/ES256 (asymmetric) so the signing key isn't shared"})
+        
         if "localstorage" in code_lower or "local storage" in code_lower:
             findings.append({"severity": "CRITICAL", "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies."})
-        # Matches expiresIn/expires_delta/exp claim/maxAge patterns. Plain "exp" as a
-        # substring is too broad — it matches "express"/"expo", which appear in nearly
-        # every file in this stack and silently disabled this check.
-        if not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\bexp\s*[:=]", code, re.IGNORECASE):
+        
+        # FIX BUG #2: Matches expiration in *context*, not just bare "exp" which matches "express"/"expo"
+        # Require actual expiration patterns: expiresIn/expires_delta/exp claim/maxAge
+        if not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\"exp\"\s*:", code, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "No token expiration set — tokens are valid forever"})
-        # PyJWT/python-jose verify implicitly via jwt.decode() (it raises on a bad
+        
+        # FIX BUG #2: PyJWT/python-jose verify implicitly via jwt.decode() (it raises on a bad
         # signature) — there's no literal "verify" call, so the old substring check
         # flagged every correct Python decode_token()-style function as unverified.
         if not re.search(r"verify|jwt\.decode\(|jwt_decode\(|jose\.jwt\.decode\(|\.decode\(\s*token", code, re.IGNORECASE):
             findings.append({"severity": "CRITICAL", "issue": "Token verification not found — tokens may not be validated server-side"})
-        # Require an actual algorithms:["none"] / alg=none pattern, not just the
+        
+        # FIX BUG #2: Require an actual algorithms:["none"] / alg=none pattern, not just the
         # words "none" and "algorithm" appearing anywhere (e.g. CSS "display: none"
         # alongside an unrelated "algorithm" comment would previously false-positive).
         if re.search(r"algorithms?\s*[:=]\s*\[?\s*[\"']none[\"']", code, re.IGNORECASE):
             findings.append({"severity": "CRITICAL", "issue": "Algorithm 'none' detected — this allows unauthenticated token forgery"})
+        
         if concerns:
             findings.append({"severity": "INFO", "issue": f"Specific concern noted: {concerns}"})
 
@@ -542,7 +586,7 @@ Format findings as structured reports with severity, location, description, and 
             or bool(re.search(r"allow_credentials\s*=\s*true", cors_code, re.IGNORECASE))
         )
         if credentials_true and wildcard:
-            findings.append({"severity": "CRITICAL", "issue": "credentials/allow_credentials=true with origin '*' — browsers reject this combination outright (CORS spec forbids it), so requests will fail; it also signals the origin allowlist wasn't actually locked down"})
+            findings.append({"severity": "CRITICAL", "issue": "credentials/allow_credentials=true with origin '*' — browsers reject this combination outright (CORS spec forbids it)"})
 
         if is_fastapi:
             if not re.search(r"allow_methods\s*=", cors_code):
@@ -628,7 +672,7 @@ Format findings as structured reports with severity, location, description, and 
                 path = ep.get("path", "")
                 limit = ep.get("limit")
                 if not limit:
-                    recommendations.append({"endpoint": path, "severity": "HIGH", "issue": f"No rate limit on {path}", "recommended": "5 requests per 15 minutes" if any(c in path for c in critical_endpoints) else "100 requests per 15 minutes"})
+                    recommendations.append({"endpoint": path, "severity": "HIGH", "issue": f"No rate limit on {path}", "recommended": "5 requests per 15 minutes" if any(c in path for c in critical_endpoints) else "Standard tier"})
                 elif any(c in path for c in critical_endpoints) and limit > 10:
                     recommendations.append({"endpoint": path, "severity": "MEDIUM", "issue": f"Rate limit too high ({limit}) for sensitive endpoint {path}", "recommended": "5 requests per 15 minutes"})
 
@@ -655,15 +699,15 @@ Format findings as structured reports with severity, location, description, and 
             literal = m.group(1)
             if re.search(sql_stmt, literal, re.IGNORECASE | re.DOTALL) and "${" in literal:
                 if direct_input_re.search(literal):
-                    findings.append({"severity": "CRITICAL", "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection", "fix": "Replace the interpolated value with a parameterized placeholder ($1/$2 or ?) passed via a separate args array"})
+                    findings.append({"severity": "CRITICAL", "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection", "fix": "Replace with parameterized query using placeholders ($1, $2, etc.)"})
                 else:
-                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments/placeholder lists, not raw unsanitized data. A common, safe pattern is passing real values through a separate params array to db.query(sql, params) while only the SQL *structure* is interpolated.", "fix": "If any interpolated value could contain user input, replace it with a parameterized placeholder instead of string interpolation"})
+                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments", "fix": "Replace with parameterized query"})
                 break
 
         for m in re.finditer(r"[\"']([^\"']*)[\"']\s*\+\s*\w", code):
             literal = m.group(1)
             if re.search(sql_stmt, literal, re.IGNORECASE):
-                findings.append({"severity": "CRITICAL", "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input", "fix": "Use parameterized placeholders instead of concatenating values into the query string"})
+                findings.append({"severity": "CRITICAL", "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input", "fix": "Use parameterized queries instead"})
                 break
 
         # Python: f-string or %/.format() with SQL statement shape
@@ -671,9 +715,9 @@ Format findings as structured reports with severity, location, description, and 
             literal = m.group(1)
             if re.search(sql_stmt, literal, re.IGNORECASE) and "{" in literal:
                 if re.search(r"\{\s*(request|req)\.(query_params|path_params|json)", literal, re.IGNORECASE):
-                    findings.append({"severity": "CRITICAL", "issue": "SQL query f-string interpolates a request value directly — SQL injection", "fix": "Use parameterized queries (SQLAlchemy text() with bound params, or the DB driver's placeholder syntax) instead of an f-string"})
+                    findings.append({"severity": "CRITICAL", "issue": "SQL query f-string interpolates a request value directly — SQL injection", "fix": "Use parameterized queries (SQLAlchemy text() with bound parameters)"})
                 else:
-                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input", "fix": "Use parameterized queries (SQLAlchemy text() with bound params, or the DB driver's placeholder syntax) instead of f-strings"})
+                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input", "fix": "Use parameterized queries"})
                 break
         if re.search(rf"[\"'][^\"']*{sql_stmt}[^\"']*[\"']\s*%\s*[\(\w]", code, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "SQL query built with %-formatting — use parameterized queries instead", "fix": "Pass values as query parameters, not via % string formatting"})
@@ -689,15 +733,15 @@ Format findings as structured reports with severity, location, description, and 
             user_controlled = bool(re.search(r"props\.|req\.|input|user|params|query|body", value_expr, re.IGNORECASE))
             findings.append({
                 "severity": "CRITICAL" if user_controlled else "MEDIUM",
-                "issue": "dangerouslySetInnerHTML used" + (" with what looks like user/request-derived content — likely XSS" if user_controlled else " — verify the HTML is not derived from user input (a common, legitimate use is injecting static computed CSS)"),
+                "issue": "dangerouslySetInnerHTML used" + (" with what looks like user/request-derived content — likely XSS" if user_controlled else " — verify the HTML is not derived from user input"),
                 "fix": "Sanitize with DOMPurify.sanitize() before assigning to __html, or avoid raw HTML injection entirely if the content isn't static",
             })
 
         if re.search(r"\.innerHTML\s*=(?!=)", code):
-            findings.append({"severity": "HIGH", "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled", "fix": "Use .textContent for plain text, or sanitize with DOMPurify before assigning HTML"})
+            findings.append({"severity": "HIGH", "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled", "fix": "Use .textContent for plain text, or sanitize HTML with DOMPurify"})
 
         if re.search(r"\|\s*safe\b", code) or re.search(r"Markup\(", code):
-            findings.append({"severity": "HIGH", "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value", "fix": "Only use |safe/Markup() on content you fully control; sanitize (bleach.clean()) anything derived from user input first"})
+            findings.append({"severity": "HIGH", "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value", "fix": "Only use |safe/Markup() on content you control completely; never on user input"})
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -713,9 +757,9 @@ Format findings as structured reports with severity, location, description, and 
             return {"findings": [], "total_issues": 0, "note": "No cookie/session-based auth detected — CSRF tokens don't apply to bearer-token/API-key auth the same way"}
 
         if not re.search(r"csurf|csrf", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Session-cookie auth found with no CSRF protection (csurf or equivalent) visible", "fix": "Add CSRF token validation for state-changing routes, or set cookies with SameSite=Strict/Lax if that's sufficient for your threat model"})
+            findings.append({"severity": "HIGH", "issue": "Session-cookie auth found with no CSRF protection (csurf or equivalent) visible", "fix": "Add CSRF token validation for state-changing requests"})
         if re.search(r"sameSite\s*:\s*[\"']?none[\"']?", code, re.IGNORECASE) and not re.search(r"csurf|csrf", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "Cookie set with SameSite=None and no CSRF protection — cross-site requests will include the cookie with no CSRF defense", "fix": "Add CSRF token validation, or avoid SameSite=None unless cross-site cookie delivery is truly required"})
+            findings.append({"severity": "CRITICAL", "issue": "Cookie set with SameSite=None and no CSRF protection — cross-site requests will include the cookie with no CSRF defense", "fix": "Set SameSite=Strict or Lax, or add CSRF token validation"})
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -724,19 +768,19 @@ Format findings as structured reports with severity, location, description, and 
         findings = []
 
         if re.search(r"\beval\s*\(", code):
-            findings.append({"severity": "CRITICAL", "issue": "eval() found — arbitrary code execution if any part of the evaluated string is influenced by user input", "fix": "Avoid eval() entirely; use JSON.parse() for data or a proper parser for expressions"})
+            findings.append({"severity": "CRITICAL", "issue": "eval() found — arbitrary code execution if any part of the evaluated string is influenced by user input", "fix": "Avoid eval() entirely; use safer alternatives like JSON.parse() for JSON data"})
         if re.search(r"new Function\s*\(", code):
-            findings.append({"severity": "HIGH", "issue": "new Function() found — similar risk to eval(), executes dynamically constructed code", "fix": "Avoid constructing functions from strings; use static code paths"})
+            findings.append({"severity": "HIGH", "issue": "new Function() found — similar risk to eval(), executes dynamically constructed code", "fix": "Avoid constructing functions from strings; use lambdas/closures instead"})
 
         if re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*\$\{", code) or re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*[\"']\s*\+", code):
-            findings.append({"severity": "CRITICAL", "issue": "child_process.exec() called with interpolated/concatenated input — shell command injection risk", "fix": "Use execFile()/spawn() with an argument array instead of exec() with a built string, which goes through a shell"})
+            findings.append({"severity": "CRITICAL", "issue": "child_process.exec() called with interpolated/concatenated input — shell command injection risk", "fix": "Use execFile()/spawn() with argument array instead, or validate input strictly"})
         if re.search(r"subprocess\.(run|call|Popen)\([^)]*shell\s*=\s*True", code, re.DOTALL):
-            findings.append({"severity": "HIGH", "issue": "subprocess called with shell=True — shell command injection risk if any argument is influenced by user input", "fix": "Use shell=False with an argument list instead of a shell string"})
+            findings.append({"severity": "HIGH", "issue": "subprocess called with shell=True — shell command injection risk if any argument is influenced by user input", "fix": "Use shell=False (the default) and pass arguments as a list"})
         if re.search(r"os\.system\s*\(", code):
-            findings.append({"severity": "HIGH", "issue": "os.system() found — shell command injection risk if any part of the command is influenced by user input", "fix": "Use subprocess.run([...], shell=False) with an argument list instead"})
+            findings.append({"severity": "HIGH", "issue": "os.system() found — shell command injection risk if any part of the command is influenced by user input", "fix": "Use subprocess.run() with shell=False instead"})
 
         if re.search(r"path\.join\([^)]*req\.(body|params|query)", code) or re.search(r"os\.path\.join\([^)]*request\.", code):
-            findings.append({"severity": "HIGH", "issue": "Path built directly from request input — path traversal risk (e.g. '../../etc/passwd')", "fix": "Validate/sanitize the path segment (reject '..', normalize and confirm it stays within the intended base directory) before joining"})
+            findings.append({"severity": "HIGH", "issue": "Path built directly from request input — path traversal risk (e.g. '../../etc/passwd')", "fix": "Validate/sanitize the path segment with a whitelist or normalize it"})
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -749,11 +793,11 @@ Format findings as structured reports with severity, location, description, and 
         is_fastapi_upload = "uploadfile" in code_lower
 
         if (is_multer or is_fastapi_upload) and not re.search(r"mimetype|content_type|content-type|filetype|file_type", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "File upload with no MIME type / content-type validation visible", "fix": "Validate the uploaded file's mimetype against an allowlist server-side (don't trust the client-provided extension alone)"})
+            findings.append({"severity": "HIGH", "issue": "File upload with no MIME type / content-type validation visible", "fix": "Validate the uploaded file's mimetype against an allowlist server-side"})
         if (is_multer or is_fastapi_upload) and not re.search(r"limits|max_size|maxsize|max_length|content_length", code, re.IGNORECASE):
-            findings.append({"severity": "MEDIUM", "issue": "No file size limit visible — unbounded uploads can exhaust disk/memory (DoS)", "fix": "Set multer's limits.fileSize (Node) or check request content-length before reading the full body (Python)"})
+            findings.append({"severity": "MEDIUM", "issue": "No file size limit visible — unbounded uploads can exhaust disk/memory (DoS)", "fix": "Set multer's limits.fileSize (Node) or check max_size (FastAPI)"})
         if re.search(r"req\.(file|files)\.(originalname|filename)", code) and not re.search(r"sanitize|randomUUID|uuid|nanoid|basename", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Uploaded filename used directly (e.g. for the storage path) without sanitizing — path traversal / overwrite risk", "fix": "Generate a random filename (uuid) server-side rather than trusting the client-provided filename"})
+            findings.append({"severity": "HIGH", "issue": "Uploaded filename used directly (e.g. for the storage path) without sanitizing — path traversal / overwrite risk", "fix": "Generate a random filename (UUID/nanoid) instead of using user-supplied name"})
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -763,8 +807,97 @@ Format findings as structured reports with severity, location, description, and 
 
         has_connection_handler = bool(re.search(r"\.on\(\s*[\"']connection[\"']|io\.use\(", code))
         if has_connection_handler and not re.search(r"auth|token|jwt|verify", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "WebSocket connection handler with no auth check visible — any client can connect and interact", "fix": "Add io.use((socket, next) => { verify token from socket.handshake.auth; next() }) before accepting connections"})
+            findings.append({"severity": "CRITICAL", "issue": "WebSocket connection handler with no auth check visible — any client can connect and interact", "fix": "Add io.use((socket, next) => { if (!authenticate(socket.handshake)) next(error) })"})
         if re.search(r"\.on\(\s*[\"']connection[\"']", code) and not re.search(r"disconnect", code, re.IGNORECASE):
-            findings.append({"severity": "LOW", "issue": "No disconnect handler visible — confirm any per-connection state (room membership, presence) is cleaned up on disconnect", "fix": "Add socket.on('disconnect', () => { /* cleanup */ })"})
+            findings.append({"severity": "LOW", "issue": "No disconnect handler visible — confirm any per-connection state (room membership, presence) is cleaned up on disconnect", "fix": "Add socket.on('disconnect', () => { cleanup state })"})
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    # ── NEW TOOLS FOR ENHANCED DETECTION ──────────────────────────────────
+
+    def _audit_hardcoded_secrets(self, code: str) -> Dict[str, Any]:
+        """NEW: Scan code for hardcoded secrets with advanced pattern matching."""
+        findings = []
+
+        # Patterns: API keys, tokens, passwords with high confidence
+        secret_patterns = [
+            (r"api[_-]?key\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{20,})[\"']", "API Key"),
+            (r"sk[_-]?(live|test)[_-]?[a-z0-9_]*\s*[:=]\s*[\"']sk[a-z0-9_]+[\"']", "Stripe Secret Key"),
+            (r"password\s*[:=]\s*[\"']([^\"']+)[\"']", "Password"),
+            (r"secret\s*[:=]\s*[\"']([^\"']{20,})[\"']", "Secret"),
+            (r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.]*)[\"']", "JWT Token"),
+            (r"refresh[_-]?token\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{30,})[\"']", "Refresh Token"),
+            (r"AWS[_-]?SECRET[_-]?ACCESS[_-]?KEY\s*[:=]\s*[\"']([A-Za-z0-9/+=]{40})[\"']", "AWS Secret"),
+            (r"database[_-]?url\s*[:=]\s*[\"']([a-z]+://[^\"']+)[\"']", "Database URL"),
+        ]
+
+        for pattern, secret_type in secret_patterns:
+            for match in re.finditer(pattern, code, re.IGNORECASE):
+                findings.append({
+                    "severity": "CRITICAL",
+                    "issue": f"Hardcoded {secret_type} detected",
+                    "location": f"Line contains: {match.group(0)[:50]}...",
+                    "fix": "Move to environment variables; use process.env or os.getenv() at runtime"
+                })
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_error_handling(self, code: str) -> Dict[str, Any]:
+        """NEW: Check for proper error handling that doesn't leak sensitive info."""
+        findings = []
+
+        # Check for stack trace exposure
+        if re.search(r"res\.send\(\s*err\)|response\.send\(\s*error\)|res\.json\(\s*err\)", code, re.IGNORECASE):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Error object sent directly in response — may expose stack traces, internal paths, or sensitive info",
+                "fix": "Return generic error message: res.json({ error: 'Something went wrong' }); log err server-side"
+            })
+
+        # Check for debug mode left on
+        if re.search(r"DEBUG\s*=\s*true|debug\s*:\s*true|app\.use\(morgan\('dev'\)|app\.set\('view engine'", code, re.IGNORECASE):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "Debug mode or verbose logging enabled — may leak internal details in production",
+                "fix": "Disable debugging in production; use environment checks: if (process.env.NODE_ENV === 'development')"
+            })
+
+        # Check for missing error handlers
+        if not re.search(r"catch|except|error\s+handler|middleware.*error|\.catch\(|\.on\('error'", code):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "No error handlers found — unhandled errors may crash the process",
+                "fix": "Add try/catch for async operations, .catch() for promises, or error middleware"
+            })
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_logging_security(self, code: str) -> Dict[str, Any]:
+        """NEW: Verify logging doesn't capture or expose sensitive data."""
+        findings = []
+
+        # Check what's being logged
+        sensitive_patterns = [
+            (r"console\.log\([^)]*\b(password|secret|token|key|api[_-]?key)\b", "Password/Secret", "CRITICAL"),
+            (r"logger\.log\([^)]*\b(req\.body|request\.body|request\.headers)\b", "Request Body/Headers", "HIGH"),
+            (r"console\.log\([^)]*\b(user|email|phone|ssn|creditcard)\b", "Personal Info", "HIGH"),
+            (r"logger\.(info|debug|error)\([^)]*\b(process\.env)\b", "Environment Variables", "CRITICAL"),
+        ]
+
+        for pattern, data_type, severity in sensitive_patterns:
+            if re.search(pattern, code, re.IGNORECASE):
+                findings.append({
+                    "severity": severity,
+                    "issue": f"Potentially logging {data_type} — may expose sensitive information",
+                    "fix": f"Filter or redact {data_type.lower()} before logging; use structured logging with field redaction"
+                })
+
+        # Check for proper PII redaction
+        if not re.search(r"redact|mask|anonymize|sanitize.*log", code, re.IGNORECASE):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "No PII redaction/masking visible in logging code",
+                "fix": "Implement a logging filter that redacts sensitive fields (emails, tokens, SSNs, etc.)"
+            })
 
         return {"findings": findings, "total_issues": len(findings)}
