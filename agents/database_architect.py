@@ -121,14 +121,14 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
 
         # FIX BUG #4: Drizzle detection now finds chained .index().on(...) patterns
         # Pattern: userId: uuid().references(...) or user_id: integer().references(...)
-        fk_cols = re.findall(r"(\w+):\s*\w+\(["']([\w_]+)["']\)[^,]*\.references\(", schema_code)
+        fk_cols = re.findall(r"(\w+):\s*\w+\(['\"]([\\w_]+)['\"]\\)[^,]*\.references\(", schema_code)
         for field_name, column_name in fk_cols:
             # Check for index in multiple forms:
             # 1. .index() chained to field definition
             # 2. table.fields.fieldName.index()
             # 3. index().on(table.fieldName)
             if not re.search(
-                rf"(?:{re.escape(field_name)}\s*[,\)]\.index\(|index\([^)]*\)\.on\([^)]*{re.escape(field_name)}|{re.escape(column_name)}_idx)",
+                rf"(?:{re.escape(field_name)}\s*[,\)]\\.index\(|index\([^)]*\)\.on\([^)]*{re.escape(field_name)}|{re.escape(column_name)}_idx)",
                 schema_code
             ):
                 findings.append({
@@ -228,12 +228,10 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
 
         # FIX BUG #22: Now detects single-line loops too
         # Pattern 1: Multi-line loops
-        loop_pattern = r"(?:for|while|\.(map|forEach|for))\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{([^}]*\n[^}]*)
-\s*\}|(?:for|forEach)\s*\(\s*(?:async\s*)?(?:const|let|var)\s+\w+\s+of\s+\w+\)\s*\{([^}]*\n[^}]*)
-\s*\}"
+        loop_pattern = r"(?:for|while|\.(map|forEach|for))\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{([^}]*\n[^}]*)\n\s*\}|(?:for|forEach)\s*\(\s*(?:async\s*)?\(?:const|let|var\)\s+\w+\s+of\s+\w+\)\s*\{([^}]*\n[^}]*)\n\s*\}"
         
         # Pattern 2: Single-line loops
-        single_line_loop = r"(?:\.map|forEach)\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{\s*(?:await\s+)?(?:db\.query|query|select|find|get)\([^)]*\)\s*\}"
+        single_line_loop = r"(?:\.map|forEach)\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\{\\s*(?:await\s+)?(?:db\.query|query|select|find|get)\([^)]*\)\\s*\}"
         
         for m in re.finditer(loop_pattern, code, re.DOTALL | re.IGNORECASE):
             loop_body = m.group(1) or m.group(2)
