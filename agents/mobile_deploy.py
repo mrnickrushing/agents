@@ -147,7 +147,8 @@ When reviewing configs, always call out the exact key/line that's wrong and the 
         for profile_name, profile in profiles.items():
             env = profile.get("env", {}) if isinstance(profile, dict) else {}
             for key, value in env.items():
-                if secret_key_pattern.search(key) and isinstance(value, str) and value and not reference_pattern.match(value):
+                public_bundle_value = key.upper().startswith("EXPO_PUBLIC_") and not re.search(r"SECRET|PRIVATE|ADMIN|AUTH_TOKEN", key, re.IGNORECASE)
+                if secret_key_pattern.search(key) and not public_bundle_value and isinstance(value, str) and value and not reference_pattern.match(value):
                     literal_secrets.setdefault(key, []).append(profile_name)
 
         for key, profile_names in literal_secrets.items():

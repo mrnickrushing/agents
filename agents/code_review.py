@@ -21,6 +21,39 @@ from typing import Any, Callable, Dict, List, Optional
 from agents.base import BaseAgent
 
 
+def _balanced_call(text: str, open_paren: int) -> str:
+    """Return one balanced call, ignoring parentheses inside quoted text."""
+    depth = 0
+    quote: Optional[str] = None
+    escaped = False
+    for index in range(open_paren, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_paren:index + 1]
+    return text[open_paren:]
+
+
+def _named_calls(text: str, name: str) -> List[str]:
+    return [
+        _balanced_call(text, match.end() - 1)
+        for match in re.finditer(rf"\b{re.escape(name)}\s*\(", text, re.IGNORECASE)
+    ]
+
+
 class CodeReviewAgent(BaseAgent):
     """
     Code review specialist for the RushingTech stack.
@@ -246,14 +279,23 @@ Always provide the fix with code, not just a description of what's wrong.
 
         if auth_required and ("auth" not in code_lower and "jwt" not in code_lower and "middleware" not in code_lower):
             findings.append({"severity": "CRITICAL", "issue": f"Route {route_path} requires auth but has no auth middleware", "fix": "Add auth middleware: router.post('/path', authenticate, handler)"})
-        if "try" not in code_lower and "catch" not in code_lower and "await" in code_lower:
+        if "try" not in code_lower and "catch" not in code_lower and "await" in code_lower and not re.search(r"asyncHandler|express-async-errors|next\s*\(", code, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "Async handler without try/catch — unhandled promise rejection will crash the server", "fix": "Wrap in try/catch or use asyncHandler wrapper"})
         if "zod" not in code_lower and "validate" not in code_lower and ("body" in code_lower or "params" in code_lower or "query" in code_lower):
             findings.append({"severity": "HIGH", "issue": "No input validation — client can send any data structure", "fix": "Add Zod validation: const schema = z.object({...}); const validated = schema.parse(req.body);"})
-        if re.search(r"\.status\(\s*500\s*\)", code):
-            findings.append({"severity": "MEDIUM", "issue": "Hardcoded 500 error — consider structured error handling", "fix": "Use a central error handler middleware"})
-        if re.search(r"\.findmany\s*\(|select\s+\*", code_lower) and ".limit(" not in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "Unbounded query — no LIMIT on database select, could return millions of rows", "fix": "Add pagination: .limit(pageSize).offset(page * pageSize)"})
+        unbounded = False
+        for match in re.finditer(r"\.findmany\s*\(", code_lower):
+            query_context = code_lower[match.start():match.start() + 800].split(";", 1)[0]
+            if not re.search(r"\b(?:take|limit)\s*[:(]", query_context):
+                unbounded = True
+                break
+        for match in re.finditer(r"select\s+\*", code_lower):
+            query_context = code_lower[match.start():match.start() + 800].split(";", 1)[0]
+            if not re.search(r"\blimit\b", query_context):
+                unbounded = True
+                break
+        if unbounded:
+            findings.append({"severity": "MEDIUM", "issue": "Unbounded query — this specific select/findMany call has no take/LIMIT", "fix": "Add capped pagination to the query itself (take/limit plus cursor or offset)"})
 
         return {"route": route_path, "auth_required": auth_required, "findings": findings, "total_issues": len(findings)}
 
@@ -261,25 +303,37 @@ Always provide the fix with code, not just a description of what's wrong.
         """Review React/React Native component."""
         findings = []
         code_lower = code.lower()
-        has_use_effect = "useeffect" in code_lower
-        has_effect_cleanup = bool(re.search(r"return\s*(?:\(\s*)?(?:\(\s*\)\s*=>|function\b)", code_lower))
-        has_abort_cleanup = "abortcontroller" in code_lower or "abort()" in code_lower or "abort.signal" in code_lower
-        has_timer_side_effect = "setinterval(" in code_lower or "settimeout(" in code_lower
-        has_timer_cleanup = "clearinterval(" in code_lower or "cleartimeout(" in code_lower
+        effect_calls = _named_calls(code, "useEffect")
 
-        if ": any" in code or "as any" in code:
-            findings.append({"severity": "MEDIUM", "issue": "TypeScript 'any' type used — loses type safety", "fix": "Replace with proper type definitions"})
-        if has_use_effect and ("fetch(" in code_lower or "apifetch(" in code_lower or "axios" in code_lower):
-            if not (has_effect_cleanup and has_abort_cleanup):
-                findings.append({"severity": "MEDIUM", "issue": "Network request in useEffect without abort-aware cleanup — state can update after unmount or route change", "fix": "Create an AbortController inside the effect, pass signal to fetch/apiFetch, and abort it in the cleanup return"})
-        if has_use_effect and has_timer_side_effect and not (has_effect_cleanup and has_timer_cleanup):
-            findings.append({"severity": "MEDIUM", "issue": "Timer started in useEffect without cleanup — interval/timeout can keep running after unmount", "fix": "Return a cleanup function that calls clearInterval()/clearTimeout()"})
-        if "console.log" in code_lower:
+        code_without_comments = re.sub(r"/\*.*?\*/|//[^\n]*", "", code, flags=re.DOTALL)
+        if re.search(r"(?<![\w]):\s*any\b|\bas\s+any\b", code_without_comments):
+            findings.append({"severity": "LOW", "issue": "TypeScript 'any' type used — loses type safety", "fix": "Replace with proper type definitions"})
+        for effect in effect_calls:
+            effect_lower = effect.lower()
+            if "fetch(" in effect_lower or "apifetch(" in effect_lower or "axios" in effect_lower:
+                aborts_in_cleanup = bool(re.search(
+                    r"return\s*(?:\(\s*)?(?:\(\s*\)\s*=>|function\b)[\s\S]*?\.abort\s*\(",
+                    effect,
+                    re.IGNORECASE,
+                ))
+                passes_abort_signal = "abortcontroller" in effect_lower and re.search(r"\bsignal\b", effect_lower)
+                if not (aborts_in_cleanup and passes_abort_signal):
+                    findings.append({"severity": "MEDIUM", "issue": "Network request in useEffect without abort-aware cleanup — state can update after unmount or route change", "fix": "Create an AbortController inside the effect, pass signal to fetch/apiFetch, and abort it in the cleanup return"})
+                    break
+        for effect in effect_calls:
+            effect_lower = effect.lower()
+            has_timer = "setinterval(" in effect_lower or "settimeout(" in effect_lower
+            clears_timer = "clearinterval(" in effect_lower or "cleartimeout(" in effect_lower
+            if has_timer and not clears_timer:
+                findings.append({"severity": "MEDIUM", "issue": "Timer started in useEffect without cleanup — interval/timeout can keep running after unmount", "fix": "Return a cleanup function that calls clearInterval()/clearTimeout()"})
+                break
+        if re.search(r"\bconsole\.log\s*\(", code_without_comments, re.IGNORECASE):
             findings.append({"severity": "LOW", "issue": "console.log in production code", "fix": "Remove or replace with proper logger"})
         if is_native and "onpress" not in code_lower and "onclick" in code_lower:
             findings.append({"severity": "HIGH", "issue": "Using onClick in React Native — use onPress instead", "fix": "Replace onClick with onPress for React Native components"})
-        if "usestate" in code_lower and code.count("useState") > 5:
-            findings.append({"severity": "MEDIUM", "issue": f"Component has {code.count('useState')} useState calls — consider Zustand store or useReducer", "fix": "Extract related state into a Zustand store or useReducer"})
+        state_count = len(re.findall(r"\buseState\s*\(", code))
+        if state_count >= 12:
+            findings.append({"severity": "LOW", "issue": f"Component has {state_count} useState calls — consider whether related state belongs in useReducer or a focused custom hook", "fix": "Group only genuinely related transitions; avoid moving local UI state to a global store without a consumer need"})
 
         return {"component": component_name, "is_native": is_native, "findings": findings, "total_issues": len(findings)}
 
@@ -332,7 +386,7 @@ Always provide the fix with code, not just a description of what's wrong.
             if "getpermissionsasync" not in code_lower and "requestpermissionsasync" not in code_lower:
                 findings.append({"severity": "HIGH", "issue": "No permission request before push notification registration", "fix": "Call Notifications.requestPermissionsAsync() before getExpoPushTokenAsync()"})
             if "foreground" not in code_lower:
-                findings.append({"severity": "MEDIUM", "issue": "No foreground notification handler — notifications won't show when app is active", "fix": "Add Notifications.setNotificationHandler({ handleNotification: async () => ({ shouldShowAlert: true }) })"})
+                findings.append({"severity": "LOW", "issue": "No foreground notification handler is visible in this integration file — verify one is registered at app startup if foreground banners are expected", "fix": "Register Notifications.setNotificationHandler() once in the app bootstrap/root layout"})
 
         elif integration_type == "apple_sign_in":
             if "nonce" not in code_lower:

@@ -120,6 +120,13 @@ When reviewing, cite the exact config field that's missing or risky and give the
         if not re.search(r"sentry_sdk\.init\(|Sentry\.init\(", code):
             return {"findings": [], "total_issues": 0, "note": "No Sentry.init() call found in this snippet"}
 
+        if not re.search(r"\bdsn\s*[:=]|SENTRY_DSN|sentry_dsn", code, re.IGNORECASE):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "Sentry initialization has no visible DSN source — event delivery may be disabled",
+                "fix": "Pass dsn from SENTRY_DSN/settings explicitly, or document and verify the SDK's environment-based configuration in this runtime",
+            })
+
         if re.search(r"dsn\s*[:=]\s*[\"']https://[a-f0-9]+@", code, re.IGNORECASE):
             findings.append({"severity": "LOW", "issue": "DSN appears hardcoded as a literal string rather than loaded from env/settings — not secret, but makes per-environment routing (dev vs prod projects) harder to manage", "fix": "Load the DSN from an environment variable / settings object instead of a literal string"})
 
@@ -133,7 +140,7 @@ When reviewing, cite the exact config field that's missing or risky and give the
 
         if handles_sensitive_data:
             pii_off = re.search(r"send_?default_?pii\s*[:=]\s*false", code, re.IGNORECASE)
-            has_before_send = "beforeSend" in code
+            has_before_send = bool(re.search(r"before_?send", code, re.IGNORECASE))
             if not pii_off and not has_before_send:
                 findings.append({"severity": "HIGH", "issue": "This app handles sensitive data but Sentry has no explicit sendDefaultPii=false or beforeSend scrubbing — request bodies/user data could end up in Sentry events", "fix": "Set sendDefaultPii: false, and/or add a beforeSend hook to strip sensitive fields before events are sent"})
 
@@ -146,7 +153,7 @@ When reviewing, cite the exact config field that's missing or risky and give the
         if not re.search(r"/health|/healthz|/ping|/status", code):
             return {"findings": [], "total_issues": 0, "note": "No health-check route found in this snippet"}
 
-        checks_db = bool(re.search(r"\bdb\.(query|execute|ping)|pool\.query|session\.execute|SELECT 1", code, re.IGNORECASE))
+        checks_db = bool(re.search(r"\bdb\.(query|execute|ping|select)|pool\.query|session\.execute|prisma\.\$queryRaw|SELECT 1|readyState|isInitialized", code, re.IGNORECASE))
         checks_redis = bool(re.search(r"redis\.ping|redis\.get|redisClient\.", code, re.IGNORECASE))
         uses_redis_elsewhere = bool(re.search(r"createClient\(|redis://|REDIS_URL", code, re.IGNORECASE))
 

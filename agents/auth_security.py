@@ -291,29 +291,35 @@ When reviewing code, always cite the specific flow step that's missing (not just
     def _audit_shared_secret_auth(self, code: str) -> Dict[str, Any]:
         """Audit a shared-secret app-gate (x-api-key style) middleware."""
         findings = []
-        secret_re = re.compile(r"(x-api-key|internal_api_key|app[_-]?secret)", re.IGNORECASE)
+        secret_re = re.compile(r"(x-api-key|internal_api_key|app[_-]?secret|admin[_-]?secret)", re.IGNORECASE)
 
         if secret_re.search(code):
-            # Scope the ===/== check to lines actually mentioning the secret —
-            # otherwise an unrelated `hostname === 'localhost'` comparison
-            # 40 lines away from a CORS allowedHeaders entry that merely
-            # *names* x-api-key falsely reads as an insecure secret compare.
-            secret_lines = [ln for ln in code.splitlines() if secret_re.search(ln)]
-            secret_context = "\n".join(secret_lines)
-            if re.search(r"===|==", secret_context) and not re.search(r"timingsafeequal|compare_digest|constant.?time", code, re.IGNORECASE):
+            # Match the comparison expression itself, including the common
+            # case where the request key is assigned on one line and compared
+            # with env.ADMIN_SECRET on another. Merely naming x-api-key in a
+            # CORS header allowlist is not evidence of an insecure compare.
+            insecure_compare = re.search(
+                r"(?:\b\w*(?:secret|api_?key|apikey|providedkey|requestkey)\w*\b|(?:process\.)?env\.\w*(?:secret|key)\w*)"
+                r"\s*(?:===|==)\s*"
+                r"(?:\b\w*(?:secret|api_?key|apikey|providedkey|requestkey)\w*\b|(?:process\.)?env\.\w*(?:secret|key)\w*)",
+                code,
+                re.IGNORECASE,
+            )
+            if insecure_compare and not re.search(r"timingsafeequal|compare_digest|constant.?time", code, re.IGNORECASE):
                 findings.append({
                     "severity": "MEDIUM",
                     "issue": "Shared secret compared with ===/== — vulnerable in principle to a timing attack that leaks the secret byte-by-byte",
                     "fix": "Use crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) (Node) or hmac.compare_digest(a, b) (Python) instead of === / ==",
                 })
-            if re.search(r"(x-api-key|internal_api_key|app[_-]?secret)\s*(\|\||\?\?)\s*[\"'][\w-]{2,}[\"']", code, re.IGNORECASE):
+            if re.search(r"(x-api-key|internal_api_key|app[_-]?secret|admin[_-]?secret)\s*(\|\||\?\?)\s*[\"'][\w-]{2,}[\"']", code, re.IGNORECASE):
                 findings.append({
                     "severity": "CRITICAL",
                     "issue": "Shared secret has a hardcoded fallback value (e.g. `|| \"default\"`) — if the env var is ever unset in production, auth silently falls back to a known secret",
                     "fix": "Fail closed: throw/exit at startup if the secret env var is missing, rather than defaulting to a literal",
                 })
 
-        if re.search(r"(x-api-key|internal_api_key)", code, re.IGNORECASE) and not re.search(r"jwt|bearer|session|req\.user|current_user", code, re.IGNORECASE):
+        looks_like_user_data_route = bool(re.search(r"router\.|app\.(?:get|post|put|patch|delete)|@router\.|current_user|user[_-]?id", code, re.IGNORECASE))
+        if looks_like_user_data_route and re.search(r"(x-api-key|internal_api_key)", code, re.IGNORECASE) and not re.search(r"jwt|bearer|session|req\.user|current_user", code, re.IGNORECASE):
             findings.append({
                 "severity": "INFO",
                 "issue": "This snippet only checks the shared app-gate secret with no per-user auth visible — confirm routes that touch user-specific data also require a user-scoped JWT, since the shared secret only proves \"this is our app,\" not \"this is user X\"",

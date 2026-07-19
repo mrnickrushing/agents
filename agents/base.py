@@ -246,7 +246,10 @@ class BaseAgent:
                 # FIX: Exponential backoff now properly scales; removed cap issue
                 backoff = min(2 ** attempt, 60)  # Cap at 60 seconds (was 20)
                 
-                if attempt > self.max_retries or error_name not in _RETRYABLE_ERROR_NAMES:
+                status_code = getattr(e, "status_code", None)
+                retryable_status = status_code is None or status_code in {408, 409, 425, 429} or (isinstance(status_code, int) and status_code >= 500)
+                retryable = error_name in _RETRYABLE_ERROR_NAMES and (error_name != "APIStatusError" or retryable_status)
+                if attempt > self.max_retries or not retryable:
                     if self.verbose:
                         logger.error(f"Non-retryable error: {error_name}: {str(e)}")
                     raise
@@ -288,7 +291,11 @@ class BaseAgent:
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
-            if tools:
+            # Reserve the last round for synthesis. Otherwise a model that
+            # keeps requesting tools at the cap returns an empty answer and
+            # silently discards its final tool request.
+            allow_tools = bool(tools) and round_num < self.max_tool_rounds
+            if allow_tools:
                 payload["tools"] = [{"type": "function", "function": t} for t in tools]
                 payload["tool_choice"] = "auto"
 
@@ -313,9 +320,10 @@ class BaseAgent:
                 "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls],
             })
             for tool_result in tool_results:
+                tool_content = tool_result.get("result", {"error": tool_result.get("error", "Tool execution failed")})
                 turn_messages.append({
                     "role": "tool",
-                    "content": json.dumps(tool_result),
+                    "content": json.dumps(tool_content),
                     "tool_call_id": tool_result["tool_call_id"],
                 })
 
@@ -380,7 +388,8 @@ class BaseAgent:
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
-            if tools:
+            allow_tools = bool(tools) and round_num < self.max_tool_rounds
+            if allow_tools:
                 payload["tools"] = tools
 
             response = self._call_with_retries(lambda: client.messages.create(**payload))
@@ -415,9 +424,9 @@ class BaseAgent:
             turn_messages.append({"role": "user", "content": result_blocks})
 
         # FIX: CRITICAL — Properly preserve conversation history
-        # Extract the user input content from the last message in `messages`
-        # (which contains the current turn's user message)
-        user_message_content = user_input
+        # Preserve the full content block, including any images, so a later
+        # turn sees the same conversation the model actually received.
+        user_message_content = messages[-1]["content"]
         conversation.extend([
             {"role": "user", "content": user_message_content},
             *turn_messages,

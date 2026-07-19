@@ -121,22 +121,54 @@ Prefer boring, maintainable choices over clever abstractions.
         stripe: bool = False,
     ) -> Dict[str, Any]:
         files = {
-            "src/server.ts": "import app from './app';\napp.listen(process.env.PORT || 3000);",
-            "src/app.ts": "import express from 'express';\nexport const app = express();",
-            "src/routes/health.ts": "export const health = (_req, res) => res.json({ ok: true });",
+            "src/server.ts": (
+                "import { app } from './app';\n"
+                "const port = Number(process.env.PORT ?? 3000);\n"
+                "app.listen(port, '0.0.0.0', () => console.info(`listening on ${port}`));\n"
+            ),
+            "src/app.ts": (
+                "import cors from 'cors';\nimport express from 'express';\nimport helmet from 'helmet';\n"
+                "import { healthRouter } from './routes/health';\n"
+                "export const app = express();\n"
+                "app.use(helmet());\n"
+                "app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));\n"
+                "app.use(express.json({ limit: '1mb' }));\n"
+                "app.use(healthRouter);\n"
+                "app.use((err, _req, res, _next) => { console.error(err); res.status(500).json({ error: { code: 'internal_error', message: 'Internal server error' } }); });\n"
+            ),
+            "src/routes/health.ts": (
+                "import { Router } from 'express';\n"
+                "export const healthRouter = Router();\n"
+                "healthRouter.get('/health', (_req, res) => res.json({ ok: true }));\n"
+                "// Replace this liveness-only route with DB/Redis checks before production.\n"
+                "healthRouter.get('/ready', (_req, res) => res.status(503).json({ ok: false, reason: 'readiness_not_configured' }));\n"
+            ),
         }
         if auth:
-            files["src/middleware/auth.ts"] = "export const requireAuth = (_req, _res, next) => next();"
+            files["src/middleware/auth.ts"] = (
+                "import jwt from 'jsonwebtoken';\n"
+                "const secret = process.env.JWT_SECRET;\n"
+                "if (!secret) throw new Error('JWT_SECRET is required');\n"
+                "export const requireAuth = (req, res, next) => {\n"
+                "  const token = req.headers.authorization?.replace(/^Bearer\\s+/i, '');\n"
+                "  if (!token) return res.status(401).json({ error: { code: 'unauthorized', message: 'Authentication required' } });\n"
+                "  try { req.user = jwt.verify(token, secret, { algorithms: ['HS256'] }); next(); }\n"
+                "  catch { res.status(401).json({ error: { code: 'invalid_token', message: 'Invalid token' } }); }\n"
+                "};\n"
+            )
         if stripe:
-            files["src/routes/stripe.ts"] = "// Stripe webhook handler stub"
+            files["src/routes/stripe.ts"] = "// Verify the raw-body signature, persist event.id idempotently, then dispatch the Stripe event.\n"
 
         return {
             "project_name": project_name,
             "database": database,
             "files": files,
             "next_steps": [
-                "Add validation at every API boundary",
+                "Add Zod/Pydantic-style validation at every API boundary",
                 "Wire in database migrations",
+                "Replace the fail-closed /ready stub with real database and cache readiness checks",
+                "Add per-route rate limits for login, password reset, and other abuse-sensitive endpoints",
+                "Add tests for auth failures, validation, and error envelopes",
                 "Add CI and deployment config",
             ],
         }

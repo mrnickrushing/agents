@@ -451,29 +451,67 @@ Format findings as structured reports with severity, location, description, and 
         """Check JWT code for common vulnerabilities."""
         findings = []
         code_lower = code.lower()
+        has_signing = bool(re.search(r"jwt\.(?:sign|encode)\s*\(", code, re.IGNORECASE))
+        has_verification = bool(re.search(r"jwt\.(?:verify|decode)\s*\(|jwt_verify\s*\(|jose\.jwt\.decode\s*\(", code, re.IGNORECASE))
+        # Apple's APNs provider token deliberately has `iss` and `iat` claims
+        # but no `exp`; APNs rejects tokens based on the age of `iat`. Treat
+        # that protocol-specific shape separately from ordinary application
+        # session tokens so it is not reported as immortal authentication.
+        is_apns_provider_token = bool(
+            has_signing
+            and re.search(r"\b(?:apns|api\.push\.apple\.com)\b", code, re.IGNORECASE)
+            and re.search(r"\b(?:ES256|algorithm\s*[:=]\s*[\"']ES256[\"'])\b", code, re.IGNORECASE)
+            and re.search(r"\b(?:iss|team_?id|teamId)\b", code)
+            and re.search(r"\b(?:iat|key_?id|keyId|keyid|kid)\b", code)
+        )
 
-        # FIX BUG #2: "hmac" alone is too broad — Python's hmac module is also the
-        # standard tool for constant-time comparisons (hmac.compare_digest)
-        # unrelated to JWT signing, and flagging that as "using weak HS256
-        # signing" is backwards (it's usually there *because* the code is
-        # doing something correctly, e.g. timing-safe nonce comparison).
-        # NEW: Only flag if HS256/HS384/HS512 appears with actual JWT signing context
-        if re.search(r"(?:jwt|token).*\bhs(?:256|384|512)\b|hs(?:256|384|512)\b.*(?:sign|encode)", code_lower, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Using HS256 (symmetric) — prefer RS256/ES256 (asymmetric) so the signing key isn't shared"})
+        # HS256 is not inherently weak. It becomes dangerous when paired with
+        # a weak or hardcoded secret; blanket warnings pushed teams toward
+        # asymmetric signing even for small single-service deployments where
+        # a strong symmetric key is perfectly appropriate.
+        weak_hs_secret = re.search(
+            r"jwt\.(?:sign|encode)\s*\([^,]+,\s*[\"']([^\"']{1,31})[\"'][^)]*(?:HS256|hs256)",
+            code,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if weak_hs_secret:
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "JWT uses HS256 with a short hardcoded signing secret",
+                "fix": "Load a cryptographically random secret of at least 32 bytes from a secret manager, or use an asymmetric algorithm when multiple services verify tokens",
+            })
         
-        if "localstorage" in code_lower or "local storage" in code_lower:
+        if re.search(r"localStorage\.setItem\s*\([^,]*(?:token|jwt)|localStorage\s*\[[^]]*(?:token|jwt)", code, re.IGNORECASE):
             findings.append({"severity": "CRITICAL", "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies."})
         
-        # FIX BUG #2: Matches expiration in *context*, not just bare "exp" which matches "express"/"expo"
-        # Require actual expiration patterns: expiresIn/expires_delta/exp claim/maxAge
-        if not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\"exp\"\s*:", code, re.IGNORECASE):
+        # Issuers set expiration; verifiers do not need to set it again. The
+        # old whole-file check flagged every verify-only middleware.
+        if has_signing and not is_apns_provider_token and not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\"exp\"\s*:", code, re.IGNORECASE):
             findings.append({"severity": "HIGH", "issue": "No token expiration set — tokens are valid forever"})
-        
-        # FIX BUG #2: PyJWT/python-jose verify implicitly via jwt.decode() (it raises on a bad
-        # signature) — there's no literal "verify" call, so the old substring check
-        # flagged every correct Python decode_token()-style function as unverified.
-        if not re.search(r"verify|jwt\.decode\(|jwt_decode\(|jose\.jwt\.decode\(|\.decode\(\s*token", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "Token verification not found — tokens may not be validated server-side"})
+
+        # jsonwebtoken's jwt.decode() only parses; unlike PyJWT's decode it
+        # never validates a signature. A one-argument decode in JS/TS is
+        # therefore high-confidence evidence of trusting an unverified token.
+        if re.search(r"(?:const|let|var)\s+\w+\s*=\s*jwt\.decode\s*\(\s*[^,)]+\s*\)", code):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "jwt.decode() result is used without signature verification",
+                "fix": "Use jwt.verify() with an explicit algorithms allowlist before trusting claims",
+            })
+
+        if has_verification and re.search(r"verify_signature[\"']?\s*:\s*false|options\s*=\s*\{[^}]*verify_signature[^}]*false", code, re.IGNORECASE | re.DOTALL):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "JWT signature verification is explicitly disabled",
+                "fix": "Verify the signature and issuer/audience before trusting any claim",
+            })
+
+        if re.search(r"jwt\.verify\s*\(", code, re.IGNORECASE) and not re.search(r"algorithms\s*[:=]", code, re.IGNORECASE):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "jwt.verify() has no explicit algorithms allowlist",
+                "fix": "Pass algorithms: ['RS256'] (or the one algorithm your issuer actually uses)",
+            })
         
         # FIX BUG #2: Require an actual algorithms:["none"] / alg=none pattern, not just the
         # words "none" and "algorithm" appearing anywhere (e.g. CSS "display: none"
@@ -503,7 +541,10 @@ Format findings as structured reports with severity, location, description, and 
                 pkg = json.loads(manifest)
             except json.JSONDecodeError:
                 return {"error": "Invalid package.json"}
-            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            deps = {
+                **(pkg.get("dependencies") or {}),
+                **(pkg.get("devDependencies") or {}),
+            }
         else:
             ecosystem = "pip"
             for line in manifest.splitlines():
@@ -515,6 +556,7 @@ Format findings as structured reports with severity, location, description, and 
                     deps[match.group(1).lower()] = match.group(3) or ""
 
         findings = []
+        review_notes = []
 
         if ecosystem == "npm":
             risky = {
@@ -528,10 +570,10 @@ Format findings as structured reports with severity, location, description, and 
             # from a mobile (Expo/React Native) or frontend package.json that
             # has no server to harden in the first place is a false alarm.
             if "express" in deps and "helmet" not in deps:
-                findings.append({"severity": "HIGH", "package": "helmet", "issue": "helmet is not installed — no security headers applied"})
+                findings.append({"severity": "MEDIUM", "package": "helmet", "issue": "Express is installed but Helmet is not declared — verify equivalent security headers are applied by code or the edge proxy"})
             for name, info in risky.items():
                 if name in deps:
-                    findings.append({"severity": info["severity"], "package": name, "issue": info["note"]})
+                    review_notes.append({"package": name, "note": info["note"]})
         else:
             risky = {
                 "fastapi": {"note": "Ensure request bodies are Pydantic models (never raw dict) at every route boundary", "severity": "INFO"},
@@ -546,11 +588,9 @@ Format findings as structured reports with severity, location, description, and 
             }
             for name, info in risky.items():
                 if name in deps:
-                    findings.append({"severity": info["severity"], "package": name, "issue": info["note"]})
-            if not any(p in deps for p in ("fastapi", "flask", "django")) :
-                findings.append({"severity": "INFO", "package": "-", "issue": "No recognized Python web framework found — dependency checks may be incomplete"})
+                    review_notes.append({"package": name, "note": info["note"]})
 
-        return {"ecosystem": ecosystem, "dependencies_count": len(deps), "findings": findings, "threshold": severity_threshold}
+        return {"ecosystem": ecosystem, "dependencies_count": len(deps), "findings": findings, "review_notes": review_notes, "threshold": severity_threshold}
 
     def _audit_cors_config(self, cors_code: str, allowed_origins: str = "") -> Dict[str, Any]:
         """Audit CORS configuration — Express cors() or FastAPI/Starlette CORSMiddleware."""
@@ -743,6 +783,26 @@ Format findings as structured reports with severity, location, description, and 
         if re.search(r"\|\s*safe\b", code) or re.search(r"Markup\(", code):
             findings.append({"severity": "HIGH", "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value", "fix": "Only use |safe/Markup() on content you control completely; never on user input"})
 
+        for pattern, framework in (
+            (r"\bv-html\s*=\s*[\"']([^\"']+)", "Vue v-html"),
+            (r"\{@html\s+([^}]+)\}", "Svelte @html"),
+        ):
+            for match in re.finditer(pattern, code, re.IGNORECASE):
+                expression = match.group(1)
+                user_controlled = bool(re.search(r"user|input|content|body|query|param|prop", expression, re.IGNORECASE))
+                findings.append({
+                    "severity": "HIGH" if user_controlled else "MEDIUM",
+                    "issue": f"{framework} renders raw HTML" + (" from a user/content-like expression — likely XSS" if user_controlled else " — verify the expression is trusted and sanitized"),
+                    "fix": "Render text normally or sanitize untrusted HTML with a framework-compatible allowlist sanitizer",
+                })
+
+        if re.search(r"bypassSecurityTrustHtml\s*\(", code):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Angular bypassSecurityTrustHtml disables built-in HTML sanitization",
+                "fix": "Avoid the bypass; if rich HTML is required, sanitize it with a strict allowlist before binding",
+            })
+
         return {"findings": findings, "total_issues": len(findings)}
 
     def _audit_csrf_protection(self, code: str) -> Dict[str, Any]:
@@ -833,10 +893,19 @@ Format findings as structured reports with severity, location, description, and 
 
         for pattern, secret_type in secret_patterns:
             for match in re.finditer(pattern, code, re.IGNORECASE):
+                matched_text = match.group(0)
+                if re.search(r"(?:example|placeholder|changeme|replace[_-]?me|your[_-]?(?:key|token|secret|password)|dummy|test[_-]?only)", matched_text, re.IGNORECASE):
+                    continue
+                # RevenueCat's `appl_...` values are public mobile SDK keys.
+                # They identify the app but cannot authorize server API calls,
+                # so committing them is expected and not a secret exposure.
+                if re.search(r"\bappl_[A-Za-z0-9_]+\b", matched_text):
+                    continue
+                line = code.count("\n", 0, match.start()) + 1
                 findings.append({
                     "severity": "CRITICAL",
                     "issue": f"Hardcoded {secret_type} detected",
-                    "location": f"Line contains: {match.group(0)[:50]}...",
+                    "line": line,
                     "fix": "Move to environment variables; use process.env or os.getenv() at runtime"
                 })
 
@@ -855,19 +924,11 @@ Format findings as structured reports with severity, location, description, and 
             })
 
         # Check for debug mode left on
-        if re.search(r"DEBUG\s*=\s*true|debug\s*:\s*true|app\.use\(morgan\('dev'\)|app\.set\('view engine'", code, re.IGNORECASE):
+        if re.search(r"\bDEBUG\s*=\s*(?:true|1)\b|\bdebug\s*:\s*true\b|app\.use\(\s*morgan\(['\"]dev['\"]\)\s*\)", code, re.IGNORECASE):
             findings.append({
                 "severity": "MEDIUM",
                 "issue": "Debug mode or verbose logging enabled — may leak internal details in production",
                 "fix": "Disable debugging in production; use environment checks: if (process.env.NODE_ENV === 'development')"
-            })
-
-        # Check for missing error handlers
-        if not re.search(r"catch|except|error\s+handler|middleware.*error|\.catch\(|\.on\('error'", code):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "No error handlers found — unhandled errors may crash the process",
-                "fix": "Add try/catch for async operations, .catch() for promises, or error middleware"
             })
 
         return {"findings": findings, "total_issues": len(findings)}
@@ -884,8 +945,10 @@ Format findings as structured reports with severity, location, description, and 
             (r"logger\.(info|debug|error)\([^)]*\b(process\.env)\b", "Environment Variables", "CRITICAL"),
         ]
 
+        sensitive_log_found = False
         for pattern, data_type, severity in sensitive_patterns:
             if re.search(pattern, code, re.IGNORECASE):
+                sensitive_log_found = True
                 findings.append({
                     "severity": severity,
                     "issue": f"Potentially logging {data_type} — may expose sensitive information",
@@ -893,7 +956,7 @@ Format findings as structured reports with severity, location, description, and 
                 })
 
         # Check for proper PII redaction
-        if not re.search(r"redact|mask|anonymize|sanitize.*log", code, re.IGNORECASE):
+        if sensitive_log_found and not re.search(r"redact|mask|anonymize|sanitize.*log|\[Filtered\]", code, re.IGNORECASE):
             findings.append({
                 "severity": "MEDIUM",
                 "issue": "No PII redaction/masking visible in logging code",

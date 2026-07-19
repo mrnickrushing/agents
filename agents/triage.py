@@ -13,8 +13,8 @@ typical example).
 Triage re-examines each flagged finding with an actual model — via a
 `TriageAgent` that can call a `read_project_file` tool to pull in whatever
 other files would settle the question — and asks it for a CONFIRMED /
-FALSE_POSITIVE verdict with a one-line reason. It costs an API call per
-flagged file (not per project file), so it stays cheap even on a large scan.
+FALSE_POSITIVE verdict with a one-line reason. Each finding gets an independent
+verdict, so one valid bug does not keep unrelated noise from the same file.
 
 Wired into `cli.py scan`: runs automatically whenever ANTHROPIC_API_KEY or
 OPENAI_API_KEY is set in the environment, unless overridden with
@@ -177,8 +177,9 @@ def triage_report(
     model: Optional[str] = None,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run LLM triage over every entry in a `_run_scan` report, adding a
-    `triage` key to each entry in place, plus a top-level `triage_summary`.
+    """Run LLM triage over every individual finding in a `_run_scan` report,
+    then derive an entry verdict without letting one valid finding keep an
+    unrelated false positive alive (or vice versa).
     Entries where the tool handler itself errored are left alone — there's
     no finding to confirm, just a crash to fix."""
     project_root = os.path.realpath(report["project"])
@@ -190,18 +191,42 @@ def triage_report(
     for entry in report["results"]:
         if entry["result"].get("error"):
             continue
-        entry["triage"] = triage_entry(agent, project_root, entry)
-        verdict = entry["triage"]["verdict"]
-        if verdict == "CONFIRMED":
-            confirmed += 1
-        elif verdict == "FALSE_POSITIVE":
-            dismissed += 1
-        else:
-            unknown += 1
+        findings = _findings_of(entry)
+        verdicts = []
+        for index, finding in enumerate(findings):
+            isolated = {
+                **entry,
+                "result": {"findings": [finding]},
+            }
+            triage = triage_entry(agent, project_root, isolated)
+            finding["triage"] = triage
+            verdicts.append(triage)
+            if triage["verdict"] == "CONFIRMED":
+                confirmed += 1
+            elif triage["verdict"] == "FALSE_POSITIVE":
+                dismissed += 1
+            else:
+                unknown += 1
+
+        if verdicts:
+            if any(v["verdict"] == "CONFIRMED" for v in verdicts):
+                entry_verdict = "CONFIRMED"
+            elif all(v["verdict"] == "FALSE_POSITIVE" for v in verdicts):
+                entry_verdict = "FALSE_POSITIVE"
+            else:
+                entry_verdict = "UNKNOWN"
+            reasons = "; ".join(v["reason"] for v in verdicts if v.get("reason"))
+            entry["triage"] = {"verdict": entry_verdict, "reason": reasons}
 
     report["triage_summary"] = {
         "confirmed": confirmed,
         "false_positive": dismissed,
         "unknown": unknown,
     }
+    coverage = report.get("coverage")
+    if isinstance(coverage, dict):
+        if coverage.get("tool_errors") or coverage.get("skipped_files") or unknown:
+            coverage["confidence"] = "incomplete"
+        else:
+            coverage["confidence"] = "heuristics-triaged-runtime-unverified"
     return report

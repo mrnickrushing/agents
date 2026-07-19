@@ -107,3 +107,39 @@ def test_triage_report_aggregates_and_skips_errored_entries(tmp_path):
     assert result["results"][0]["triage"]["verdict"] == "CONFIRMED"
     assert result["results"][1]["triage"]["verdict"] == "FALSE_POSITIVE"
     assert "triage" not in result["results"][2]
+
+
+def test_triage_verdicts_are_per_finding_not_per_file(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "route.py").write_text("route")
+    report = {
+        "project": str(project),
+        "files_matched": 1,
+        "summary": {},
+        "coverage": {"tool_errors": 0, "skipped_files": []},
+        "results": [{
+            "file": "route.py",
+            "agent": "security_audit",
+            "tool": "mixed",
+            "result": {"findings": [
+                {"severity": "HIGH", "issue": "real"},
+                {"severity": "LOW", "issue": "noise"},
+            ]},
+        }],
+    }
+    verdicts = iter([
+        {"verdict": "CONFIRMED", "reason": "real gap"},
+        {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
+    ])
+
+    with patch("agents.triage.TriageAgent") as MockAgent:
+        MockAgent.return_value = MagicMock()
+        with patch("agents.triage.triage_entry", side_effect=lambda *a, **k: next(verdicts)):
+            result = triage_report(report, provider="anthropic", api_key="test-key")
+
+    findings = result["results"][0]["result"]["findings"]
+    assert findings[0]["triage"]["verdict"] == "CONFIRMED"
+    assert findings[1]["triage"]["verdict"] == "FALSE_POSITIVE"
+    assert result["results"][0]["triage"]["verdict"] == "CONFIRMED"
+    assert result["triage_summary"] == {"confirmed": 1, "false_positive": 1, "unknown": 0}

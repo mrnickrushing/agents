@@ -1,5 +1,7 @@
 # Comprehensive Bug Analysis — RushingTech Agents
 
+> Historical audit snapshot. Version 2.4.0 resolves or supersedes many items below; this file is retained as provenance, not as the current open-issue list. Use the test suite and a fresh `python -m agents.cli scan --path . --no-triage` report for current status.
+
 This document catalogs discovered bugs across the agent suite, organized by severity and category. These are **genuine bugs with minimal false positives**, validated against the code patterns and domain logic already established in the TODO.md and README.
 
 ---

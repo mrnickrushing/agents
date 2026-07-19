@@ -1,5 +1,15 @@
 # Agent Development Status
 
+## ✅ COMPLETED (v2.4.0)
+
+- [x] Restored comprehensive one-shot CLI routing across all ten review-capable agents; report ScaffolderAgent explicitly as generation-only
+- [x] Added coverage/completeness reporting for skipped files, detector errors, unmatched production code, agent applicability, tests/CI/lockfile gaps, and the static-vs-runtime boundary
+- [x] Added Python/JSON/merge-conflict integrity checks plus Docker/Railway/Procfile production review
+- [x] Added project context for local imports, TypeScript ESM `.js` specifiers, Python relative imports, Express 5/`express-async-errors`, and user-scoped pagination
+- [x] Broadened security and platform coverage for FastAPI, APNs provider JWTs, Vue/Svelte/Angular raw HTML, Sentry DSN setup, RevenueCat, Stripe receipts, migrations, constraints, and N+1 queries
+- [x] Reworked LLM triage to decide each finding independently and surface triage failures as incomplete scans
+- [x] Calibrated against ZenFinance, Shield AI, Vitality, and FileTrail; added regression tests for every false-positive class found
+
 ## ✅ COMPLETED (v2.2.0)
 
 ### New agents
