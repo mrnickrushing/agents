@@ -2,9 +2,18 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Eleven specialized agents (57 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Eleven specialized agents (62 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
+
+## 🆕 Version 2.4.0 — What's New
+
+- **One-shot scan restored and broadened**: `scan` now routes project evidence through all ten review-capable agents across security, auth, billing, mobile, API, database, infrastructure, deployment, code, and accessibility. The scaffolder is reported explicitly as generation-only instead of being silently omitted.
+- **Evidence-backed completeness contract**: every report records checks run, agents exercised/not applicable, skipped or unreadable files, detector failures, untested code, missing CI/lockfiles, and files with no targeted rule. A zero-finding scan is labeled `static-clean-runtime-unverified`; skipped files or detector failures make it `incomplete`.
+- **High-confidence project integrity checks**: Python syntax, strict JSON syntax, and unresolved merge-conflict markers run independently of framework discovery.
+- **Cross-file and project-level context**: local wrappers are followed for pagination, health checks, error boundaries, and RevenueCat; Express 5 and `express-async-errors` are recognized at the workspace level.
+- **Lower false-positive rate**: discovery ignores API names in comments and strings, generated `dist-*`/`build-*` trees and test implementations are excluded from behavioral review, and JWT, APNs, RevenueCat, billing receipt, migration, N+1, accessibility, and async-route checks use narrower evidence.
+- **Per-finding LLM triage**: each candidate is confirmed or dismissed independently, so one real bug no longer forces every other finding in the same file to remain active.
 
 ## 🆕 Version 2.3.0 — What's New
 
@@ -61,7 +70,9 @@ python -m agents.cli scan --path ~/Vitality
 python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_security --out report.json
 ```
 
-`scan` walks the project (skipping `node_modules`, `.git`, `dist`, `.venv`, etc.), matches files by name (`package.json`, `eas.json`, `codemagic.yaml`) or content (helmet/cors/jwt/RevenueCat/Apple Sign-In patterns), runs the corresponding tool handler, and prints a severity-sorted report.
+`scan` walks the project (skipping dependencies, generated output, caches, and virtual environments), matches files by name or executable evidence, runs every applicable deterministic review, and prints a severity-sorted report. Both forms are supported: `scan --path ~/project` and `scan ~/project`.
+
+The JSON report's `coverage` object is part of the result, not decoration. Before treating a clean run as meaningful, require `tool_errors: 0`, no `skipped_files`, no `verification_gaps`, and review `agents_not_applicable` plus production `files_without_targeted_checks`. `runtime_verification` remains `not_executed`: this command does not run project code, tests, type-checkers, linters, builds, advisory databases, or external services. Static analysis cannot prove the absence of runtime, integration, environment, or product-logic bugs; the confidence label makes that boundary explicit instead of presenting “no findings” as a guarantee.
 
 ### Triage — cut the false positives with a real model
 
@@ -79,7 +90,7 @@ python -m agents.cli scan --path ~/Vitality --no-triage
 python -m agents.cli scan --path ~/Vitality --triage-provider openai --triage-model gpt-5
 ```
 
-Confirmed findings stay in the main report with a `triage: CONFIRMED — <reason>` line; dismissed ones move to a "Dismissed as false positives by triage" section at the end with the model's reasoning, instead of vanishing outright — the verdict itself stays auditable. This is opt-out-by-presence-of-key rather than a flag you have to remember: wire `agents` into a new project with an API key already in the environment (CI secret, local `.env`, whatever) and triage is just on.
+Confirmed findings stay in the main report with a `triage: CONFIRMED — <reason>` line; dismissed ones move to a "Dismissed as false positives by triage" section at the end with the model's reasoning, instead of vanishing outright — the verdict itself stays auditable. Triage evaluates each finding independently, even when one file has multiple candidates. This is opt-out-by-presence-of-key rather than a flag you have to remember: wire `agents` into a new project with an API key already in the environment (CI secret, local `.env`, whatever) and triage is just on.
 
 ## Install
 

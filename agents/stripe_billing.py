@@ -288,11 +288,21 @@ When reviewing billing code or answering billing questions:
         findings = []
         code_lower = integration_code.lower()
 
-        if "sk_live" in integration_code or "sk_test" in integration_code:
+        if re.search(r"\bsk_(?:live|test)_[A-Za-z0-9]{12,}", integration_code):
             findings.append({"severity": "CRITICAL", "issue": "Stripe secret key hardcoded in source code — move to environment variable immediately"})
-        if "pk_live" not in code_lower and "pk_test" not in code_lower:
-            findings.append({"severity": "INFO", "issue": "No Stripe publishable key found — ensure it's loaded from environment, not hardcoded"})
-        if "receipt" in code_lower and "verify" not in code_lower and "validate" not in code_lower:
+        # Only report a client-trusted receipt when the code actually reads a
+        # receipt field from request data. Broad proximity matching made types
+        # such as `PushReceipt` and unrelated `request` calls look like billing
+        # validation paths.
+        handles_client_receipt = bool(re.search(
+            r"(?:req\.body|request\.(?:json|data|body))\s*"
+            r"(?:\.\s*receipt\w*|\[\s*[\"']receipt\w*[\"']\s*\]|\.get\(\s*[\"']receipt\w*[\"']\s*\))|"
+            r"\{[^}\n]*\breceipt\w*\b[^}\n]*\}\s*=\s*(?:req\.body|request\.(?:json|data|body))|"
+            r"\breceipt\w*\s*[:=]\s*(?:req\.body|request\.(?:json|data|body))",
+            integration_code,
+            re.IGNORECASE,
+        ))
+        if handles_client_receipt and "verify" not in code_lower and "validate" not in code_lower:
             findings.append({"severity": "CRITICAL", "issue": "Receipt data handled without server-side validation — client-trusted purchase state is exploitable"})
         # Look for an actual auth marker, not just the substring "auth" — that also
         # matches "author", unrelated "Authorization" header echoing, etc., which made
@@ -302,7 +312,22 @@ When reviewing billing code or answering billing questions:
             integration_code,
             re.IGNORECASE,
         )
-        if "customer" in code_lower and "update" in code_lower and not has_auth_marker:
+        updates_customer = bool(re.search(r'(?:stripe\.)?customers?\.update\s*\(|updateCustomer\s*\(|/customers?/\S*.*(?:put|patch)', integration_code, re.IGNORECASE))
+        if updates_customer and not has_auth_marker:
             findings.append({"severity": "HIGH", "issue": "Customer update without auth check — any user could modify another's billing info"})
+
+        if re.search(r"(?:amount|price|price_id|product_id)\s*:\s*(?:req|request)\.(?:body|json|data)", integration_code, re.IGNORECASE):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "Checkout amount/product identifier is accepted directly from client input",
+                "fix": "Resolve allowed product/price IDs server-side from a fixed catalog; never trust a client-supplied amount",
+            })
+
+        if re.search(r"(?:premium|entitled|subscription_active)\s*=\s*(?:req|request)\.(?:body|json|data)", integration_code, re.IGNORECASE):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "Entitlement state is assigned directly from client input",
+                "fix": "Derive entitlements from a verified Stripe/RevenueCat webhook or server-side provider lookup",
+            })
 
         return {"findings": findings, "concerns": concerns, "total_issues": len(findings)}

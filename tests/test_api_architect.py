@@ -38,12 +38,10 @@ def test_pagination_res_locals_user_id_in_query_call_downgraded():
     assert "HIGH" not in severities
 
 
-def test_pagination_delegated_scoping_not_verifiable_stays_high():
-    """A route that extracts res.locals.userId and hands it to a helper
-    function (the actual filtering happens in a different file this check
-    can't see) can't be safely assumed to be scoped — downgrading it would
-    also downgrade a route that logs the user id but runs an unrelated
-    unscoped query, which is unsafe. Stay conservative and leave it HIGH."""
+def test_pagination_delegated_scalar_helper_is_not_assumed_to_be_a_list():
+    """A helper call alone is not evidence of a growing collection. The CLI
+    can inline that helper and review it when local source is available; this
+    isolated handler should not invent an entire-table claim from `/me`."""
     agent = APIArchitectAgent()
     code = """
     router.get('/api/referrals/me', requireUser, async (_req, res) => {
@@ -52,8 +50,7 @@ def test_pagination_delegated_scoping_not_verifiable_stays_high():
     });
     """
     result = agent._review_pagination(code)
-    severities = [f["severity"] for f in result["findings"]]
-    assert "HIGH" in severities
+    assert result["findings"] == []
 
 
 def test_pagination_audit_log_reference_does_not_scope_unrelated_query():

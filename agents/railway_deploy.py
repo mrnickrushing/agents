@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
@@ -94,6 +96,18 @@ When helping with deployment issues:
 
     def _define_tools(self) -> List[Dict[str, Any]]:
         return [
+            {
+                "name": "review_deployment_config",
+                "description": "Review an existing Railway/Docker/Procfile deployment config for production reliability and security gaps.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "config_text": {"type": "string"},
+                        "filename": {"type": "string"},
+                    },
+                    "required": ["config_text", "filename"],
+                },
+            },
             {
                 "name": "diagnose_build_failure",
                 "description": "Diagnose a Railway or Vercel build failure from the build log.",
@@ -222,12 +236,83 @@ When helping with deployment issues:
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
         return {
+            "review_deployment_config": self._review_deployment_config,
             "diagnose_build_failure": self._diagnose_build_failure,
             "generate_railway_toml": self._generate_railway_toml,
             "generate_docker_compose": self._generate_docker_compose,
             "deployment_checklist": self._deployment_checklist,
             "setup_env_vars": self._setup_env_vars,
         }
+
+    def _review_deployment_config(self, config_text: str, filename: str) -> Dict[str, Any]:
+        """Review an existing deployment config rather than generating one.
+
+        Findings are limited to properties visible in the file. Cross-service
+        concerns (for example, whether Railway has a dashboard health check)
+        are phrased as verification gaps instead of asserted failures.
+        """
+        findings = []
+        name = os.path.basename(filename).lower()
+
+        literal_secret = re.search(
+            r"(?im)^\s*(?:ENV|ARG)?\s*([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY)[A-Z0-9_]*)\s*(?:=|\s)\s*([^$\s][^\s#]{5,})",
+            config_text,
+        )
+        if literal_secret and not re.search(r"example|changeme|replace_me|dummy", literal_secret.group(2), re.IGNORECASE):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": f"Deployment config assigns a literal value to {literal_secret.group(1)}",
+                "fix": "Inject secrets through the deployment platform's secret store; never bake them into an image or committed config",
+            })
+
+        if name == "dockerfile" or name.endswith(".dockerfile"):
+            if re.search(r"(?im)^\s*FROM\s+\S+:latest(?:\s|$)", config_text):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "Docker base image uses the mutable :latest tag — identical source can produce different deployments",
+                    "fix": "Pin a major/minor image tag, or ideally an immutable digest",
+                })
+            if re.search(r"(?im)^\s*RUN\s+npm\s+install(?:\s|$)", config_text) and not re.search(r"(?im)^\s*RUN\s+npm\s+ci(?:\s|$)", config_text):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "Docker build uses npm install instead of the lockfile-strict npm ci",
+                    "fix": "Copy package.json plus the lockfile first, then run npm ci for reproducible installs",
+                })
+            if not re.search(r"(?im)^\s*USER\s+\S+", config_text) and re.search(r"(?im)^\s*FROM\s+(node|python)(?::|@|\s)", config_text):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "Container never switches away from the default root user",
+                    "fix": "Create/select an unprivileged runtime user with USER in the final image stage",
+                })
+
+        if name in {"railway.toml", "railway.json"}:
+            if not re.search(r"healthcheck(path|Path)|healthcheck_path", config_text, re.IGNORECASE):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "No health-check path is declared in the Railway config",
+                    "fix": "Declare a readiness endpoint that checks required dependencies, or verify the equivalent setting exists in the Railway dashboard",
+                })
+            if re.search(r'(?:--port|PORT\s*=)\s*["\']?\d{2,5}\b', config_text):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "Deployment command hardcodes a port instead of using Railway's assigned PORT",
+                    "fix": "Bind to $PORT / process.env.PORT while listening on 0.0.0.0",
+                })
+            if not re.search(r"restartPolicy|restart_policy", config_text, re.IGNORECASE):
+                findings.append({
+                    "severity": "LOW",
+                    "issue": "No restart policy is declared in the Railway config",
+                    "fix": "Declare an on-failure restart policy with a bounded retry count, or verify it is configured in the dashboard",
+                })
+
+        if name == "procfile" and re.search(r"(?:--port|PORT=)\s*\d{2,5}\b", config_text):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Procfile hardcodes the listening port",
+                "fix": "Use the platform-provided $PORT value",
+            })
+
+        return {"filename": filename, "findings": findings, "total_issues": len(findings)}
 
     def _diagnose_build_failure(self, build_log: str, platform: str = "railway", runtime: str = "node") -> Dict[str, Any]:
         """Diagnose common build failures."""

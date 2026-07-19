@@ -128,6 +128,33 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
 
         has_limit_param = bool(re.search(r"\blimit\b|\bpage\b|\bcursor\b|\boffset\b", code_lower))
 
+        # Pagination only applies when there is positive evidence that a GET
+        # handler returns a growing collection. Reviewing every GET file made
+        # /health, /config, /me, and get-by-id routes look like unbounded
+        # whole-table reads even when they returned one fixed-shape object.
+        list_query_evidence = bool(re.search(
+            r"\bfindmany\s*\(|\.fetchall\s*\(|\.all\s*\(|"
+            r"\b(?:list|getall|fetchall|loadall)[a-z0-9_]*\s*\(|"
+            r"\bdb\.select\s*\(.*?\)\s*\.from\s*\(",
+            code_lower,
+            re.DOTALL,
+        ))
+        collection_response_evidence = bool(re.search(
+            r"res\.json\(\s*\[|"
+            r"res\.json\(\s*\{[^}]{0,160}\b(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\s*:|"
+            r"res\.json\(\s*(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\b|"
+            r"res\.json\([^)]*\.map\s*\(",
+            code_lower,
+            re.DOTALL,
+        ))
+        if not (list_query_evidence or collection_response_evidence):
+            return {
+                "endpoint": endpoint,
+                "findings": [],
+                "total_issues": 0,
+                "note": "No growing collection response/query evidence found; pagination review is not applicable",
+            }
+
         # An endpoint built entirely from SQL aggregate functions returns a
         # handful of scalar numbers (counts/sums), not a row list — pagination
         # applies to "which rows matched", not "how many rows matched". A
@@ -162,6 +189,12 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
             rf"|{requester_id_re}[^\n]{{0,80}}{query_construct_re}",
             code_lower,
         ))
+        route_code = code_lower.split("// --- imported from", 1)[0]
+        delegates_requester_id = bool(
+            re.search(rf"\b(?:const|let|var)\s+user_?id\s*=\s*{requester_id_re}", route_code)
+            and re.search(r"\b\w+\s*\([^)]*\buser_?id\b[^)]*\)", route_code)
+        )
+        is_user_scoped = is_user_scoped or delegates_requester_id
 
         if not has_limit_param:
             if is_aggregate_only:
@@ -186,6 +219,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
             findings.append({"severity": "HIGH", "issue": "Raw error message/stack sent directly to the client — can leak internal details (file paths, query structure, library versions)", "fix": "Log the full error server-side; send a generic, consistent error shape to the client"})
         if re.search(r"res\.json\(\s*err\s*\)|res\.send\(\s*err\s*\)", code):
             findings.append({"severity": "HIGH", "issue": "Raw error object sent directly to the client — likely includes a stack trace", "fix": "Send { error: { code, message } } built explicitly, never the raw error object"})
+        if re.search(r"HTTPException\s*\([^)]*detail\s*=\s*(?:str\s*\(\s*(?:exc|err|error)|(?:exc|err|error)\.args|repr\s*\()", code, re.IGNORECASE | re.DOTALL):
+            findings.append({"severity": "HIGH", "issue": "FastAPI HTTPException exposes the caught exception text to the client", "fix": "Log the exception server-side and return a stable public error code/message"})
+        if re.search(r"return\s+\{[^}]*[\"']error[\"']\s*:\s*str\s*\(\s*(?:exc|err|error)", code, re.IGNORECASE | re.DOTALL):
+            findings.append({"severity": "HIGH", "issue": "API response returns str(exception), which can leak provider/database details", "fix": "Return a generic public error and capture the detailed exception only in server logs/monitoring"})
 
         # Comparing *all* res.json() call shapes (business responses included)
         # against a low distinctness threshold flagged nearly every route
@@ -213,6 +250,14 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
 
         if re.search(r"res\.status\(200\)\.json\(\s*\{\s*error", code, re.IGNORECASE):
             findings.append({"severity": "MEDIUM", "issue": "Error response returned with status 200 — clients checking response.ok or status code will treat this as success", "fix": "Use an appropriate 4xx/5xx status code alongside the error body"})
+
+        for match in re.finditer(r"@(?:router|app)\.post\s*\(([^)]*)\)", code, re.IGNORECASE | re.DOTALL):
+            decorator = match.group(1)
+            following = code[match.end():match.end() + 500]
+            looks_like_create = bool(re.search(r"\b(create|insert|add|register)\w*\b", following, re.IGNORECASE))
+            if looks_like_create and not re.search(r"status_code\s*=\s*(?:status\.)?HTTP_201_CREATED|status_code\s*=\s*201", decorator, re.IGNORECASE):
+                findings.append({"severity": "LOW", "issue": "FastAPI create-style POST endpoint does not declare status_code=201", "fix": "Declare status_code=status.HTTP_201_CREATED when this endpoint creates a resource"})
+                break
 
         return {"findings": findings, "total_issues": len(findings)}
 

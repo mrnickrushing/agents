@@ -434,19 +434,41 @@ You're not decorating screens — you're crafting the thing the user feels every
                        "Add descriptive text to heading or remove if not needed")
             break
 
-        for tag_name, attrs in all_tags:
-            if re.search(r'role\s*=\s*"button"', attrs, re.IGNORECASE) and not re.search(r"aria-label", attrs, re.IGNORECASE):
-                add_issue("serious", f"<{tag_name} role=\"button\"> without ARIA attributes",
-                           "4.1.2 Name, Role, Value", "Use <button> element or add aria-label and proper keyboard handlers")
+        role_button = re.search(
+            r"<([a-zA-Z][\w.]*)\b([^>]*)role\s*=\s*[\"']button[\"']([^>]*)>(.*?)</\1>",
+            component_code,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if role_button:
+            attrs = role_button.group(2) + role_button.group(3)
+            visible_text = re.sub(r"<[^>]+>|\{[^}]*\}", "", role_button.group(4)).strip()
+            if not visible_text and not re.search(r"aria-label|aria-labelledby", attrs, re.IGNORECASE):
+                add_issue("serious", f"<{role_button.group(1)} role=\"button\"> has no accessible name",
+                           "4.1.2 Name, Role, Value", "Use a real <button> with visible text, or add aria-label plus keyboard handlers")
+
+        input_tags = re.findall(r"<(?:input|textarea|select)\b[^>]*>", component_code, re.IGNORECASE)
+        unlabeled = 0
+        for tag in input_tags:
+            if re.search(r"aria-label\s*=|aria-labelledby\s*=", tag, re.IGNORECASE):
+                continue
+            id_match = re.search(r"\bid\s*=\s*[\"']([^\"']+)[\"']", tag, re.IGNORECASE)
+            if id_match and re.search(rf"<label\b[^>]*\b(?:for|htmlFor)\s*=\s*[\"']{re.escape(id_match.group(1))}[\"']", component_code, re.IGNORECASE):
+                continue
+            unlabeled += 1
+        if unlabeled:
+            add_issue("serious", f"{unlabeled} form control(s) have no associated label", "1.3.1 Info and Relationships",
+                       "Associate a <label htmlFor=...> with each control, or add an accurate aria-label/aria-labelledby")
+
+        for match in re.finditer(r"<a\b([^>]*)>", component_code, re.IGNORECASE):
+            attrs = match.group(1)
+            if not re.search(r"\bhref\s*=", attrs, re.IGNORECASE) and re.search(r"\bonClick\s*=", attrs):
+                add_issue("serious", "Clickable <a> has no href and is not a real keyboard-operable link", "2.1.1 Keyboard",
+                           "Use <button> for an action or provide a real href for navigation")
                 break
 
-        # A placeholder alone isn't a label — flag inputs that use one without
-        # any <label>/aria-label/aria-labelledby anywhere in the component.
-        has_placeholder_input = re.search(r"<(input|textarea)\b[^>]*\bplaceholder\s*=", component_code, re.IGNORECASE)
-        has_label = re.search(r"<label\b|aria-label\s*=|aria-labelledby\s*=", component_code, re.IGNORECASE)
-        if has_placeholder_input and not has_label:
-            add_issue("moderate", "Placeholder text used in place of a form label", "2.4.6 Headings and Labels",
-                       "Add a proper <label> (or aria-label) associated with the input — placeholders disappear on input and aren't a reliable label for screen readers")
+        if re.search(r"\btabIndex\s*=\s*\{?[1-9]\d*\}?", component_code):
+            add_issue("moderate", "Positive tabIndex overrides the natural focus order", "2.4.3 Focus Order",
+                       "Use tabIndex={0} or native interactive elements and preserve DOM focus order")
 
         for sev in [i["severity"] for i in issues]:
             if sev == "critical":
@@ -463,14 +485,14 @@ You're not decorating screens — you're crafting the thing the user feels every
             recommendations.append("Keyboard navigation test on all interactive elements")
             recommendations.append("Color contrast check with WCAG contrast checker")
         
-        if not any("alt" in code.lower() for code in [component_code]):
+        if img_tags and not any("alt" in code.lower() for code in [component_code]):
             recommendations.append("Ensure all images have descriptive alt text")
         
         return {
             "overall_score": max(score, 0),
             "issues": issues,
             "recommendations": recommendations,
-            "wcag_21_aa_compliant": score >= 90,
+            "wcag_21_aa_compliant": not any(i["severity"] in {"critical", "serious"} for i in issues),
             "tested_against": ["WCAG 2.1 AA Success Criteria", "ARIA Authoring Practices"],
         }
 
