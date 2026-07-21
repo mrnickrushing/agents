@@ -26,10 +26,12 @@ from __future__ import annotations
 import argparse
 import ast
 import fnmatch
+import hashlib
 import io
 import json
 import os
 import re
+import sqlite3
 import sys
 import tokenize
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -45,6 +47,8 @@ from agents.scaffolder import ScaffolderAgent
 from agents.security_audit import SecurityAuditAgent
 from agents.stripe_billing import StripeBillingAgent
 from agents.ui_generation import UIGenerationAgent
+from agents import __version__
+from agents.evolution import EvolutionStore, attach_finding_ids, default_database_path
 
 AGENTS: Dict[str, type] = {
     "security_audit": SecurityAuditAgent,
@@ -644,6 +648,7 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
         except (OSError, UnicodeError) as exc:
             diagnostics.append({"file": relpath, "reason": "read_failed", "error": str(exc)})
             continue
+        source_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:24]
 
         integrity = _integrity_findings(path, content)
         if integrity:
@@ -651,6 +656,7 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
                 "file": relpath,
                 "agent": "project_integrity",
                 "tool": "syntax_and_conflicts",
+                "source_hash": source_hash,
                 "result": {"findings": integrity},
             })
             matched_files.add(relpath)
@@ -702,7 +708,13 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
                 result = dict(result)
                 result["findings"] = findings
             if findings or result.get("error"):
-                results.append({"file": relpath, "agent": agent_key, "tool": tool_name, "result": result})
+                results.append({
+                    "file": relpath,
+                    "agent": agent_key,
+                    "tool": tool_name,
+                    "source_hash": source_hash,
+                    "result": result,
+                })
                 matched_files.add(relpath)
 
     summary: Dict[str, int] = {}
@@ -818,7 +830,16 @@ def _format_report(report: Dict[str, Any]) -> str:
     # and center; ones triage dismissed move to a short section at the end
     # instead of disappearing outright, so the verdict itself stays
     # auditable rather than silently swallowing the heuristic's output.
-    dismissed = [e for e in report["results"] if e.get("triage", {}).get("verdict") == "FALSE_POSITIVE"]
+    def effective_entry_verdict(entry: Dict[str, Any]) -> Optional[str]:
+        # Persisted feedback is deliberately evaluated first. It may contain
+        # a human correction to an earlier model verdict, and human feedback
+        # is the authority in the evolution store.
+        feedback = entry.get("feedback", {})
+        if feedback.get("verdict"):
+            return feedback["verdict"]
+        return entry.get("triage", {}).get("verdict")
+
+    dismissed = [e for e in report["results"] if effective_entry_verdict(e) == "FALSE_POSITIVE"]
     dismissed_ids = {id(e) for e in dismissed}
     active = [e for e in report["results"] if id(e) not in dismissed_ids]
 
@@ -831,9 +852,16 @@ def _format_report(report: Dict[str, Any]) -> str:
             sev = f.get("severity", "INFO")
             issue = f.get("issue", "")
             fix = f.get("fix", "")
-            lines.append(f"  {sev:<8} {issue}")
+            finding_id = f.get("finding_id")
+            suffix = f"  ({finding_id})" if finding_id else ""
+            lines.append(f"  {sev:<8} {issue}{suffix}")
             if fix:
                 lines.append(f"           fix: {fix}")
+            feedback = f.get("feedback")
+            if feedback:
+                lines.append(
+                    f"           learned: {feedback['verdict']} ({feedback['source']}) — {feedback['reason']}"
+                )
             finding_triage = f.get("triage")
             if finding_triage:
                 lines.append(f"           triage: {finding_triage['verdict']} — {finding_triage['reason']}")
@@ -843,11 +871,19 @@ def _format_report(report: Dict[str, Any]) -> str:
         lines.append("")
 
     if dismissed:
-        lines.append(f"── Dismissed as false positives by triage ({len(dismissed)}) ──")
+        lines.append(f"── Dismissed as false positives by triage or learned feedback ({len(dismissed)}) ──")
         lines.append("")
         for entry in dismissed:
             lines.append(f"[{entry['agent']}.{entry['tool']}] {entry['file']}")
-            lines.append(f"  {entry['triage']['reason']}")
+            verdict = entry.get("feedback") or entry.get("triage") or {}
+            source = "learned feedback" if entry.get("feedback") else "triage"
+            lines.append(
+                f"  {source}: {verdict.get('verdict', 'FALSE_POSITIVE')} — "
+                f"{verdict.get('reason', 'No reason recorded')}"
+            )
+            for finding in _entry_findings(entry):
+                if finding.get("finding_id"):
+                    lines.append(f"  id: {finding['finding_id']}")
         lines.append("")
 
     return "\n".join(lines)
@@ -892,11 +928,65 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if report["results"] and coverage.get("confidence") == "static-plus-triage-pending":
             coverage["confidence"] = "static-findings-untriaged"
 
+    attach_finding_ids(report)
+    if args.record:
+        try:
+            with EvolutionStore(args.db) as store:
+                store.apply_feedback(report)
+                scan_id = store.record_scan(report, detector_version=__version__)
+            report["evolution"]["recorded"] = True
+            report["evolution"]["scan_id"] = scan_id
+        except (OSError, sqlite3.Error) as exc:
+            report.setdefault("evolution", {})["recorded"] = False
+            report["evolution"]["error"] = f"{type(exc).__name__}: {exc}"
+            print(f"Evolution history could not be recorded: {exc}", file=sys.stderr)
+    else:
+        report.setdefault("evolution", {})["recorded"] = False
+
     print(_format_report(report))
+    if report.get("evolution", {}).get("recorded"):
+        print(
+            f"Evolution: recorded as {report['evolution']['scan_id']} "
+            f"({report['evolution'].get('learned_verdicts_applied', 0)} learned verdicts applied)"
+        )
     if args.out:
         with open(os.path.expanduser(args.out), "w") as fh:
             json.dump(report, fh, indent=2, default=str)
         print(f"\nFull JSON report written to {args.out}")
+
+
+def cmd_feedback(args: argparse.Namespace) -> None:
+    try:
+        with EvolutionStore(args.db) as store:
+            result = store.add_feedback(args.finding_id, args.verdict, args.reason or "")
+    except KeyError as exc:
+        raise SystemExit(str(exc)) from exc
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(
+        f"Recorded {result['verdict']} for {result['finding_id']}\n"
+        f"Detector: {result['detector']}\n"
+        f"File: {result['file']}"
+    )
+
+
+def cmd_history(args: argparse.Namespace) -> None:
+    with EvolutionStore(args.db) as store:
+        runs = store.recent_runs(project=args.project, limit=args.limit)
+    if not runs:
+        print("No recorded scans.")
+        return
+    for run in runs:
+        print(
+            f"{run['scan_id']}  {run['created_at']}  v{run['detector_version']}  "
+            f"findings={run['findings']}  {run['project_path']}"
+        )
+
+
+def cmd_eval(args: argparse.Namespace) -> None:
+    with EvolutionStore(args.db) as store:
+        evaluation = store.evaluate(project=args.project)
+    print(json.dumps(evaluation, indent=2))
 
 
 def main() -> None:
@@ -929,7 +1019,33 @@ def main() -> None:
     )
     p_scan.add_argument("--triage-provider", choices=["anthropic", "openai"], help="Provider for triage (default: auto-detect from env)")
     p_scan.add_argument("--triage-model", help="Override the default triage model")
+    p_scan.add_argument(
+        "--db", default=default_database_path(),
+        help="Evolution SQLite database (default: %(default)s or AGENTS_EVOLUTION_DB)",
+    )
+    p_scan.add_argument(
+        "--no-record", dest="record", action="store_false", default=True,
+        help="Do not record this scan or apply learned feedback",
+    )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_feedback = sub.add_parser("feedback", help="Confirm or dismiss a recorded finding")
+    p_feedback.add_argument("finding_id", help="Stable agf_* ID printed by scan")
+    p_feedback.add_argument("verdict", choices=["confirm", "dismiss"])
+    p_feedback.add_argument("--reason", required=True, help="Why this verdict is correct")
+    p_feedback.add_argument("--db", default=default_database_path())
+    p_feedback.set_defaults(func=cmd_feedback)
+
+    p_history = sub.add_parser("history", help="Show recently recorded scans")
+    p_history.add_argument("--project", help="Only show scans for this project path")
+    p_history.add_argument("--limit", type=int, default=10)
+    p_history.add_argument("--db", default=default_database_path())
+    p_history.set_defaults(func=cmd_history)
+
+    p_eval = sub.add_parser("eval", help="Measure confirmed findings, false positives, and triage agreement")
+    p_eval.add_argument("--project", help="Only evaluate one project path")
+    p_eval.add_argument("--db", default=default_database_path())
+    p_eval.set_defaults(func=cmd_eval)
 
     args = parser.parse_args()
     args.func(args)

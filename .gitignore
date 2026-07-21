@@ -11,4 +11,7 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+*.db
+*.db-shm
+*.db-wal
 todo.md

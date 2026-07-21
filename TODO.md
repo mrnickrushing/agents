@@ -1,5 +1,14 @@
 # Agent Development Status
 
+## ✅ COMPLETED (v2.5.0)
+
+- [x] Added a versioned SQLite evolution store for scan runs, findings, triage verdicts, and human feedback
+- [x] Added stable finding IDs that are scoped to the Git remote and invalidated by source changes
+- [x] Added `feedback`, `history`, and `eval` commands plus automatic learned-verdict application during scans
+- [x] Made human feedback authoritative over LLM triage while keeping every learned dismissal visible and reversible
+- [x] Added detector-level actionable-precision and triage-agreement measurements without overstating recall
+- [x] Added regression tests for ID stability, invalidation, precedence, persistence, history, and evaluation
+
 ## ✅ COMPLETED (v2.4.0)
 
 - [x] Restored comprehensive one-shot CLI routing across all ten review-capable agents; report ScaffolderAgent explicitly as generation-only
