@@ -6,6 +6,14 @@ Eleven specialized agents (62 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🧠 Version 2.5.0 — Agents That Learn
+
+- **Persistent scan history**: every scan is recorded in a local SQLite database with the detector version, project identity, findings, and triage evidence.
+- **Stable, revision-aware finding IDs**: the same finding in unchanged source keeps the same `agf_*` ID. Editing the reviewed file changes the ID, preventing an old dismissal from suppressing changed code.
+- **Human feedback loop**: confirm or dismiss a finding once and that verdict is applied to future scans of the same revision. Human decisions outrank model triage, and learned decisions remain visible in reports.
+- **Measurable quality**: `agents eval` reports labeled findings, actionable precision, per-detector outcomes, and LLM triage agreement. Recall is deliberately not invented from scan feedback; the report explains when a labeled clean-file corpus is required.
+- **Safe evolution boundary**: agents learn project-specific verdicts automatically, but never rewrite or promote their own detector code. Detector changes still go through tests, review, and version control.
+
 ## 🆕 Version 2.4.0 — What's New
 
 - **One-shot scan restored and broadened**: `scan` now routes project evidence through all ten review-capable agents across security, auth, billing, mobile, API, database, infrastructure, deployment, code, and accessibility. The scaffolder is reported explicitly as generation-only instead of being silently omitted.
@@ -71,6 +79,29 @@ python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_securi
 ```
 
 `scan` walks the project (skipping dependencies, generated output, caches, and virtual environments), matches files by name or executable evidence, runs every applicable deterministic review, and prints a severity-sorted report. Both forms are supported: `scan --path ~/project` and `scan ~/project`.
+
+### Evolution loop — teach the agents from real outcomes
+
+Scans are recorded by default in `~/.local/state/rushingtech-agents/evolution.db`. Only scan metadata, normalized findings, verdicts, and the report are stored—not source-file contents. Set `AGENTS_EVOLUTION_DB` or pass `--db` to choose another database; use `--no-record` for an ephemeral scan.
+
+```fish
+# Scan normally; each finding now includes a stable agf_* ID
+python -m agents.cli scan --path ~/Vitality --no-triage
+
+# Teach the system what happened
+python -m agents.cli feedback agf_0123456789abcdefabcd dismiss \
+  --reason "Authentication is enforced by the router middleware"
+python -m agents.cli feedback agf_fedcba9876543210abcd confirm \
+  --reason "Reproduced against the unauthenticated endpoint"
+
+# Inspect history and measure detector quality
+python -m agents.cli history --project ~/Vitality
+python -m agents.cli eval --project ~/Vitality
+```
+
+On the next unchanged scan, prior feedback is printed as `learned:` evidence and false positives move to the auditable dismissed section. A source edit creates a new finding ID and requires a new decision. This makes learning useful without turning a stale exception into a permanent blind spot.
+
+The evaluation output calls confirmed findings divided by all human-labeled findings **actionable precision**. It also compares model triage with human verdicts and breaks results down by detector. It does not claim recall: measuring missed findings requires a separate corpus containing known vulnerabilities and known-clean files.
 
 The JSON report's `coverage` object is part of the result, not decoration. Before treating a clean run as meaningful, require `tool_errors: 0`, no `skipped_files`, no `verification_gaps`, and review `agents_not_applicable` plus production `files_without_targeted_checks`. `runtime_verification` remains `not_executed`: this command does not run project code, tests, type-checkers, linters, builds, advisory databases, or external services. Static analysis cannot prove the absence of runtime, integration, environment, or product-logic bugs; the confidence label makes that boundary explicit instead of presenting “no findings” as a guarantee.
 
