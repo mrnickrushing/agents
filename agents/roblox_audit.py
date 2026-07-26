@@ -25,12 +25,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
 
-_PCALL_LOOKBACK = 300
 _DATASTORE_WRITE_METHODS = ("SetAsync", "UpdateAsync", "IncrementAsync", "RemoveAsync")
 _DATASTORE_METHODS = ("GetAsync",) + _DATASTORE_WRITE_METHODS
 
 _LUAU_BLOCK_TOKEN_RE = re.compile(r"\b(function|do|if|repeat|end|until)\b")
 _FRAME_SIGNAL_RE = re.compile(r"[.:]\s*(?:Heartbeat|Stepped|RenderStepped)\s*:\s*Connect\s*\(")
+# A Luau if-*expression* ("local x = if a then b else c") has no closing
+# `end` — only a preceding statement-position keyword means the `if` we're
+# looking at is the block-form ("if a then ... end") that actually needs one.
+_IF_EXPRESSION_CONTEXT_RE = re.compile(r"(?:=|\(|,|\breturn\b|\band\b|\bor\b|\bnot\b)\s*$")
 
 
 def _strip_luau_noise(code: str) -> str:
@@ -59,6 +62,8 @@ def _block_end(stripped: str, after: int) -> int:
     stack = ["end"]
     for match in _LUAU_BLOCK_TOKEN_RE.finditer(stripped, after):
         token = match.group(1)
+        if token == "if" and _IF_EXPRESSION_CONTEXT_RE.search(stripped, 0, match.start()):
+            continue
         if token in ("function", "do", "if"):
             stack.append("end")
         elif token == "repeat":
@@ -72,6 +77,25 @@ def _block_end(stripped: str, after: int) -> int:
         if not stack:
             return match.end()
     return len(stripped)
+
+
+def _matching_paren_end(text: str, after_open: int) -> int:
+    """Return the index just past the `)` that matches the `(` immediately
+    before `after_open` (depth already at 1). Used to find the real extent
+    of a `pcall(...)`/`xpcall(...)` call — whatever sits inside those parens,
+    whether a `function() ... end` literal or a bare argument list, counts as
+    protected, regardless of how far away it is textually."""
+    depth = 1
+    i = after_open
+    length = len(text)
+    while i < length and depth > 0:
+        char = text[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        i += 1
+    return i
 
 # Roblox service names that are downloaded to and readable by every client.
 # A Rojo tree node under one of these is client-visible; server-only source
@@ -271,26 +295,28 @@ file, so treat findings as leads to verify against the actual script context, no
         if not handler_matches:
             return {"findings": [], "total_issues": 0, "note": "No OnServerEvent/OnServerInvoke handler found in this snippet"}
 
-        has_validation = bool(re.search(r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\(", stripped))
-        if not has_validation:
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "No visible type/shape validation (typeof/type/assert/math.clamp) on incoming remote arguments",
-                "fix": "Validate every non-player argument's type and range before acting on it — e.g. assert(typeof(amount) == \"number\" and amount >= 0 and amount <= MAX_AMOUNT)",
-            })
-
-        has_rate_limit = bool(re.search(r"(?i)debounce|cooldown|rate[_-]?limit|last[A-Z]\w*Time|os\.clock\s*\(\s*\)\s*-", stripped))
-        if not has_rate_limit:
-            findings.append({
-                "severity": "LOW",
-                "issue": "No visible per-player rate limiting/debounce on this remote handler",
-                "fix": "Track a last-fired timestamp per player (e.g. via os.clock()) and reject calls inside a minimum interval, or route through a shared rate-limit module",
-            })
-
+        # Scoped per handler: a file can define more than one remote, and a
+        # validated handler must not suppress a missing-validation finding on
+        # a sibling handler in the same file that never checks its arguments.
         for match in handler_matches:
             trusted_param = match.group(1)
             body_end = _block_end(stripped, match.end())
             body = stripped[match.end() : body_end]
+
+            if not re.search(r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\(", body):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "No visible type/shape validation (typeof/type/assert/math.clamp) on incoming remote arguments",
+                    "fix": "Validate every non-player argument's type and range before acting on it — e.g. assert(typeof(amount) == \"number\" and amount >= 0 and amount <= MAX_AMOUNT)",
+                })
+
+            if not re.search(r"(?i)debounce|cooldown|rate[_-]?limit|last[A-Z]\w*Time|os\.clock\s*\(\s*\)\s*-", body):
+                findings.append({
+                    "severity": "LOW",
+                    "issue": "No visible per-player rate limiting/debounce on this remote handler",
+                    "fix": "Track a last-fired timestamp per player (e.g. via os.clock()) and reject calls inside a minimum interval, or route through a shared rate-limit module",
+                })
+
             lookup_match = re.search(r"GetPlayerByUserId\s*\(\s*(\w+)", body)
             if lookup_match and lookup_match.group(1) != trusted_param:
                 findings.append({
@@ -375,18 +401,21 @@ file, so treat findings as leads to verify against the actual script context, no
         if not any(method in code for method in _DATASTORE_METHODS):
             return {"findings": [], "total_issues": 0, "note": "No DataStore method calls found in this snippet"}
 
+        protected_spans = [
+            (m.end(), _matching_paren_end(code, m.end()))
+            for m in re.finditer(r"\b(?:pcall|xpcall)\s*\(", code)
+        ]
+
         unwrapped_calls = []
         for method in _DATASTORE_METHODS:
             for match in re.finditer(rf"[:.]" + method + r"\s*\(", code):
-                window_start = max(0, match.start() - _PCALL_LOOKBACK)
-                window = code[window_start : match.start()]
-                if not re.search(r"\b(pcall|xpcall)\s*\(", window):
+                if not any(start <= match.start() < end for start, end in protected_spans):
                     unwrapped_calls.append(method)
 
         if unwrapped_calls:
             findings.append({
                 "severity": "HIGH",
-                "issue": f"DataStore call(s) not wrapped in pcall/xpcall within {_PCALL_LOOKBACK} chars: {', '.join(sorted(set(unwrapped_calls)))}",
+                "issue": f"DataStore call(s) not wrapped in an enclosing pcall/xpcall: {', '.join(sorted(set(unwrapped_calls)))}",
                 "fix": "Wrap every DataStore call in pcall(function() ... end) (or xpcall with a handler) and check the returned ok flag before trusting the result",
             })
 
@@ -493,10 +522,14 @@ file, so treat findings as leads to verify against the actual script context, no
         for loop_match in re.finditer(r"\bwhile\s+true\s+do\b", stripped):
             body_end = _block_end(stripped, loop_match.end())
             body = stripped[loop_match.end() : body_end]
-            if not re.search(r"\bwait\s*\(|\btask\.wait\s*\(|\byield\s*\(", body):
+            # RBXScriptSignal:Wait() (RunService.Heartbeat:Wait(), a
+            # RemoteEvent's OnServerEvent:Wait(), etc.) yields the thread
+            # just as effectively as wait()/task.wait() — recognize any
+            # `:Wait(` call, not only the named globals.
+            if not re.search(r"\bwait\s*\(|\btask\.wait\s*\(|\byield\s*\(|:\s*Wait\s*\(", body):
                 findings.append({
                     "severity": "HIGH",
-                    "issue": "`while true do` loop has no visible wait/task.wait inside it — an unyielding loop will not release the thread and can hang the script (and, on the server, the game's Heartbeat)",
+                    "issue": "`while true do` loop has no visible wait/task.wait/signal:Wait() inside it — an unyielding loop will not release the thread and can hang the script (and, on the server, the game's Heartbeat)",
                     "fix": "Add a task.wait(...) inside the loop body, or restructure as a Heartbeat/RunService connection instead of a manual loop",
                 })
                 break

@@ -1,6 +1,6 @@
 import json
 
-from agents.roblox_audit import RobloxAuditAgent
+from agents.roblox_audit import RobloxAuditAgent, _block_end, _strip_luau_noise
 
 
 def _issues(result):
@@ -59,7 +59,7 @@ data.coins = data.coins + 10
 store:SetAsync(key, data)
 """
     issues = _issues(RobloxAuditAgent()._audit_datastore_usage(code))
-    assert any("not wrapped in pcall" in issue for issue in issues)
+    assert any("not wrapped in an enclosing pcall" in issue for issue in issues)
     assert any("read-modify-write" in issue for issue in issues)
 
 
@@ -218,3 +218,67 @@ player.leaderstats.Coins.Value += 100
 """
     result = RobloxAuditAgent()._audit_server_authority(code)
     assert result["findings"] == []
+
+
+# ── Block-boundary edge cases (regression coverage for review feedback) ───
+
+
+def test_if_expression_does_not_consume_the_enclosing_end():
+    code = """
+Players.PlayerAdded:Connect(function(player)
+    local greeting = if player.Name == "Bob" then "hi bob" else "hi"
+    print(greeting)
+end)
+
+SomethingAfter:Connect(function()
+    shouldNotBeIncludedInThePlayerAddedBody()
+end)
+"""
+    stripped = _strip_luau_noise(code)
+    start = stripped.find("function(player)") + len("function(player)")
+    body = stripped[start : _block_end(stripped, start)]
+    assert "SomethingAfter" not in body
+
+
+def test_datastore_call_after_a_closed_pcall_is_still_flagged():
+    code = """
+pcall(function()
+    doSomethingUnrelated()
+end)
+local data = store:GetAsync(key)
+"""
+    issues = _issues(RobloxAuditAgent()._audit_datastore_usage(code))
+    assert any("not wrapped in an enclosing pcall" in issue for issue in issues)
+
+
+def test_bare_pcall_without_anonymous_function_still_protects_its_call():
+    code = "local ok, data = pcall(store.GetAsync, store, key)"
+    result = RobloxAuditAgent()._audit_datastore_usage(code)
+    assert not any("not wrapped in an enclosing pcall" in f["issue"] for f in result["findings"])
+
+
+def test_unvalidated_handler_is_flagged_even_when_a_sibling_handler_validates():
+    code = """
+Trusted.OnServerEvent:Connect(function(player, amount)
+    assert(typeof(amount) == "number")
+    player.leaderstats.Coins.Value += amount
+end)
+
+Untrusted.OnServerEvent:Connect(function(player, amount)
+    player.leaderstats.Coins.Value += amount
+end)
+"""
+    result = RobloxAuditAgent()._audit_remote_validation(code)
+    validation_findings = [f for f in result["findings"] if "type/shape validation" in f["issue"]]
+    assert len(validation_findings) == 1
+
+
+def test_signal_wait_inside_while_true_is_treated_as_yielding():
+    code = """
+while true do
+    RunService.Heartbeat:Wait()
+    tick()
+end
+"""
+    result = RobloxAuditAgent()._audit_performance_patterns(code)
+    assert not any("while true do" in f["issue"] for f in result["findings"])
