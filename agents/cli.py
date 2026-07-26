@@ -407,6 +407,8 @@ TOOL_EXTENSION_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "audit_connection_leaks": (".lua", ".luau"),
     "audit_performance_patterns": (".lua", ".luau"),
     "review_receipt_processing": (".lua", ".luau"),
+    "audit_text_filtering": (".lua", ".luau"),
+    "audit_admin_backdoor": (".lua", ".luau"),
 }
 
 # Each rule: (file_glob_or_None, content_regex_or_None, agent_key, tool_name, arg_builder)
@@ -531,7 +533,11 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"code": c}),
     (None, r"(?<!task\.)\b(?:wait|spawn|delay)\s*\(|(?:Heartbeat|RenderStepped|Stepped)\s*:\s*Connect\s*\(|\bwhile\s+true\s+do\b", "roblox_audit", "audit_performance_patterns",
      lambda p, c: {"code": c}),
-    (None, r"ProcessReceipt", "roblox_audit", "review_receipt_processing",
+    (None, r"ProcessReceipt|Prompt(?:Product)?PurchaseFinished", "roblox_audit", "review_receipt_processing",
+     lambda p, c: {"code": c}),
+    (None, r":\s*(?:FireAllClients|FireClient)\s*\(", "roblox_audit", "audit_text_filtering",
+     lambda p, c: {"code": c}),
+    (None, r"\.\s*(?:Name|DisplayName)\s*==\s*[\"']", "roblox_audit", "audit_admin_backdoor",
      lambda p, c: {"code": c}),
 ]
 

@@ -38,11 +38,17 @@ _IF_EXPRESSION_CONTEXT_RE = re.compile(r"(?:=|\(|,|\breturn\b|\band\b|\bor\b|\bn
 
 def _strip_luau_noise(code: str) -> str:
     """Blank out comments/string bodies so keyword-based block matching
-    doesn't trip over "end"/"do" appearing inside a comment or string."""
+    doesn't trip over "end"/"do" appearing inside a comment or string.
+
+    String literals are collapsed to an empty literal (`""`/`''`) rather than
+    deleted outright — some checks (a hardcoded-name comparison, a literal
+    argument to FindFirstChild) need to know a quoted literal is *present*,
+    just not what's inside it.
+    """
     text = re.sub(r"--\[(=*)\[.*?\]\1\]", lambda m: "\n" * m.group(0).count("\n"), code, flags=re.DOTALL)
     text = re.sub(r"--[^\n]*", "", text)
     text = re.sub(r"\[(=*)\[.*?\]\1\]", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.DOTALL)
-    text = re.sub(r"([\"'])(?:\\.|(?!\1).)*\1", "", text)
+    text = re.sub(r"([\"'])(?:\\.|(?!\1).)*\1", lambda m: m.group(1) * 2, text)
     return text
 
 
@@ -97,6 +103,23 @@ def _matching_paren_end(text: str, after_open: int) -> int:
         i += 1
     return i
 
+
+_HANDLER_ENTRY_RE = re.compile(r"OnServerEvent\s*:\s*Connect\s*\(\s*function\s*\(\s*(\w+)")
+_HANDLER_INVOKE_RE = re.compile(r"OnServerInvoke\s*=\s*function\s*\(\s*(\w+)")
+
+
+def _iter_remote_handlers(stripped: str):
+    """Yield (trusted_player_param, body) for every OnServerEvent/
+    OnServerInvoke handler in already-noise-stripped source, with `body`
+    bounded to that handler's real closing `end` via `_block_end` rather
+    than a guessed window."""
+    matches = list(_HANDLER_ENTRY_RE.finditer(stripped)) + list(_HANDLER_INVOKE_RE.finditer(stripped))
+    for match in matches:
+        trusted_param = match.group(1)
+        body_end = _block_end(stripped, match.end())
+        yield trusted_param, stripped[match.end() : body_end]
+
+
 # Roblox service names that are downloaded to and readable by every client.
 # A Rojo tree node under one of these is client-visible; server-only source
 # mapped underneath it ships implementation (and any embedded secrets/logic)
@@ -111,18 +134,32 @@ _CLIENT_VISIBLE_SERVICES = {
 }
 _SERVER_SOURCE_HINTS = ("server", "serverscriptservice", "serverstorage")
 
+_TEXT_FILTER_INDICATOR_RE = re.compile(
+    r"FilterStringAsync|FilterStringForBroadcast|GetNonChatStringForBroadcastAsync"
+    r"|GetNonChatStringForUserAsync|GetChatForUserAsync|TextChatService"
+)
+_TEXTUAL_ARG_NAME_RE = re.compile(r"(?i)\b\w*(?:text|msg|message|chat|content)\w*\b")
+_BROADCAST_CALL_RE = re.compile(r":\s*(?:FireAllClients|FireClient)\s*\(")
+
+_ADMIN_KEYWORDS_RE = re.compile(
+    r"(?i)\badmin\b|\bowner\b|\bmoderator\b|\bkick\s*\(|:\s*Kick\s*\(|\bban\b|setrank"
+    r"|\bgod\b|invincib|\binfinite\b|giveall|grantall|unlockall|\bshutdown\b"
+)
+_IDENTITY_STRING_COMPARE_RE = re.compile(r"\.\s*(Name|DisplayName)\s*==\s*[\"']")
+
 
 class RobloxAuditAgent(BaseAgent):
     """
     Roblox/Luau specialist: remote validation, server authority, DataStore
-    safety, Rojo project structure, connection leaks, receipt processing.
+    safety, Rojo project structure, connection leaks, receipt processing,
+    text filtering, and admin-backdoor detection.
     """
 
     name = "roblox_audit"
     description = (
         "Reviews Roblox/Luau code for remote-event trust boundaries, server authority, "
-        "DataStore safety, Rojo project structure, connection leaks, and MarketplaceService "
-        "receipt processing."
+        "DataStore safety and request-budget usage, Rojo project structure, connection leaks, "
+        "MarketplaceService receipt processing, text-filtering gaps, and admin-backdoor patterns."
     )
     model = "gpt-5"
 
@@ -162,6 +199,10 @@ YOUR DOMAIN:
      SetAsync — two concurrent servers (multi-server games, rejoin) racing a
      GetAsync+SetAsync pair can overwrite each other's write.
    - Without BindToClose, a server shutdown can skip the final save for players still in session.
+   - A DataStore call inside a loop over many players/keys should check
+     DataStoreService:GetRequestBudgetForRequestType(...) or stagger with task.wait() —
+     the request budget is shared per experience across every server, so one server bursting
+     past it (e.g. saving all players at once) throttles saves everywhere.
 
 5. RECEIPT PROCESSING
    - MarketplaceService.ProcessReceipt must always return an Enum.ProductPurchaseDecision;
@@ -172,16 +213,34 @@ YOUR DOMAIN:
    - The grant itself should be pcall-wrapped; an unhandled error mid-grant risks a paid
      purchase never reaching the player. A silently missing grant or a silent double-grant are
      both zero-tolerance bugs in a shipped game.
+   - Developer Products must be granted from ProcessReceipt only. PromptProductPurchaseFinished
+     only reflects when the purchase dialog closed, not a confirmed backend transaction —
+     granting there can pay out a purchase that later fails, or miss one that settles after the
+     prompt closes. Game Passes are different: PromptGamePassPurchaseFinished + a rejoin-time
+     UserOwnsGamePassAsync check is the correct, Roblox-documented pattern for those.
 
 6. CONNECTIONS AND PERFORMANCE
    - A signal :Connect( made inside PlayerAdded, a loop, or any code path that can re-run
      (respawn, retry) leaks another live connection unless it is stored and :Disconnect()'d.
    - wait()/spawn()/delay() are deprecated legacy globals; task.wait()/task.spawn()/task.delay()
      are more precise and lighter-weight.
-   - game:GetService( inside a per-frame Heartbeat/RenderStepped/Stepped connection re-resolves
-     the service every frame instead of caching it once outside the loop.
-   - `while true do` with no wait/task.wait inside will not yield and can hang the thread (and,
-     on the server, the game's Heartbeat).
+   - game:GetService( and FindFirstChild( with a literal name inside a per-frame
+     Heartbeat/RenderStepped/Stepped connection re-resolve every frame instead of caching once
+     outside the loop.
+   - `while true do` with no wait/task.wait/signal:Wait() inside will not yield and can hang the
+     thread (and, on the server, the game's Heartbeat).
+
+7. TEXT FILTERING
+   - Any player-authored text shown to other players (chat, signs, name tags, custom UI) must go
+     through TextService:FilterStringAsync(...) (or TextChatService) before being broadcast. A
+     remote handler that re-broadcasts a textual argument via FireAllClients/FireClient with no
+     filtering call violates Roblox's content policy and can get an experience moderated.
+
+8. ADMIN BACKDOORS
+   - Privileged/admin checks must compare player.UserId, never player.Name or
+     player.DisplayName — DisplayName is entirely player-chosen, and usernames can be changed and
+     later recycled by a different account. A real incident: a player renamed themselves to
+     match a game owner's name-based admin check and gained full owner powers.
 
 When reviewing, cite the exact line/pattern that's missing or risky and give the exact fix.
 Static analysis here cannot see cross-file dispatch (e.g. a generic remote that routes to a
@@ -260,11 +319,33 @@ file, so treat findings as leads to verify against the actual script context, no
             },
             {
                 "name": "review_receipt_processing",
-                "description": "Review a MarketplaceService.ProcessReceipt callback for a missing PurchaseDecision return, missing idempotency, and unprotected grant logic.",
+                "description": "Review a MarketplaceService.ProcessReceipt callback for a missing PurchaseDecision return, missing idempotency, and unprotected grant logic; also flags granting a Developer Product from PromptProductPurchaseFinished instead of ProcessReceipt.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The Luau source containing the ProcessReceipt callback"},
+                        "code": {"type": "string", "description": "The Luau source containing the ProcessReceipt/PromptProductPurchaseFinished callback"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_text_filtering",
+                "description": "Detect a remote handler that re-broadcasts a textual payload (FireAllClients/FireClient) with no visible TextService/TextChatService filtering call.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The Luau source containing the remote handler"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "audit_admin_backdoor",
+                "description": "Detect privileged/admin access gated by comparing player.Name or player.DisplayName to a hardcoded string instead of the spoof-proof player.UserId.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The Luau source to review"},
                     },
                     "required": ["code"],
                 },
@@ -280,6 +361,8 @@ file, so treat findings as leads to verify against the actual script context, no
             "audit_connection_leaks": self._audit_connection_leaks,
             "audit_performance_patterns": self._audit_performance_patterns,
             "review_receipt_processing": self._review_receipt_processing,
+            "audit_text_filtering": self._audit_text_filtering,
+            "audit_admin_backdoor": self._audit_admin_backdoor,
         }
 
     # ── Remote trust boundary ────────────────────────────────────────
@@ -288,21 +371,15 @@ file, so treat findings as leads to verify against the actual script context, no
         findings = []
 
         stripped = _strip_luau_noise(code)
-        handler_matches = list(
-            re.finditer(r"OnServerEvent\s*:\s*Connect\s*\(\s*function\s*\(\s*(\w+)", stripped)
-        ) + list(re.finditer(r"OnServerInvoke\s*=\s*function\s*\(\s*(\w+)", stripped))
+        handlers = list(_iter_remote_handlers(stripped))
 
-        if not handler_matches:
+        if not handlers:
             return {"findings": [], "total_issues": 0, "note": "No OnServerEvent/OnServerInvoke handler found in this snippet"}
 
         # Scoped per handler: a file can define more than one remote, and a
         # validated handler must not suppress a missing-validation finding on
         # a sibling handler in the same file that never checks its arguments.
-        for match in handler_matches:
-            trusted_param = match.group(1)
-            body_end = _block_end(stripped, match.end())
-            body = stripped[match.end() : body_end]
-
+        for trusted_param, body in handlers:
             if not re.search(r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\(", body):
                 findings.append({
                     "severity": "MEDIUM",
@@ -433,6 +510,22 @@ file, so treat findings as leads to verify against the actual script context, no
                 "fix": "Add game:BindToClose(function() ... end) to give in-session players a final save attempt before the server shuts down",
             })
 
+        # A DataStore call inside a loop with no budget check or stagger can
+        # burst well past DataStoreService:GetRequestBudgetForRequestType()'s
+        # per-experience limit when the player count is high, throttling
+        # everyone's saves — not just the loop's own.
+        for loop_match in re.finditer(r"\b(?:for|while)\b[^\n]*?\bdo\b", code):
+            body_end = _block_end(code, loop_match.end())
+            loop_body = code[loop_match.end() : body_end]
+            if any(re.search(rf"[:.]{method}\s*\(", loop_body) for method in _DATASTORE_METHODS):
+                if not re.search(r"GetRequestBudgetForRequestType|task\.wait\s*\(|\bwait\s*\(", loop_body):
+                    findings.append({
+                        "severity": "MEDIUM",
+                        "issue": "A DataStore call runs inside a loop with no request-budget check (GetRequestBudgetForRequestType) or stagger (task.wait) between iterations — looping over many players/keys can burst past the shared per-experience request budget and throttle everyone's saves",
+                        "fix": "Check DataStoreService:GetRequestBudgetForRequestType(...) before each call in the loop, and/or add a small task.wait() between iterations so a large player count doesn't burst past the budget",
+                    })
+                    break
+
         return {"findings": findings, "total_issues": len(findings)}
 
     # ── Connection leaks ──────────────────────────────────────────────
@@ -519,6 +612,19 @@ file, so treat findings as leads to verify against the actual script context, no
                 })
                 break
 
+        for frame_match in re.finditer(
+            r"(?:Heartbeat|RenderStepped|Stepped)\s*:\s*Connect\s*\(\s*function\s*\([^)]*\)", stripped
+        ):
+            body_end = _block_end(stripped, frame_match.end())
+            body = stripped[frame_match.end() : body_end]
+            if re.search(r":\s*FindFirstChild\s*\(\s*[\"']", body):
+                findings.append({
+                    "severity": "LOW",
+                    "issue": "FindFirstChild( with a literal name is called inside a per-frame Heartbeat/RenderStepped/Stepped connection — it walks the hierarchy every frame instead of once",
+                    "fix": "Look the instance up once outside the per-frame connection and cache the reference (re-resolving only on AncestryChanged/CharacterAdded if it can be replaced)",
+                })
+                break
+
         for loop_match in re.finditer(r"\bwhile\s+true\s+do\b", stripped):
             body_end = _block_end(stripped, loop_match.end())
             body = stripped[loop_match.end() : body_end]
@@ -540,33 +646,101 @@ file, so treat findings as leads to verify against the actual script context, no
 
     def _review_receipt_processing(self, code: str) -> Dict[str, Any]:
         stripped = _strip_luau_noise(code)
-        if "ProcessReceipt" not in stripped:
-            return {"findings": [], "total_issues": 0, "note": "No ProcessReceipt callback found in this snippet"}
+        has_process_receipt = "ProcessReceipt" in stripped
+        prompt_match = re.search(r"Prompt(?:Product)?PurchaseFinished\s*:\s*Connect\s*\(\s*function\s*\([^)]*\)", stripped)
+
+        if not has_process_receipt and not prompt_match:
+            return {"findings": [], "total_issues": 0, "note": "No ProcessReceipt/PromptProductPurchaseFinished callback found in this snippet"}
 
         findings = []
 
-        assign_match = re.search(r"ProcessReceipt\s*=\s*function\s*\([^)]*\)", stripped)
-        body = stripped[assign_match.end() : _block_end(stripped, assign_match.end())] if assign_match else stripped
+        if has_process_receipt:
+            assign_match = re.search(r"ProcessReceipt\s*=\s*function\s*\([^)]*\)", stripped)
+            body = stripped[assign_match.end() : _block_end(stripped, assign_match.end())] if assign_match else stripped
 
-        if not re.search(r"Enum\.ProductPurchaseDecision", body):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "ProcessReceipt callback never returns Enum.ProductPurchaseDecision — Roblox requires an explicit decision or it will keep retrying and the receipt is never confirmed",
-                "fix": "Return Enum.ProductPurchaseDecision.PurchaseGranted after a successful grant, or Enum.ProductPurchaseDecision.NotProcessedYet if the grant could not be completed (e.g. DataStore unavailable)",
-            })
+            if not re.search(r"Enum\.ProductPurchaseDecision", body):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "ProcessReceipt callback never returns Enum.ProductPurchaseDecision — Roblox requires an explicit decision or it will keep retrying and the receipt is never confirmed",
+                    "fix": "Return Enum.ProductPurchaseDecision.PurchaseGranted after a successful grant, or Enum.ProductPurchaseDecision.NotProcessedYet if the grant could not be completed (e.g. DataStore unavailable)",
+                })
 
-        if not re.search(r"PurchaseId", body):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "No visible check against receiptInfo.PurchaseId — a retried receipt (Roblox retries on NotProcessedYet) can grant the reward twice with no idempotency guard",
-                "fix": "Record granted PurchaseIds per player and check for a duplicate before granting again",
-            })
+            if not re.search(r"PurchaseId", body):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "No visible check against receiptInfo.PurchaseId — a retried receipt (Roblox retries on NotProcessedYet) can grant the reward twice with no idempotency guard",
+                    "fix": "Record granted PurchaseIds per player and check for a duplicate before granting again",
+                })
 
-        if not re.search(r"\b(pcall|xpcall)\s*\(", body):
+            if not re.search(r"\b(pcall|xpcall)\s*\(", body):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "The purchase grant is not wrapped in pcall/xpcall — an unhandled error mid-grant risks a paid purchase never reaching the player",
+                    "fix": "Wrap the DataStore/grant logic in pcall(function() ... end) and only return PurchaseGranted if it succeeded",
+                })
+
+        if prompt_match:
+            prompt_body = stripped[prompt_match.end() : _block_end(stripped, prompt_match.end())]
+            if re.search(r"[:.](?:Set|Update|Increment)Async\s*\(|leaderstats\b[^\n]*\.Value\s*[:+\-*/]?=(?!=)", prompt_body):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "PromptProductPurchaseFinished appears to grant the reward directly — this event only reflects when the purchase dialog closed, not a confirmed backend transaction, so it can grant a purchase that later fails, or miss one that settles after the prompt closes",
+                    "fix": "Grant Developer Product rewards only from MarketplaceService.ProcessReceipt, which Roblox retries until you return Enum.ProductPurchaseDecision.PurchaseGranted; use PromptProductPurchaseFinished only for UI feedback (Game Pass grants via PromptGamePassPurchaseFinished + UserOwnsGamePassAsync are a separate, correct pattern)",
+                })
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    # ── Text filtering ─────────────────────────────────────────────────
+
+    def _audit_text_filtering(self, code: str) -> Dict[str, Any]:
+        stripped = _strip_luau_noise(code)
+        handlers = list(_iter_remote_handlers(stripped))
+
+        if not handlers:
+            return {"findings": [], "total_issues": 0, "note": "No OnServerEvent/OnServerInvoke handler found in this snippet"}
+
+        findings = []
+        for _trusted_param, body in handlers:
+            if _TEXT_FILTER_INDICATOR_RE.search(body):
+                continue
+            for fire_match in _BROADCAST_CALL_RE.finditer(body):
+                call_end = _matching_paren_end(body, fire_match.end())
+                args = body[fire_match.end() : call_end - 1]
+                if _TEXTUAL_ARG_NAME_RE.search(args):
+                    findings.append({
+                        "severity": "MEDIUM",
+                        "issue": "This remote handler broadcasts a textual-looking argument to other clients (FireAllClients/FireClient) with no visible TextService/TextChatService filtering call — unfiltered player-authored text reaching other players violates Roblox's community standards and content policy",
+                        "fix": "Run player-authored text through TextService:FilterStringAsync(text, fromUserId):GetNonChatStringForBroadcastAsync() (or route it through TextChatService) before broadcasting it to other clients",
+                    })
+                    break
+
+        return {"findings": findings, "total_issues": len(findings)}
+
+    # ── Admin backdoor ─────────────────────────────────────────────────
+
+    def _audit_admin_backdoor(self, code: str) -> Dict[str, Any]:
+        stripped = _strip_luau_noise(code)
+        matches = list(_IDENTITY_STRING_COMPARE_RE.finditer(stripped))
+
+        if not matches:
+            return {"findings": [], "total_issues": 0, "note": "No player.Name/DisplayName string comparison found in this snippet"}
+
+        findings = []
+        for match in matches:
+            window_start = max(0, match.start() - 250)
+            window_end = min(len(stripped), match.end() + 250)
+            if not _ADMIN_KEYWORDS_RE.search(stripped[window_start:window_end]):
+                continue
+            prop = match.group(1)
+            spoof_reason = (
+                "DisplayName is entirely player-chosen and can be set to anything"
+                if prop == "DisplayName"
+                else "usernames can be changed and later recycled by a different account"
+            )
             findings.append({
-                "severity": "HIGH",
-                "issue": "The purchase grant is not wrapped in pcall/xpcall — an unhandled error mid-grant risks a paid purchase never reaching the player",
-                "fix": "Wrap the DataStore/grant logic in pcall(function() ... end) and only return PurchaseGranted if it succeeded",
+                "severity": "CRITICAL" if prop == "DisplayName" else "HIGH",
+                "issue": f"Privileged access appears to be gated by comparing player.{prop} to a hardcoded string — {spoof_reason}, so this check can be defeated by any player who sets their {'display name' if prop == 'DisplayName' else 'username'} to the expected value",
+                "fix": "Compare player.UserId to a hardcoded numeric ID (or table of IDs) instead — UserId is assigned once per account and cannot be changed by the player",
             })
 
         return {"findings": findings, "total_issues": len(findings)}
