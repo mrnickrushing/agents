@@ -1,4 +1,5 @@
 import json
+import sys
 
 from agents.cli import MAX_FILE_BYTES, _entry_findings, _format_report, _inline_local_imports, _run_scan
 
@@ -70,6 +71,47 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
     assert report["coverage"]["verification_gaps"] == []
 
 
+def test_dependency_free_package_does_not_require_a_lockfile(tmp_path):
+    _write(tmp_path, "package.json", json.dumps({"name": "tool", "scripts": {"test": "true"}}))
+
+    report = _run_scan(str(tmp_path), None)
+
+    assert not any("lockfile" in gap for gap in report["coverage"]["verification_gaps"])
+
+
+def test_package_dependencies_without_a_lockfile_are_reported(tmp_path):
+    _write(tmp_path, "package.json", json.dumps({"dependencies": {"example": "^1.0.0"}}))
+
+    report = _run_scan(str(tmp_path), None)
+
+    assert any("lockfile" in gap for gap in report["coverage"]["verification_gaps"])
+
+
+def test_roblox_luau_and_validation_scripts_receive_targeted_checks(tmp_path):
+    _write(tmp_path, "src/module.luau", "--!strict\nreturn table.freeze({ ready = true })\n")
+    _write(tmp_path, "types/standard.d.luau", "declare function task_wait(): ()\n")
+    _write(tmp_path, "scripts/typecheck.mjs", "import { spawnSync } from 'node:child_process';\nspawnSync('luau-lsp', []);\n")
+
+    report = _run_scan(str(tmp_path), None)
+
+    assert "roblox_audit" in report["coverage"]["agents_exercised"]
+    assert report["coverage"]["files_without_targeted_checks"] == []
+
+
+def test_runtime_verification_is_explicit_and_records_result(tmp_path):
+    report = _run_scan(
+        str(tmp_path),
+        None,
+        runtime=True,
+        runtime_command=[sys.executable, "-c", "print('runtime ok')"],
+    )
+
+    runtime = report["coverage"]["runtime_verification"]
+    assert runtime["status"] == "passed"
+    assert "runtime ok" in runtime["output_tail"]
+    assert report["coverage"]["confidence"] == "static-plus-runtime-verified"
+
+
 def test_discovery_ignores_dangerous_api_names_in_comments_and_strings(tmp_path):
     _write(
         tmp_path,
@@ -139,7 +181,7 @@ def test_human_report_does_not_hide_static_scan_boundary(tmp_path):
     rendered = _format_report(_run_scan(str(tmp_path), None))
 
     assert "Production code files with no specialized check: 1" in rendered
-    assert "Runtime verification: not executed" in rendered
+    assert "Runtime verification: not requested" in rendered
 
 
 def test_typescript_source_resolves_from_esm_js_import(tmp_path):
