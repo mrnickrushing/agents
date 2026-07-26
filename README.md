@@ -2,9 +2,15 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twelve specialized agents (71 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Twelve specialized agents (73 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
+
+## 🆕 Version 2.8.0 — Runtime-aware Roblox scans
+
+- **Dependency-aware reproducibility gaps**: a dependency-free `package.json` no longer produces a misleading missing-lockfile warning; projects with declared dependencies still require a recognized lockfile.
+- **Roblox project-script coverage**: Node validation/build scripts that spawn commands receive a dedicated safety check, so Roblox projects no longer leave `scripts/typecheck.mjs` outside specialized coverage.
+- **Opt-in runtime verification**: `scan --runtime` runs the declared `npm test` script without a shell, or an explicit `--runtime-command`, and records the exit code, duration, and bounded output tail. Runtime execution is opt-in because it executes project code.
 
 ## 🆕 Version 2.7.0 — Roblox/Luau coverage expansion
 
@@ -93,6 +99,11 @@ python -m agents.cli run security_audit scan_dependencies --file package_json=ba
 # Auto-discover relevant files in a project and run the matching checks
 python -m agents.cli scan --path ~/Vitality
 python -m agents.cli scan --path ~/shield-ai --agents security_audit,auth_security --out report.json
+
+# Run static checks plus an explicitly authorized project test command
+python -m agents.cli scan --path ~/lastlight --runtime --no-triage --no-record
+# Or provide a command when the project has no npm test script
+python -m agents.cli scan --path ~/lastlight --runtime --runtime-command 'npm run test:luau' --no-triage --no-record
 ```
 
 `scan` walks the project (skipping dependencies, generated output, caches, and virtual environments), matches files by name or executable evidence, runs every applicable deterministic review, and prints a severity-sorted report. Both forms are supported: `scan --path ~/project` and `scan ~/project`.
@@ -120,7 +131,7 @@ On the next unchanged scan, prior feedback is printed as `learned:` evidence and
 
 The evaluation output calls confirmed findings divided by all human-labeled findings **actionable precision**. It also compares model triage with human verdicts and breaks results down by detector. It does not claim recall: measuring missed findings requires a separate corpus containing known vulnerabilities and known-clean files.
 
-The JSON report's `coverage` object is part of the result, not decoration. Before treating a clean run as meaningful, require `tool_errors: 0`, no `skipped_files`, no `verification_gaps`, and review `agents_not_applicable` plus production `files_without_targeted_checks`. `runtime_verification` remains `not_executed`: this command does not run project code, tests, type-checkers, linters, builds, advisory databases, or external services. Static analysis cannot prove the absence of runtime, integration, environment, or product-logic bugs; the confidence label makes that boundary explicit instead of presenting “no findings” as a guarantee.
+The JSON report's `coverage` object is part of the result, not decoration. Before treating a clean run as meaningful, require `tool_errors: 0`, no `skipped_files`, no `verification_gaps`, and review `agents_not_applicable` plus production `files_without_targeted_checks`. Runtime execution is never implicit: without `--runtime`, `runtime_verification.status` is `not_requested`; with it, the report records the argv, exit code, duration, and bounded output tail. Static analysis and project tests still cannot prove the absence of integration, environment, Studio, or product-logic bugs; the confidence label makes that boundary explicit instead of presenting “no findings” as a guarantee.
 
 ### Triage — cut the false positives with a real model
 

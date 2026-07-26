@@ -31,8 +31,11 @@ import io
 import json
 import os
 import re
+import shlex
 import sqlite3
+import subprocess
 import sys
+import time
 import tokenize
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -409,6 +412,8 @@ TOOL_EXTENSION_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "review_receipt_processing": (".lua", ".luau"),
     "audit_text_filtering": (".lua", ".luau"),
     "audit_admin_backdoor": (".lua", ".luau"),
+    "review_validation_script": (".mjs", ".cjs", ".js"),
+    "review_luau_module": (".lua", ".luau"),
 }
 
 # Each rule: (file_glob_or_None, content_regex_or_None, agent_key, tool_name, arg_builder)
@@ -539,6 +544,10 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"code": c}),
     (None, r"\.\s*(?:Name|DisplayName)\s*==\s*[\"']", "roblox_audit", "audit_admin_backdoor",
      lambda p, c: {"code": c}),
+    (None, r"\b(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(", "roblox_audit", "review_validation_script",
+     lambda p, c: {"code": c, "script_name": os.path.relpath(p)}),
+    (None, r".", "roblox_audit", "review_luau_module",
+     lambda p, c: {"code": c, "module_name": os.path.relpath(p)}),
 ]
 
 
@@ -658,7 +667,73 @@ def _project_handles_async_route_errors(path: str, root: str) -> bool:
     return False
 
 
-def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
+def _project_runtime_command(root: str) -> Optional[List[str]]:
+    """Return a safe default project verification command when one is declared."""
+    package_path = os.path.join(root, "package.json")
+    try:
+        with open(package_path, encoding="utf-8") as fh:
+            package = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return None
+    scripts = package.get("scripts") if isinstance(package, dict) else None
+    if isinstance(scripts, dict) and isinstance(scripts.get("test"), str):
+        return ["npm", "test"]
+    return None
+
+
+def _run_runtime_verification(
+    root: str,
+    command: Optional[List[str]],
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    if not command:
+        return {
+            "status": "not_configured",
+            "reason": "No project test script or explicit runtime command was found.",
+        }
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = "\n".join(part for part in (exc.stdout, exc.stderr) if part)
+        return {
+            "status": "failed",
+            "reason": f"Runtime verification timed out after {timeout_seconds}s.",
+            "command": command,
+            "duration_seconds": round(time.monotonic() - started, 3),
+            "output_tail": output[-4000:],
+        }
+    except OSError as exc:
+        return {
+            "status": "failed",
+            "reason": f"Could not start runtime verification: {exc}",
+            "command": command,
+            "duration_seconds": round(time.monotonic() - started, 3),
+        }
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    return {
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "command": command,
+        "exit_code": completed.returncode,
+        "duration_seconds": round(time.monotonic() - started, 3),
+        "output_tail": output[-4000:],
+    }
+
+
+def _run_scan(
+    root: str,
+    agent_filter: Optional[List[str]],
+    runtime: bool = False,
+    runtime_command: Optional[List[str]] = None,
+    runtime_timeout: int = 120,
+) -> Dict[str, Any]:
     root = os.path.realpath(os.path.expanduser(root))
     results: List[Dict[str, Any]] = []
     diagnostics: List[Dict[str, Any]] = []
@@ -773,13 +848,41 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
     if code_files and not any(p.startswith(".github/workflows/") for p in seen_paths):
         verification_gaps.append("No GitHub Actions workflow was found; tests and checks may not be enforced on every change.")
     package_files = [p for p in seen_paths if os.path.basename(p) == "package.json"]
-    has_lockfile = any(os.path.basename(p) in {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"} for p in seen_paths)
-    if package_files and not has_lockfile:
+    lockfile_names = {
+        "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock",
+        "bun.lock", "bun.lockb",
+    }
+    has_lockfile = any(os.path.basename(p) in lockfile_names for p in seen_paths)
+    package_has_dependencies = False
+    for package_file in package_files:
+        try:
+            with open(os.path.join(root, package_file), encoding="utf-8") as fh:
+                package = json.load(fh)
+            if isinstance(package, dict):
+                package_has_dependencies = package_has_dependencies or any(
+                    isinstance(package.get(key), dict) and bool(package.get(key))
+                    for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+                )
+        except (OSError, ValueError, TypeError):
+            continue
+    if package_files and package_has_dependencies and not has_lockfile:
         verification_gaps.append("package.json exists without a recognized lockfile; dependency resolution is not reproducible.")
 
     scannable_agents = {rule[2] for rule in RULES}
     if agent_filter:
         scannable_agents &= set(agent_filter)
+    runtime_result = {"status": "not_requested"}
+    if runtime:
+        runtime_result = _run_runtime_verification(
+            root,
+            runtime_command or _project_runtime_command(root),
+            max(1, runtime_timeout),
+        )
+        if runtime_result["status"] == "not_configured":
+            verification_gaps.append("Runtime verification was requested but no test script or explicit command was configured.")
+        elif runtime_result["status"] == "failed":
+            verification_gaps.append("Runtime verification failed; inspect runtime_verification.output_tail.")
+
     coverage = {
         "files_considered": len(seen_paths),
         "text_files_scanned": len([p for p in seen_paths if _is_text_candidate(p)]),
@@ -787,7 +890,10 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
         "test_files": len(test_files),
         "targeted_files": len(targeted_files),
         "files_without_targeted_checks": sorted(
-            p for p in code_files if p not in targeted_files and p not in test_files
+            p for p in code_files
+            if p not in targeted_files
+            and p not in test_files
+            and not p.endswith(".d.luau")
         )[:100],
         "checks_run": checks_run,
         "agents_exercised": sorted(agents_exercised),
@@ -796,10 +902,11 @@ def _run_scan(root: str, agent_filter: Optional[List[str]]) -> Dict[str, Any]:
         "skipped_files": diagnostics,
         "tool_errors": tool_errors,
         "verification_gaps": verification_gaps,
-        "runtime_verification": "not_executed",
+        "runtime_verification": runtime_result,
     }
     coverage["confidence"] = (
-        "incomplete" if diagnostics or tool_errors else
+        "incomplete" if diagnostics or tool_errors or runtime_result["status"] == "failed" else
+        "static-plus-runtime-verified" if runtime_result["status"] == "passed" else
         "static-plus-triage-pending" if results else
         "static-clean-runtime-unverified"
     )
@@ -849,7 +956,14 @@ def _format_report(report: Dict[str, Any]) -> str:
         lines.append("Verification gaps:")
         for gap in coverage["verification_gaps"]:
             lines.append(f"  - {gap}")
-    if coverage.get("runtime_verification") == "not_executed":
+    runtime_result = coverage.get("runtime_verification", {})
+    if isinstance(runtime_result, dict):
+        runtime_status = runtime_result.get("status")
+        if runtime_status == "not_requested":
+            lines.append("Runtime verification: not requested (use --runtime to run the project's declared test command)")
+        else:
+            lines.append(f"Runtime verification: {runtime_status}")
+    elif runtime_result == "not_executed":
         lines.append("Runtime verification: not executed (tests/typecheck/lint/build/external services are outside this static scan)")
     if coverage:
         lines.append("")
@@ -937,7 +1051,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if unknown:
             raise SystemExit(f"Unknown scan agent(s): {', '.join(unknown)}. Available: {', '.join(sorted(AGENTS))}")
     scan_path = args.path_flag or args.path or "."
-    report = _run_scan(scan_path, agent_filter)
+    runtime_command = shlex.split(args.runtime_command) if args.runtime_command else None
+    report = _run_scan(
+        scan_path,
+        agent_filter,
+        runtime=args.runtime,
+        runtime_command=runtime_command,
+        runtime_timeout=args.runtime_timeout,
+    )
 
     triage_on = args.triage
     if triage_on is None:
@@ -1060,6 +1181,18 @@ def main() -> None:
     )
     p_scan.add_argument("--triage-provider", choices=["anthropic", "openai"], help="Provider for triage (default: auto-detect from env)")
     p_scan.add_argument("--triage-model", help="Override the default triage model")
+    p_scan.add_argument(
+        "--runtime", action="store_true",
+        help="Opt in to runtime verification; runs the project's test script or --runtime-command",
+    )
+    p_scan.add_argument(
+        "--runtime-command",
+        help="Explicit runtime command for --runtime (parsed without a shell; example: 'npm test')",
+    )
+    p_scan.add_argument(
+        "--runtime-timeout", type=int, default=120,
+        help="Runtime verification timeout in seconds (default: %(default)s)",
+    )
     p_scan.add_argument(
         "--db", default=default_database_path(),
         help="Evolution SQLite database (default: %(default)s or AGENTS_EVOLUTION_DB)",

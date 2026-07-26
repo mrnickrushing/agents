@@ -350,6 +350,30 @@ file, so treat findings as leads to verify against the actual script context, no
                     "required": ["code"],
                 },
             },
+            {
+                "name": "review_validation_script",
+                "description": "Review a Roblox project's Node validation/build script for unsafe dynamic command execution.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The Node validation or build script source"},
+                        "script_name": {"type": "string", "description": "The relative script path"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "review_luau_module",
+                "description": "Review every Roblox Luau module for high-signal unsafe dynamic or outbound execution patterns.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The Luau source"},
+                        "module_name": {"type": "string", "description": "The relative module path"},
+                    },
+                    "required": ["code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -363,7 +387,43 @@ file, so treat findings as leads to verify against the actual script context, no
             "review_receipt_processing": self._review_receipt_processing,
             "audit_text_filtering": self._audit_text_filtering,
             "audit_admin_backdoor": self._audit_admin_backdoor,
+            "review_validation_script": self._review_validation_script,
+            "review_luau_module": self._review_luau_module,
         }
+
+    def _review_validation_script(self, code: str, script_name: str = "") -> Dict[str, Any]:
+        """Review Node validation/build scripts for unsafe command construction."""
+        findings = []
+        if re.search(r"\b(?:exec|execSync)\s*\(\s*`[^`]*\$\{", code):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Validation/build script interpolates values into a shell command.",
+                "fix": "Use execFile/execFileSync with an argument array and validate every value before spawning a command.",
+            })
+        if re.search(r"\b(?:exec|execSync)\s*\(\s*[^,\n]+\+", code):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "Validation/build script concatenates a shell command string.",
+                "fix": "Prefer execFile/execFileSync with explicit argv to avoid shell interpretation.",
+            })
+        return {"findings": findings, "script": script_name}
+
+    def _review_luau_module(self, code: str, module_name: str = "") -> Dict[str, Any]:
+        """Review a Luau module for high-signal unsafe execution patterns."""
+        findings = []
+        if re.search(r"\b(?:loadstring|LoadString)\s*\(", code):
+            findings.append({
+                "severity": "CRITICAL",
+                "issue": "Luau dynamically executes source with loadstring.",
+                "fix": "Remove dynamic code execution and route behavior through fixed server-owned modules.",
+            })
+        if re.search(r"\bHttpGet\s*\(", code) and "HttpService" in code:
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Luau performs an outbound HTTP request from a source module.",
+                "fix": "Keep external requests behind a server-only, allowlisted adapter with timeout, validation, and failure handling.",
+            })
+        return {"findings": findings, "module": module_name}
 
     # ── Remote trust boundary ────────────────────────────────────────
 
