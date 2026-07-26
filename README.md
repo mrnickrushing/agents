@@ -2,9 +2,19 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twelve specialized agents (69 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Twelve specialized agents (71 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
+
+## 🆕 Version 2.7.0 — Roblox/Luau coverage expansion
+
+Grounded against Roblox's own Creator Hub docs (security tactics, DataStore request-budget limits, TextService/TextChatService filtering, MarketplaceService purchase flows) rather than assumption, plus a fix for a stripping bug the new checks exposed.
+
+- **Two new checks**: `audit_text_filtering` catches a remote handler that re-broadcasts a textual-looking argument (`FireAllClients`/`FireClient`) with no `TextService`/`TextChatService` filtering call — unfiltered player-authored text reaching other players violates Roblox's content policy. `audit_admin_backdoor` catches privileged/admin access gated by comparing `player.Name`/`player.DisplayName` to a hardcoded string instead of `player.UserId` — `DisplayName` is entirely player-chosen, and there are real incidents of someone renaming themselves to match a name-based owner check and getting full admin.
+- **`audit_datastore_usage` now catches request-budget risk**: a DataStore call inside a loop over many players/keys with no `GetRequestBudgetForRequestType` check or `task.wait` stagger — the request budget is shared per experience across every server, so one server bursting past it throttles saves everywhere.
+- **`review_receipt_processing` now catches Developer Product grants issued from `PromptProductPurchaseFinished`** instead of `ProcessReceipt` — Roblox's own guidance is explicit that the prompt-finished event only reflects UI closure, not a confirmed backend transaction, so granting there can pay out a purchase that later fails or miss one that settles after the prompt closes. (Game Passes are different — `PromptGamePassPurchaseFinished` + a rejoin-time `UserOwnsGamePassAsync` check is the correct pattern for those, and isn't flagged.)
+- **`audit_performance_patterns` now catches `FindFirstChild("literal")` inside a per-frame connection**, the same caching gap as the existing `game:GetService(` check.
+- **Bug fix**: the Luau noise-stripper used by every block-boundary check was deleting string literals *including their quote characters*, so any check that needs to know a literal is present (not just absent-of-comment-noise) — the new admin-backdoor and FindFirstChild checks — could never match. String literals now collapse to an empty `""`/`''` instead of disappearing outright.
 
 ## 🆕 Version 2.6.0 — Roblox/Luau support
 
@@ -64,7 +74,7 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 | **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
 | **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |
 | **InfraMonitorAgent** ⭐ NEW | OpenAI, Anthropic | Sentry setup (DSN, sampling, PII), health-check depth, React error boundary coverage, alert rule design |
-| **RobloxAuditAgent** ⭐ NEW | OpenAI, Anthropic | RemoteEvent/RemoteFunction trust boundary and validation, client-side writes to authoritative state, Rojo project-structure leaks (server source shipped to clients), DataStore pcall/UpdateAsync/BindToClose safety, connection-leak detection, deprecated wait/spawn/delay and unyielding loops, MarketplaceService.ProcessReceipt review |
+| **RobloxAuditAgent** ⭐ NEW | OpenAI, Anthropic | RemoteEvent/RemoteFunction trust boundary and validation, client-side writes to authoritative state, Rojo project-structure leaks (server source shipped to clients), DataStore pcall/UpdateAsync/BindToClose/request-budget safety, connection-leak and per-frame caching detection, deprecated wait/spawn/delay and unyielding loops, MarketplaceService.ProcessReceipt/PromptProductPurchaseFinished review, TextService/TextChatService filtering gaps, Name/DisplayName-based admin backdoors |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
 | **UIGenerationAgent** ⭐ UPGRADED | Anthropic (Claude) | World-class UI design — design system/theme generation (color theory, type scale, motion, elevation), React/TypeScript component generation, multi-turn refinement, accessibility validation |
 

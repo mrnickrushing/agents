@@ -67,6 +67,9 @@ def test_datastore_call_wrapped_in_pcall_with_update_and_bindtoclose_is_clean():
     code = """
 game:BindToClose(function()
     for _, player in Players:GetPlayers() do
+        while DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync) < 1 do
+            task.wait(0.1)
+        end
         pcall(function()
             store:UpdateAsync(key(player), function(old)
                 return merge(old, snapshot(player))
@@ -282,3 +285,177 @@ end
 """
     result = RobloxAuditAgent()._audit_performance_patterns(code)
     assert not any("while true do" in f["issue"] for f in result["findings"])
+
+
+# ── Text filtering ─────────────────────────────────────────────────────
+
+
+def test_unfiltered_chat_text_broadcast_is_flagged():
+    code = """
+SendMessage.OnServerEvent:Connect(function(player, chatText)
+    SendMessage:FireAllClients(player, chatText)
+end)
+"""
+    issues = _issues(RobloxAuditAgent()._audit_text_filtering(code))
+    assert any("no visible TextService/TextChatService filtering" in issue for issue in issues)
+
+
+def test_filtered_chat_text_broadcast_is_clean():
+    code = """
+SendMessage.OnServerEvent:Connect(function(player, chatText)
+    local filtered = TextService:FilterStringAsync(chatText, player.UserId)
+    SendMessage:FireAllClients(player, filtered)
+end)
+"""
+    result = RobloxAuditAgent()._audit_text_filtering(code)
+    assert result["findings"] == []
+
+
+def test_broadcasting_non_textual_data_is_not_flagged():
+    code = """
+UpdatePosition.OnServerEvent:Connect(function(player, position)
+    UpdatePosition:FireAllClients(player, position)
+end)
+"""
+    result = RobloxAuditAgent()._audit_text_filtering(code)
+    assert result["findings"] == []
+
+
+# ── Admin backdoor ──────────────────────────────────────────────────────
+
+
+def test_name_based_admin_check_is_flagged_high():
+    code = """
+if player.Name == "TheOwner" then
+    admin.grantAllPowers(player)
+end
+"""
+    issues = _issues(RobloxAuditAgent()._audit_admin_backdoor(code))
+    assert any("player.Name" in issue and "hardcoded string" in issue for issue in issues)
+
+
+def test_displayname_based_admin_check_is_flagged_critical():
+    code = """
+if player.DisplayName == "TheOwner" then
+    admin.grantAllPowers(player)
+end
+"""
+    result = RobloxAuditAgent()._audit_admin_backdoor(code)
+    assert any(f["severity"] == "CRITICAL" for f in result["findings"])
+
+
+def test_unrelated_name_comparison_is_not_flagged():
+    code = """
+if player.Name == "TestBot123" then
+    skipIntroCutscene(player)
+end
+"""
+    result = RobloxAuditAgent()._audit_admin_backdoor(code)
+    assert result["findings"] == []
+
+
+def test_userid_based_admin_check_has_nothing_to_flag():
+    code = """
+if player.UserId == 123456789 then
+    admin.grantAllPowers(player)
+end
+"""
+    result = RobloxAuditAgent()._audit_admin_backdoor(code)
+    assert result["findings"] == []
+    assert result["note"] == "No player.Name/DisplayName string comparison found in this snippet"
+
+
+# ── DataStore request budget ────────────────────────────────────────────
+
+
+def test_datastore_call_in_unstaggered_player_loop_is_flagged():
+    code = """
+for _, player in Players:GetPlayers() do
+    pcall(function()
+        store:SetAsync(tostring(player.UserId), getData(player))
+    end)
+end
+"""
+    issues = _issues(RobloxAuditAgent()._audit_datastore_usage(code))
+    assert any("request-budget check" in issue for issue in issues)
+
+
+def test_datastore_call_in_loop_with_stagger_is_clean_on_that_check():
+    code = """
+for _, player in Players:GetPlayers() do
+    pcall(function()
+        store:SetAsync(tostring(player.UserId), getData(player))
+    end)
+    task.wait(0.05)
+end
+"""
+    result = RobloxAuditAgent()._audit_datastore_usage(code)
+    assert not any("request-budget check" in f["issue"] for f in result["findings"])
+
+
+def test_datastore_call_hidden_behind_a_function_call_in_the_loop_is_not_flagged():
+    # Mirrors Last Light's ProfileService.luau BindToClose pattern: the loop
+    # only calls self:save(player), and the real DataStore call lives inside
+    # a different method this static check can't see — matching the
+    # documented cross-file-dispatch limitation rather than a bug.
+    code = """
+for player in self._profiles do
+    task.spawn(function()
+        self:save(player)
+    end)
+end
+"""
+    result = RobloxAuditAgent()._audit_datastore_usage(code)
+    assert result["findings"] == []
+
+
+# ── PromptProductPurchaseFinished misuse ────────────────────────────────
+
+
+def test_granting_from_prompt_purchase_finished_is_flagged_even_without_process_receipt():
+    code = """
+MarketplaceService.PromptProductPurchaseFinished:Connect(function(player, productId, isPurchased)
+    if isPurchased then
+        player.leaderstats.Coins.Value += 100
+    end
+end)
+"""
+    result = RobloxAuditAgent()._review_receipt_processing(code)
+    assert any("appears to grant the reward directly" in f["issue"] for f in result["findings"])
+
+
+def test_prompt_purchase_finished_used_only_for_ui_feedback_is_clean():
+    code = """
+MarketplaceService.PromptProductPurchaseFinished:Connect(function(player, productId, isPurchased)
+    if isPurchased then
+        showThankYouToast(player)
+    end
+end)
+"""
+    result = RobloxAuditAgent()._review_receipt_processing(code)
+    assert result["findings"] == []
+
+
+# ── Per-frame FindFirstChild caching ─────────────────────────────────────
+
+
+def test_find_first_child_with_literal_name_in_per_frame_connection_is_flagged():
+    code = """
+RunService.Heartbeat:Connect(function()
+    local part = workspace:FindFirstChild("ImportantPart")
+    part:Update()
+end)
+"""
+    issues = _issues(RobloxAuditAgent()._audit_performance_patterns(code))
+    assert any("FindFirstChild(" in issue for issue in issues)
+
+
+def test_find_first_child_with_variable_name_is_not_flagged():
+    code = """
+RunService.Heartbeat:Connect(function()
+    local part = workspace:FindFirstChild(dynamicName)
+    part:Update()
+end)
+"""
+    result = RobloxAuditAgent()._audit_performance_patterns(code)
+    assert not any("FindFirstChild(" in f["issue"] for f in result["findings"])
