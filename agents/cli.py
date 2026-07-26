@@ -43,6 +43,7 @@ from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.mobile_deploy import MobileDeployAgent
 from agents.railway_deploy import RailwayDeployAgent
+from agents.roblox_audit import RobloxAuditAgent
 from agents.scaffolder import ScaffolderAgent
 from agents.security_audit import SecurityAuditAgent
 from agents.stripe_billing import StripeBillingAgent
@@ -62,6 +63,7 @@ AGENTS: Dict[str, type] = {
     "api_architect": APIArchitectAgent,
     "database_architect": DatabaseArchitectAgent,
     "infra_monitor": InfraMonitorAgent,
+    "roblox_audit": RobloxAuditAgent,
 }
 
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
@@ -70,6 +72,9 @@ EXCLUDED_DIRS = {
     "node_modules", ".git", "dist", "build", ".expo", ".next", "__pycache__",
     ".venv", "venv", ".pytest_cache", "Pods", ".gradle", ".railway", ".eas",
     "coverage", ".turbo", "vendor", "artifacts",
+    # Wally (Roblox package manager) dependency output — the Roblox analog
+    # of node_modules, not first-party source.
+    "Packages", "DevPackages", "ServerPackages",
 }
 MAX_FILE_BYTES = 1_000_000
 
@@ -78,7 +83,7 @@ MAX_FILE_BYTES = 1_000_000
 # package.json, or "client_secret"/"Face ID" appearing in prose in CLAUDE.md,
 # matched the same regexes as real jwt.verify()/webhook-handler code and
 # produced nonsense findings against files that have no logic to review.
-CODE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".vue", ".svelte"}
+CODE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".vue", ".svelte", ".lua", ".luau"}
 NON_CODE_BASENAMES = {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
 TEXT_EXTENSIONS = CODE_EXTENSIONS | {
     ".json", ".jsonc", ".yaml", ".yml", ".toml", ".sql", ".md", ".txt",
@@ -206,6 +211,16 @@ def _discovery_text(path: str, content: str, tool_name: str) -> str:
     if tool_name in RAW_DISCOVERY_TOOLS:
         return content
     ext = os.path.splitext(path)[1].lower()
+    if ext in (".lua", ".luau"):
+        # Luau comments/strings use different syntax than the C-style rules
+        # below (-- and --[[ ]] rather than // and /* */); left unhandled,
+        # a comment or docstring mentioning e.g. "GetAsync(" would look like
+        # a real DataStore call to every rule below.
+        text = re.sub(r"--\[(=*)\[.*?\]\1\]", lambda m: "\n" * m.group(0).count("\n"), content, flags=re.DOTALL)
+        text = re.sub(r"--[^\n]*", "", text)
+        text = re.sub(r"\[(=*)\[.*?\]\1\]", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.DOTALL)
+        text = re.sub(r"([\"'])(?:\\.|(?!\1).)*\1", "", text)
+        return text
     if ext == ".py":
         try:
             tokens = []
@@ -386,6 +401,12 @@ TOOL_EXTENSION_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "review_express_route": (".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs"),
     "validate_accessibility": (".tsx", ".jsx"),
     "review_stripe_webhook": (".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs"),
+    "audit_remote_validation": (".lua", ".luau"),
+    "audit_server_authority": (".lua", ".luau"),
+    "audit_datastore_usage": (".lua", ".luau"),
+    "audit_connection_leaks": (".lua", ".luau"),
+    "audit_performance_patterns": (".lua", ".luau"),
+    "review_receipt_processing": (".lua", ".luau"),
 }
 
 # Each rule: (file_glob_or_None, content_regex_or_None, agent_key, tool_name, arg_builder)
@@ -498,6 +519,20 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"config_text": c, "filename": os.path.basename(p)}),
     ("*build*.log", r"(?i)error|failed|exception|timeout|ENOENT|ENOMEM|EADDRINUSE", "railway_deploy", "diagnose_build_failure",
      lambda p, c: {"build_log": c}),
+    ("*.project.json", None, "roblox_audit", "review_rojo_project_structure",
+     lambda p, c: {"project_json": c}),
+    (None, r"OnServerEvent\s*:\s*Connect\s*\(|OnServerInvoke\s*=", "roblox_audit", "audit_remote_validation",
+     lambda p, c: {"code": c}),
+    (None, r"\bLocalPlayer\b", "roblox_audit", "audit_server_authority",
+     lambda p, c: {"code": c, "is_client_script": True}),
+    (None, r"[:.](?:Get|Set|Update|Increment|Remove)Async\s*\(", "roblox_audit", "audit_datastore_usage",
+     lambda p, c: {"code": c}),
+    (None, r":\s*Connect\s*\(\s*function", "roblox_audit", "audit_connection_leaks",
+     lambda p, c: {"code": c}),
+    (None, r"(?<!task\.)\b(?:wait|spawn|delay)\s*\(|(?:Heartbeat|RenderStepped|Stepped)\s*:\s*Connect\s*\(|\bwhile\s+true\s+do\b", "roblox_audit", "audit_performance_patterns",
+     lambda p, c: {"code": c}),
+    (None, r"ProcessReceipt", "roblox_audit", "review_receipt_processing",
+     lambda p, c: {"code": c}),
 ]
 
 
