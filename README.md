@@ -2,9 +2,15 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Eleven specialized agents (62 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Twelve specialized agents (69 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
+
+## 🆕 Version 2.6.0 — Roblox/Luau support
+
+- **🎮 Roblox Audit Agent**: the first non-web/mobile agent in this project. Reviews Roblox/Luau source and Rojo project files for the exploit surface that's specific to Roblox — RemoteEvent/RemoteFunction handlers that trust client-supplied player identity instead of the engine-trusted sender argument, missing input validation/rate limiting, client-side writes to authoritative state (leaderstats, DataStore), a Rojo `*.project.json` tree that maps server-only source into a client-visible service (ReplicatedStorage, StarterPlayer, StarterGui, StarterPack, Workspace, ReplicatedFirst) where any exploiter can read it, DataStore calls missing pcall/xpcall or a `BindToClose` save, a `GetAsync`+`SetAsync` read-modify-write race that should be `UpdateAsync`, signal `:Connect(` leaks (a per-frame RunService signal nested in `PlayerAdded`/`CharacterAdded` with no `:Disconnect(` anywhere, or a connection made inside a loop body), deprecated `wait()`/`spawn()`/`delay()`, an unyielding `while true do`, and `MarketplaceService.ProcessReceipt` callbacks missing the required `Enum.ProductPurchaseDecision` return, `PurchaseId` idempotency, or a pcall-wrapped grant.
+- **Real Lua block boundaries, not character windows**: every other agent's "is X inside Y" checks use a fixed character window after the trigger, which is good enough for JS/Python's brace- and indentation-heavy style but silently misjudged Lua's `do`/`if`/`function`/`repeat` ... `end`/`until` blocks (initial windowed drafts of this agent both missed a real bug placed just past the window and, in the other direction, flagged code that ran *after* a loop as if it were still inside it). `roblox_audit` walks real block-opening/closing keywords with a stack to find the exact boundary instead of guessing a window size.
+- **CLI scan support**: `.lua`/`.luau` are now recognized code extensions and `*.project.json` triggers the Rojo structure check, so `agents.cli scan --path ~/your-roblox-game` picks these up automatically alongside the existing agents. Wally's `Packages`/`DevPackages`/`ServerPackages` dependency output is excluded the same way `node_modules` is.
 
 ## 🧠 Version 2.5.0 — Agents That Learn
 
@@ -58,6 +64,7 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 | **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
 | **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |
 | **InfraMonitorAgent** ⭐ NEW | OpenAI, Anthropic | Sentry setup (DSN, sampling, PII), health-check depth, React error boundary coverage, alert rule design |
+| **RobloxAuditAgent** ⭐ NEW | OpenAI, Anthropic | RemoteEvent/RemoteFunction trust boundary and validation, client-side writes to authoritative state, Rojo project-structure leaks (server source shipped to clients), DataStore pcall/UpdateAsync/BindToClose safety, connection-leak detection, deprecated wait/spawn/delay and unyielding loops, MarketplaceService.ProcessReceipt review |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
 | **UIGenerationAgent** ⭐ UPGRADED | Anthropic (Claude) | World-class UI design — design system/theme generation (color theory, type scale, motion, elevation), React/TypeScript component generation, multi-turn refinement, accessibility validation |
 

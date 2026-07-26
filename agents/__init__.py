@@ -24,6 +24,7 @@ from agents.mobile_deploy import MobileDeployAgent
 from agents.api_architect import APIArchitectAgent
 from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
+from agents.roblox_audit import RobloxAuditAgent
 
 __all__ = [
     "SecurityAuditAgent",
@@ -37,6 +38,7 @@ __all__ = [
     "APIArchitectAgent",
     "DatabaseArchitectAgent",
     "InfraMonitorAgent",
+    "RobloxAuditAgent",
 ]
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
