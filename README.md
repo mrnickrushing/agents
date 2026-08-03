@@ -12,6 +12,64 @@ Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com
 - **Roblox project-script coverage**: Node validation/build scripts that spawn commands receive a dedicated safety check, so Roblox projects no longer leave `scripts/typecheck.mjs` outside specialized coverage.
 - **Opt-in runtime verification**: `scan --runtime` runs the declared `npm test` script without a shell, or an explicit `--runtime-command`, and records the exit code, duration, and bounded output tail. Runtime execution is opt-in because it executes project code.
 
+## Luau static analysis (`luau-scan`)
+
+Deterministic whole-repository checks for any Roblox/Luau project. **No API
+key, no model call, no network** — it runs in about a second, so it belongs in
+a pre-commit hook or a CI step rather than an agent invocation.
+
+```bash
+pip install -e ~/agents          # once, so it resolves from any repo
+cd ~/my-other-game
+python -m agents.cli luau-scan .                 # human-readable
+python -m agents.cli luau-scan . --json          # machine-readable
+python -m agents.cli luau-scan . --fail-on HIGH  # CI gate (default)
+python -m agents.cli luau-scan . --rules call_arity unresolved_requires
+```
+
+It exists because of a specific outage. A builder function gained a required
+parameter, one call site was not updated, Luau passed `nil`, and the service
+that owned an entire game region failed to initialize — shipping that way
+through nine published versions. The test suite could not catch it: it only
+asserted modules were *present* in the built place, and the type checker ran
+on a platform that could not see the file.
+
+That is not a judgement call a model should be asked to make. It is arithmetic
+on argument counts, so it is done exactly instead.
+
+| Rule | Severity | Catches |
+|---|---|---|
+| `call_arity` | HIGH | Call passing fewer arguments than the function requires |
+| `use_before_definition` | HIGH | `local function` called above its definition (not hoisted) |
+| `unresolved_require` | HIGH | `require` naming a module that no longer exists |
+| `findfirstchild_nil` | HIGH | `FindFirstChild(...)` indexed with no nil check |
+| `player_chatted` | HIGH | `Player.Chatted`, which never fires under TextChatService |
+| `rojo_missing_path` | HIGH | `$path` pointing at a directory that does not exist |
+| `rojo_server_in_client` | HIGH | Server source mapped into a client-visible service |
+| `unprotected_async` | MEDIUM | Datastore/asset/teleport calls with no nearby `pcall` |
+| `unanchored_part` | MEDIUM | Parts built in a file that never sets `Anchored` |
+| `shadow_light_in_loop` | MEDIUM | Shadow-casting lights created in a loop (Future lighting cost) |
+| `connection_leak` | MEDIUM | Per-frame connection whose handle is discarded |
+| `per_frame_allocation` | MEDIUM | `GetChildren`/`GetDescendants` inside a frame callback |
+| `gameplay_clock` | MEDIUM | `os.time()`/`tick()` used for timing that crosses the network |
+| `deprecated_api` | MEDIUM | `:Remove()`, and `Instance.new` parenting before properties |
+| `rojo_lighting_unset` | MEDIUM | `Lighting.Technology` never declared (unsettable from script) |
+| `unread_definition_field` | MEDIUM | Authored content fields nothing ever reads |
+| `deprecated_scheduler` | LOW | `wait`/`spawn`/`delay` globals |
+| `missing_strict_mode` | LOW | Type annotations without `--!strict` |
+| `scattered_asset_ids` | LOW | Inline `rbxassetid` literals outside a registry |
+
+**Precision is the design constraint, not coverage.** A checker that cries
+wolf gets muted, and muting takes the working rules down with it — so every
+rule declines to report when it cannot be sure. Each one is tested twice:
+once that it fires on a real defect, once that it stays silent on correct
+code. On a 153-file production game it reports 13 findings, and the first
+version of the connection rule flagged fourteen correct call sites before
+being tightened.
+
+The same checks are available to `RobloxAuditAgent` as the
+`scan_repository_statically` tool.
+
 ## 🆕 Version 2.7.0 — Roblox/Luau coverage expansion
 
 Grounded against Roblox's own Creator Hub docs (security tactics, DataStore request-budget limits, TextService/TextChatService filtering, MarketplaceService purchase flows) rather than assumption, plus a fix for a stripping bug the new checks exposed.

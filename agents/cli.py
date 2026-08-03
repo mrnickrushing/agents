@@ -1151,11 +1151,58 @@ def cmd_eval(args: argparse.Namespace) -> None:
     print(json.dumps(evaluation, indent=2))
 
 
+def cmd_luau_scan(args: argparse.Namespace) -> None:
+    """Run the deterministic Luau checks over a repository.
+
+    Separate from `run` because it needs no provider, no key and no network,
+    which is the whole point: it belongs in a pre-commit hook or a CI step
+    where an agent invocation would be too slow and too expensive to justify.
+    """
+    from agents.luau_static import analyze_repository
+
+    report = analyze_repository(args.root, args.rules)
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(f"Scanned {report['files_scanned']} Luau files in {report['root']}")
+        counts = report["by_severity"]
+        print(f"  HIGH {counts['HIGH']}   MEDIUM {counts['MEDIUM']}   LOW {counts['LOW']}")
+        if not report["findings"]:
+            print("\nNo findings.")
+        for finding in report["findings"]:
+            print(f"\n[{finding['severity']}] {finding['rule']}")
+            print(f"  {finding['file']}:{finding['line']}")
+            print(f"  {finding['issue']}")
+            print(f"  fix: {finding['fix']}")
+
+    if args.fail_on != "never":
+        threshold = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}[args.fail_on]
+        order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        if any(order.get(f["severity"], 3) <= threshold for f in report["findings"]):
+            raise SystemExit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m agents.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="List all agents and their tools").set_defaults(func=cmd_list)
+
+    p_luau = sub.add_parser(
+        "luau-scan",
+        help="Deterministic Luau/Rojo static analysis of a repository (no API key required)",
+    )
+    p_luau.add_argument("root", nargs="?", default=".", help="Repository root (default: cwd)")
+    p_luau.add_argument("--rules", nargs="*", help="Only run these rules")
+    p_luau.add_argument("--json", action="store_true", help="Emit raw JSON")
+    p_luau.add_argument(
+        "--fail-on",
+        choices=["HIGH", "MEDIUM", "LOW", "never"],
+        default="HIGH",
+        help="Exit non-zero when a finding at or above this severity exists (default: HIGH)",
+    )
+    p_luau.set_defaults(func=cmd_luau_scan)
 
     p_run = sub.add_parser("run", help="Invoke a single tool handler directly")
     p_run.add_argument("agent", choices=sorted(AGENTS))
