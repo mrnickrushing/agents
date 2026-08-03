@@ -229,7 +229,9 @@ def check_use_before_definition(path: str, source: str) -> List[Finding]:
 def check_deprecated_scheduler(path: str, source: str) -> List[Finding]:
     text = strip_noise(source)
     findings: List[Finding] = []
-    for match in re.finditer(r"(?<![\w.])(wait|spawn|delay)\s*\(", text):
+    # A method named spawn/wait/delay is not the deprecated global. Excluding
+    # only `.` missed `self._enemyService:spawn(...)`.
+    for match in re.finditer(r"(?<![\w.:])(wait|spawn|delay)\s*\(", text):
         name = match.group(1)
         findings.append(Finding(
             "deprecated_scheduler", "LOW", path, line_of(text, match.start()),
@@ -273,6 +275,10 @@ def check_unprotected_async(path: str, source: str) -> List[Finding]:
 
 def check_player_chatted(path: str, source: str) -> List[Finding]:
     text = strip_noise(source)
+    # Keeping Chatted next to a registered TextChatCommand is the correct
+    # belt-and-braces: only one of the two can fire in a given experience.
+    if "TextChatCommand" in source:
+        return []
     findings: List[Finding] = []
     for match in re.finditer(r"\.Chatted\s*:\s*Connect", text):
         findings.append(Finding(
@@ -341,6 +347,12 @@ def check_connection_leaks(path: str, source: str) -> List[Finding]:
         return []
     findings: List[Finding] = []
     for match in re.finditer(r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text):
+        # A connection opened during service startup lives as long as the
+        # server does. There is nothing to leak into, because the thing it
+        # serves never goes away.
+        preceding = text[max(0, match.start() - 2000) : match.start()]
+        if re.search(r"function \w+[.:](Start|Init)\s*\(", preceding):
+            continue
         # A connection assigned to something is a connection someone kept a
         # handle on, which is the whole prerequisite for disconnecting it
         # later. Only a discarded return value is unambiguously unrecoverable.
@@ -447,10 +459,17 @@ def check_unread_definition_fields(repo_root: str, sources: Dict[str, str]) -> L
     elsewhere is called a problem -- a field used once is more likely a
     one-off than a systematically dropped one.
     """
-    definition_files = {
-        path: text for path, text in sources.items()
-        if re.search(r"(Content|Definitions|Catalog|Config)[/\\]", path)
-    }
+    # A type export or a validation allow-list lives beside the content it
+    # describes and looks exactly like it to a regex. Reading a schema as
+    # authored data reported five fields as unused that were never data at
+    # all -- they were the shape the data has to take.
+    definition_files = {}
+    for path, text in sources.items():
+        if not re.search(r"(Content|Definitions|Catalog|Config)[/\\]", path):
+            continue
+        if re.search(r"^export type |^type \w+ = {", text, re.M):
+            continue
+        definition_files[path] = text
     if not definition_files:
         return []
 
@@ -580,6 +599,12 @@ def check_per_frame_allocation(path: str, source: str) -> List[Finding]:
     findings: List[Finding] = []
     for connect in re.finditer(r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text):
         body = text[connect.end() : connect.end() + 1400]
+        # An accumulator that returns early is the standard way to run
+        # something a few times a second inside a per-frame signal. The
+        # allocation is real but it is not happening every frame, and saying
+        # so anyway trains people to ignore the rule.
+        if re.search(r"(?s)accumulator|elapsed|sinceLast|\bif\s+\w+\s*<\s*[\d.]+\s*then\s*return", body[:400]):
+            continue
         for call in re.finditer(r":(GetChildren|GetDescendants|GetPlayers)\s*\(", body):
             findings.append(Finding(
                 "per_frame_allocation", "MEDIUM", path,

@@ -402,3 +402,87 @@ wait(1)
     order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
     assert severities == sorted(severities, key=lambda s: order[s])
     assert sum(report["by_rule"].values()) == report["total_issues"]
+
+
+# ── Precision regressions ────────────────────────────────────────────
+#
+# Every case below is a shape this scanner reported as a defect on a working
+# production codebase. Of thirteen findings on its first real run, twelve were
+# these. They are kept as tests because precision is the thing that decides
+# whether anyone leaves the scanner switched on.
+
+
+def test_method_named_spawn_is_not_the_deprecated_global():
+    report = scan({"src/Night.luau": """--!strict
+local function beat(enemyService: any, id: string)
+    enemyService:spawn(id)
+end
+return beat
+"""})
+    assert "deprecated_scheduler" not in rules_fired(report)
+
+
+def test_throttled_frame_callback_is_not_per_frame_allocation():
+    report = scan({"src/Step.luau": """
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local accumulator = 0
+RunService.Heartbeat:Connect(function(deltaTime)
+    accumulator += deltaTime
+    if accumulator < 0.5 then
+        return
+    end
+    accumulator = 0
+    for _, player in Players:GetPlayers() do
+        print(player)
+    end
+end)
+"""})
+    assert "per_frame_allocation" not in rules_fired(report)
+
+
+def test_type_schema_is_not_authored_content():
+    """A type export beside content looks exactly like content to a regex."""
+    report = scan({
+        "src/shared/Content/Registry.luau": """--!strict
+export type Entry = {
+    displayNameKey: string,
+    analyticsKey: string,
+    assetBundle: string,
+}
+local ALLOWED = {
+    displayNameKey = true,
+    analyticsKey = true,
+    assetBundle = true,
+}
+return ALLOWED
+""",
+        "src/server/Use.luau": "--!strict\nreturn 1\n",
+    })
+    assert "unread_definition_field" not in rules_fired(report)
+
+
+def test_startup_connection_is_not_a_leak():
+    report = scan({"src/Service.luau": """
+local RunService = game:GetService("RunService")
+local Service = {}
+function Service.Start(self)
+    RunService.Heartbeat:Connect(function() end)
+end
+return Service
+"""})
+    assert "connection_leak" not in rules_fired(report)
+
+
+def test_chatted_alongside_textchatcommand_is_deliberate():
+    report = scan({"src/Admin.luau": """--!strict
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+local command = Instance.new("TextChatCommand")
+command.PrimaryAlias = "/go"
+command.Parent = TextChatService
+Players.PlayerAdded:Connect(function(player)
+    player.Chatted:Connect(function() end)
+end)
+"""})
+    assert "player_chatted" not in rules_fired(report)

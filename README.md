@@ -59,6 +59,12 @@ on argument counts, so it is done exactly instead.
 | `missing_strict_mode` | LOW | Type annotations without `--!strict` |
 | `scattered_asset_ids` | LOW | Inline `rbxassetid` literals outside a registry |
 
+On its first run against a 153-file production game it reported **13 findings
+of which 12 were false positives** — a method named `spawn`, throttled frame
+callbacks, a type schema read as content, startup connections read as leaks,
+and a deliberate legacy-chat fallback. All five rules were tightened and the
+shapes kept as regression tests. It now reports 3, all genuine.
+
 **Precision is the design constraint, not coverage.** A checker that cries
 wolf gets muted, and muting takes the working rules down with it — so every
 rule declines to report when it cannot be sure. Each one is tested twice:
