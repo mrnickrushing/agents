@@ -24,6 +24,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
+from agents.luau_static import analyze_repository
 
 _DATASTORE_WRITE_METHODS = ("SetAsync", "UpdateAsync", "IncrementAsync", "RemoveAsync")
 _DATASTORE_METHODS = ("GetAsync",) + _DATASTORE_WRITE_METHODS
@@ -251,6 +252,18 @@ file, so treat findings as leads to verify against the actual script context, no
     def _define_tools(self) -> List[Dict[str, Any]]:
         return [
             {
+                "name": "scan_repository_statically",
+                "description": "Run every deterministic Luau/Rojo check across an entire repository: call arity, use-before-definition, deprecated schedulers, unprotected yielding calls, Player.Chatted under TextChatService, unanchored parts, shadow-casting lights in loops, discarded per-frame connections, Rojo path and service-placement errors, unset Lighting.Technology, and authored content fields nothing reads. Needs no model call and works on any repository.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "root": {"type": "string", "description": "Path to the repository root to scan"},
+                        "rules": {"type": "array", "items": {"type": "string"}, "description": "Optional subset of rule names to run"},
+                    },
+                    "required": ["root"],
+                },
+            },
+            {
                 "name": "audit_remote_validation",
                 "description": "Review a RemoteEvent/RemoteFunction server handler for missing input validation, missing rate limiting, and player-identity trust-boundary violations.",
                 "parameters": {
@@ -378,6 +391,7 @@ file, so treat findings as leads to verify against the actual script context, no
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
         return {
+            "scan_repository_statically": self._scan_repository_statically,
             "audit_remote_validation": self._audit_remote_validation,
             "audit_server_authority": self._audit_server_authority,
             "review_rojo_project_structure": self._review_rojo_project_structure,
@@ -390,6 +404,15 @@ file, so treat findings as leads to verify against the actual script context, no
             "review_validation_script": self._review_validation_script,
             "review_luau_module": self._review_luau_module,
         }
+
+    def _scan_repository_statically(self, root: str, rules: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Deterministic whole-repository scan.
+
+        Every other tool here asks a model for judgement. This one does not
+        need one: the checks it runs are arithmetic and pattern facts, so it
+        is exact, free, and fast enough to run on every commit.
+        """
+        return analyze_repository(root, rules)
 
     def _review_validation_script(self, code: str, script_name: str = "") -> Dict[str, Any]:
         """Review Node validation/build scripts for unsafe command construction."""
