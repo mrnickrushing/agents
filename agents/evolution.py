@@ -432,3 +432,69 @@ class EvolutionStore:
             "recall": None,
             "recall_note": "Recall needs labeled clean files or known missed findings; scan feedback alone cannot measure it.",
         }
+
+    def latest_findings(
+        self,
+        project: str,
+        severity: Optional[str] = None,
+        status: str = "open",
+    ) -> List[Dict[str, Any]]:
+        """Findings from the most recent scan of `project`, left-joined to the
+        latest verdict per finding (human precedence over triage — the same
+        rank ordering `_latest_feedback`/`evaluate` use).
+
+        `status` filters against that verdict: "open" (no verdict recorded
+        yet), "confirmed", "dismissed", or "all". Returns [] if the project
+        has never been scanned — callers should not treat that the same as
+        "scanned and clean".
+        """
+        if status not in ("open", "confirmed", "dismissed", "all"):
+            raise ValueError(
+                f"status must be one of open/confirmed/dismissed/all, got {status!r}"
+            )
+        key = project_key(project)
+
+        latest_scan = self.connection.execute(
+            """
+            SELECT scan_id FROM scan_runs
+            WHERE project_key = ? ORDER BY created_at DESC LIMIT 1
+            """,
+            (key,),
+        ).fetchone()
+        if not latest_scan:
+            return []
+
+        where = ["f.scan_id = ?"]
+        params: List[Any] = [latest_scan["scan_id"]]
+        if severity:
+            where.append("f.severity = ?")
+            params.append(severity.upper())
+        if status == "open":
+            where.append("v.verdict IS NULL")
+        elif status == "confirmed":
+            where.append("v.verdict = 'CONFIRMED'")
+        elif status == "dismissed":
+            where.append("v.verdict = 'FALSE_POSITIVE'")
+
+        rows = self.connection.execute(
+            f"""
+            WITH latest_verdict AS (
+                SELECT fb.*, ROW_NUMBER() OVER (
+                    PARTITION BY finding_id
+                    ORDER BY CASE source WHEN 'human' THEN 0 ELSE 1 END,
+                             created_at DESC, feedback_id DESC
+                ) AS rank
+                FROM feedback fb
+            )
+            SELECT f.finding_id, f.file, f.agent, f.tool, f.severity, f.issue, f.fix,
+                   v.verdict, v.reason AS verdict_reason, v.source AS verdict_source
+            FROM findings f
+            LEFT JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1
+            WHERE {" AND ".join(where)}
+            ORDER BY CASE f.severity
+                WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 WHEN 'LOW' THEN 2 ELSE 3
+            END, f.finding_id
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]

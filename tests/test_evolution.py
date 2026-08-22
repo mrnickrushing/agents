@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agents.evolution import EvolutionStore, attach_finding_ids
 
 
@@ -137,3 +139,96 @@ def test_recorded_report_is_valid_json(tmp_path):
     stored = json.loads(row["report_json"])
     assert stored["scan_id"] == scan_id
     assert _finding(stored)["finding_id"].startswith("agf_")
+
+
+def test_latest_findings_defaults_to_open(tmp_path):
+    (tmp_path / "route.py").write_text("def route(): return True\n")
+    report = _report(tmp_path)
+
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        store.record_scan(report, detector_version="test")
+        open_findings = store.latest_findings(str(tmp_path))
+
+    assert len(open_findings) == 1
+    assert open_findings[0]["finding_id"] == _finding(report)["finding_id"]
+    assert open_findings[0]["verdict"] is None
+    assert open_findings[0]["severity"] == "HIGH"
+
+
+def test_latest_findings_status_filters_by_latest_verdict(tmp_path):
+    (tmp_path / "route.py").write_text("def route(): return True\n")
+    report = _report(tmp_path)
+
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        store.record_scan(report, detector_version="test")
+        finding_id = _finding(report)["finding_id"]
+        store.add_feedback(finding_id, "confirm", "Verified exploitable.")
+
+        confirmed = store.latest_findings(str(tmp_path), status="confirmed")
+        still_open = store.latest_findings(str(tmp_path), status="open")
+        dismissed = store.latest_findings(str(tmp_path), status="dismissed")
+        everything = store.latest_findings(str(tmp_path), status="all")
+
+    assert len(confirmed) == 1
+    assert confirmed[0]["verdict"] == "CONFIRMED"
+    assert still_open == []
+    assert dismissed == []
+    assert len(everything) == 1
+
+
+def test_latest_findings_only_returns_most_recent_scan(tmp_path):
+    (tmp_path / "route.py").write_text("def route(): return True\n")
+
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        first = _report(tmp_path, issue="First scan issue")
+        store.record_scan(first, detector_version="v1")
+
+        (tmp_path / "route.py").write_text("def route(): return False\n")
+        second = _report(tmp_path, issue="Second scan issue")
+        store.record_scan(second, detector_version="v2")
+
+        findings = store.latest_findings(str(tmp_path), status="all")
+
+    assert len(findings) == 1
+    assert findings[0]["issue"] == "Second scan issue"
+
+
+def test_latest_findings_filters_by_severity(tmp_path):
+    (tmp_path / "route.py").write_text("route")
+    report = _report(tmp_path)
+    report["results"].append(
+        {
+            "file": "config.py",
+            "agent": "auth_security",
+            "tool": "audit_debug_flag",
+            "result": {
+                "findings": [
+                    {
+                        "severity": "LOW",
+                        "issue": "Debug flag left on",
+                        "fix": "Disable debug in production.",
+                    }
+                ]
+            },
+        }
+    )
+
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        store.record_scan(report, detector_version="test")
+        high_only = store.latest_findings(str(tmp_path), severity="high")
+
+    assert len(high_only) == 1
+    assert high_only[0]["severity"] == "HIGH"
+
+
+def test_latest_findings_empty_when_never_scanned(tmp_path):
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        findings = store.latest_findings(str(tmp_path))
+
+    assert findings == []
+
+
+def test_latest_findings_rejects_unknown_status(tmp_path):
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        with pytest.raises(ValueError):
+            store.latest_findings(str(tmp_path), status="bogus")
