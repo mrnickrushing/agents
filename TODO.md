@@ -136,6 +136,11 @@ against real Vitality/shield-ai code after each new check, same discipline as th
 
 ## NEXT STEPS
 
+- Personal MCP server — spec written in `MCP_SERVER_SPEC.md`. Read-only Phase 1 (`list_projects`,
+  `get_project_status`, `scan_findings`) exposes repos, deploys, errors, and the existing
+  `evolution.db` findings to Claude in one place; writes are gated behind a separate credential
+  and land only after the read side has an audit-log track record. Not started.
+
 - Wire `agents.cli scan` into a pre-commit hook or CI job for Vitality/shield-ai if the manual CLI proves useful
   in practice — not done automatically since it changes the merge gate and wasn't asked for
 - Consider an EcommerceAgent (checkout flow, inventory, abandoned cart) for aegisapparel/A-Yard-Apparel/sugarhaus
