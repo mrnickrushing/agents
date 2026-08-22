@@ -107,9 +107,13 @@ expo_account = "rushingtech"
 display_name = "Vitality"
 aliases      = ["vit", "vitality-app"]
 stack        = ["expo", "fastapi", "postgres"]
-local_path   = "~/Vitality"
 
-github  = ["mrnickrushing/vitality", "mrnickrushing/vitality-api"]
+# A checkout belongs to a repo, not to a project — two repos, two checkouts.
+repos = [
+  { github = "mrnickrushing/vitality",     local_path = "~/Vitality" },
+  { github = "mrnickrushing/vitality-api", local_path = "~/vitality-api" },
+]
+
 railway = { project = "prj_xxx", services = ["api", "worker"] }
 sentry  = { projects = ["vitality-api", "vitality-mobile"] }
 expo    = { slug = "vitality" }
@@ -117,10 +121,17 @@ stripe  = { account = "acct_xxx", livemode = true }
 domains = ["vitality.app"]
 ```
 
-Every field is optional except `github` **or** `local_path`. A project with only
-a `local_path` still works for `search_code` and `scan_findings` — which means
-new projects become queryable the moment they are added, before any
-infrastructure exists for them. That is the compounding part.
+**Checkouts are per repo, not per project.** An earlier draft hung a single
+`local_path` off the project, which silently broke `search_code` for the second
+repo of any multi-repo project: the project had *a* checkout, so the GitHub
+fallback never fired and `vitality-api` was never searched. Each entry in
+`repos` needs `github` or `local_path` and may carry both; everything else in
+the project block is optional.
+
+A repo entry with only a `local_path` and no `github` still works for
+`search_code` and `scan_findings`, so a new project becomes queryable the moment
+it is added, before any infrastructure exists for it. That is the compounding
+part.
 
 **Resolution:** every tool takes a fuzzy `project` string and resolves it
 through key → alias → display name → repo name → substring, in that order. An
@@ -242,11 +253,18 @@ the other, plus files touched. Turns "the API started timing out yesterday" into
 search_code(query: str, projects: list[str] | None = None,
             path_glob: str | None = None, limit: int = 20) -> str
 ```
-Ripgrep across every `local_path` in the registry, honoring the same exclusions
+Ripgrep across every repo `local_path` in the registry, honoring the same exclusions
 `agents/cli.py` already defines (`EXCLUDED_DIRS`). For a solo operator with the
 same Stripe webhook verification written five times, "show me every place I
-verify a Svix signature" is a genuinely new capability. Falls back to the GitHub
-code search API for projects with no local checkout.
+verify a Svix signature" is a genuinely new capability.
+
+**The fallback is decided per repo, not per project.** Any repo with no
+resolvable local checkout is searched through the GitHub code search API
+instead. Deciding this at project level means a project with two repos and one
+checkout silently searches half of itself. The response names which repos were
+searched locally, which via the API, and which were skipped — an unsearched repo
+has to be visible, for the same reason a timed-out source appears under
+`degraded:`.
 
 ### 8. `scan_findings`
 
@@ -254,9 +272,24 @@ code search API for projects with no local checkout.
 scan_findings(project: str, severity: str | None = None,
               status: str = "open") -> str  # open|confirmed|dismissed|all
 ```
-Straight through to `EvolutionStore.recent_runs()` / `evaluate()`. No new
-credential, no network, and no other MCP server on earth can answer it. Include
+No new credential, no network, and no other MCP server can answer it. Include
 `finding_id` in the output so the Phase 1.5 write tool can act on it.
+
+**This needs one new `EvolutionStore` method — it is not pure reuse.** The
+`findings` table already holds everything required (`finding_id`, `file`,
+`agent`, `tool`, `severity`, `issue`, `fix`) and `feedback` holds the verdicts,
+but neither existing public method returns them: `recent_runs()` returns scan
+metadata and a finding *count*, and `evaluate()` returns aggregate precision
+statistics. Add `EvolutionStore.latest_findings(project, severity=None,
+status="open")` — findings from the most recent scan, left-joined to the latest
+verdict per finding, reusing the `ROW_NUMBER() OVER (PARTITION BY finding_id
+...)` shape `evaluate()` already uses for human-feedback precedence.
+
+**Union across the project's repos.** `project_key` derives from a checkout's
+git remote, so a two-repo project has *two* keys in `evolution.db`. Resolve the
+project to every one of its repo keys and union the results — querying a single
+key would return a confident, partial answer, which is precisely the failure
+this spec's degradation rule exists to prevent.
 
 ---
 
@@ -275,7 +308,7 @@ credential, no network, and no other MCP server on earth can answer it. Include
 | `write_create_issue` | Low — reversible, no production effect | 1st |
 | `write_redeploy` | Medium — reruns a known-good build | 2nd |
 | `write_rollback` | Medium — but it is the tool you want at 2am | 3rd |
-| `write_set_env_var` | **High** — can take production down, and values are secrets | last, if ever |
+| `write_set_env_var` | **High** — can take production down, and the value is a secret in both the argument and the log (§6) | last, if ever |
 
 Add them one at a time, each after a week of the audit log showing the read side
 behaving. Adding all four at once means a bad turn has four ways to hurt.
@@ -337,6 +370,19 @@ Append-only JSONL at `~/.local/state/rushingtech-mcp/audit.jsonl`:
  "sources":["github","railway","sentry"],"ms":842,"ok":true,"degraded":[]}
 ```
 
+**Arguments are redacted before serialization, not only responses.** Scrubbing
+outbound responses is not sufficient: Phase 2's `write_set_env_var` receives the
+secret as an *argument*, so an unfiltered `args` object writes production
+credentials to a long-lived file on disk — turning the audit log into exactly
+the leak it exists to detect. Two rules, both tested:
+
+1. Arguments whose **name** matches a sensitive key (`value`, `secret`, `token`,
+   `password`, `key`) are replaced with `"«omitted»"` — omitted by name rather
+   than scrubbed by pattern, because a secret that matches no known token shape
+   would otherwise survive pattern-based redaction untouched.
+2. The same `redact()` pass then runs over the remaining serialized entry, so
+   `audit.jsonl` is covered by the redaction tests alongside tool responses.
+
 This is not bureaucracy — it is the mechanism by which "add write actions once
 you trust it" becomes a decision based on evidence instead of a feeling. Two
 weeks of reading it tells you exactly which tools fire, how often, and whether
@@ -394,9 +440,10 @@ after a heuristic fired on correct code. The MCP analog of a false positive is a
 | Test | Asserts |
 |------|---------|
 | `test_registry.py` | Resolution order, alias collisions, unknown name lists valid names, malformed TOML fails loudly at startup |
-| `test_redaction.py` | Each token shape planted in a fixture response is scrubbed; a loaded credential never appears in output |
+| `test_redaction.py` | Each token shape planted in a fixture response is scrubbed; a loaded credential never appears in output; a sensitive-named argument never reaches `audit.jsonl` |
 | `test_degradation.py` | A source raising / timing out yields a partial answer with `degraded`, and **never** a `healthy` verdict |
 | `test_stale_join.py` | A registry pointing at a deleted Railway service reports "not found", not "no deploys" — silence must not read as success |
+| `test_search_coverage.py` | A two-repo project with one checkout searches **both** repos — one locally, one via API — and the response names which was which |
 | `test_tool_schemas.py` | Every registered tool has a valid JSON Schema and a description that names its arguments |
 | `test_response_budget.py` | Fixture-driven responses stay under budget |
 
@@ -446,8 +493,9 @@ the status card. 3s timeout, graceful degradation.
 ✅ *Done when:* removing the Railway token still returns the GitHub half plus
 `degraded: railway`.
 
-**7 · The local edge (25 min).** `scan_findings` over the existing
-`evolution.db` via `EvolutionStore`. No new credentials, no network.
+**7 · The local edge (25 min).** Add `EvolutionStore.latest_findings()` (§4.8),
+then `scan_findings` on top of it. No new credentials, no network. This is the
+one step that touches existing code, so it goes last and ships with its own test.
 ✅ *Done when:* Claude answers "what's still open from the last Vitality scan?"
 
 **Then stop.** Do not add tools 3–7 from §4 in this session. Two working tools
