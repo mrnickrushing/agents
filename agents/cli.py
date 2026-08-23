@@ -925,6 +925,36 @@ def _entry_findings(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
     return _normalize_findings(entry["result"])
 
 
+def _effective_entry_verdict(entry: Dict[str, Any]) -> Optional[str]:
+    # Persisted feedback is deliberately evaluated first. It may contain
+    # a human correction to an earlier model verdict, and human feedback
+    # is the authority in the evolution store.
+    feedback = entry.get("feedback", {})
+    if feedback.get("verdict"):
+        return feedback["verdict"]
+    return entry.get("triage", {}).get("verdict")
+
+
+def _partition_active_dismissed(
+    results: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    dismissed = [e for e in results if _effective_entry_verdict(e) == "FALSE_POSITIVE"]
+    dismissed_ids = {id(e) for e in dismissed}
+    active = [e for e in results if id(e) not in dismissed_ids]
+    return active, dismissed
+
+
+def _highest_active_severity_at_or_above(report: Dict[str, Any], fail_on: str) -> bool:
+    """True if an active (non-dismissed) finding meets or exceeds the fail_on severity."""
+    threshold = SEVERITY_RANK[fail_on]
+    active, _ = _partition_active_dismissed(report.get("results", []))
+    for entry in active:
+        for finding in _entry_findings(entry):
+            if SEVERITY_RANK.get(finding.get("severity", "INFO"), 9) <= threshold:
+                return True
+    return False
+
+
 def _format_report(report: Dict[str, Any]) -> str:
     coverage = report.get("coverage", {})
     lines = [
@@ -985,18 +1015,7 @@ def _format_report(report: Dict[str, Any]) -> str:
     # and center; ones triage dismissed move to a short section at the end
     # instead of disappearing outright, so the verdict itself stays
     # auditable rather than silently swallowing the heuristic's output.
-    def effective_entry_verdict(entry: Dict[str, Any]) -> Optional[str]:
-        # Persisted feedback is deliberately evaluated first. It may contain
-        # a human correction to an earlier model verdict, and human feedback
-        # is the authority in the evolution store.
-        feedback = entry.get("feedback", {})
-        if feedback.get("verdict"):
-            return feedback["verdict"]
-        return entry.get("triage", {}).get("verdict")
-
-    dismissed = [e for e in report["results"] if effective_entry_verdict(e) == "FALSE_POSITIVE"]
-    dismissed_ids = {id(e) for e in dismissed}
-    active = [e for e in report["results"] if id(e) not in dismissed_ids]
+    active, dismissed = _partition_active_dismissed(report["results"])
 
     for entry in sorted(active, key=sort_key):
         if entry["result"].get("error"):
@@ -1115,6 +1134,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
         with open(os.path.expanduser(args.out), "w") as fh:
             json.dump(report, fh, indent=2, default=str)
         print(f"\nFull JSON report written to {args.out}")
+
+    if args.fail_on != "never" and _highest_active_severity_at_or_above(report, args.fail_on):
+        raise SystemExit(1)
 
 
 def cmd_feedback(args: argparse.Namespace) -> None:
@@ -1247,6 +1269,15 @@ def main() -> None:
     p_scan.add_argument(
         "--no-record", dest="record", action="store_false", default=True,
         help="Do not record this scan or apply learned feedback",
+    )
+    p_scan.add_argument(
+        "--fail-on",
+        choices=["CRITICAL", "HIGH", "MEDIUM", "LOW", "never"],
+        default="never",
+        help="Exit non-zero if an active (non-dismissed) finding at or above this severity "
+             "is present. Default: never (report-only — this scan does not gate anything "
+             "until you opt in). Findings triage or learned feedback dismissed as false "
+             "positives are excluded from this check.",
     )
     p_scan.set_defaults(func=cmd_scan)
 

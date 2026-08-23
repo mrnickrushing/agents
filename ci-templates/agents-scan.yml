@@ -1,0 +1,93 @@
+# Drop-in GitHub Actions job for a project that wants this repo's
+# no-API-key static scan (agents.cli scan / luau-scan) run on every push
+# and pull request.
+#
+# Copy this file (or the `agents-scan` job below) into the target
+# project's own .github/workflows/, adjusting the checked-out ref of this
+# `agents` repo as needed. It is opt-in and separate from that project's
+# own CI — nothing here modifies an existing workflow or merge gate.
+#
+# The `fail-on` input controls whether this job blocks the PR:
+#   - "never" (default): report-only, always green, findings visible in
+#     the job log and as an uploaded JSON artifact. Safe to add to any
+#     repo immediately.
+#   - "HIGH"/"CRITICAL"/etc.: the job fails when an active
+#     (non-dismissed) finding at or above that severity exists. Only
+#     switch this on once you've run the scan against the project a few
+#     times and are comfortable with what it flags — this is the "changes
+#     the merge gate" step, so it should be a deliberate choice, not a
+#     default.
+#
+# ANTHROPIC_API_KEY / OPENAI_API_KEY are intentionally NOT wired in here.
+# Without one, the scan stays purely heuristic (no LLM triage, no
+# network calls beyond checkout/pip install) — add one as a repo secret
+# only if you want the triage pass that cuts heuristic false positives.
+
+name: agents-scan
+
+on:
+  workflow_call:
+    inputs:
+      fail-on:
+        description: "Severity threshold that fails the job: CRITICAL, HIGH, MEDIUM, LOW, or never"
+        type: string
+        default: "never"
+      agents-ref:
+        description: "Branch/tag/commit of mrnickrushing/agents to check out"
+        type: string
+        default: "main"
+      scan-path:
+        description: "Path within this repo to scan"
+        type: string
+        default: "."
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "Optional — enables LLM triage of findings if provided. Pass with `secrets: inherit` from the calling workflow, or omit to stay purely heuristic."
+        required: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout agents toolkit
+        uses: actions/checkout@v4
+        with:
+          repository: mrnickrushing/agents
+          ref: ${{ inputs.agents-ref }}
+          path: .agents-toolkit
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install agents toolkit
+        run: pip install -e .agents-toolkit
+
+      - name: Run Luau static scan (if applicable)
+        if: hashFiles('**/*.lua', '**/*.luau') != ''
+        run: python -m agents.cli luau-scan "${{ inputs.scan-path }}" --fail-on "${{ inputs.fail-on }}"
+
+      - name: Run project scan
+        run: |
+          python -m agents.cli scan \
+            --path "${{ inputs.scan-path }}" \
+            --no-record \
+            --out agents-scan-report.json \
+            --fail-on "${{ inputs.fail-on }}"
+        env:
+          # Only used if the secret exists in the calling repo; triage
+          # stays off automatically otherwise (see agents.cli's own
+          # auto-detect behavior).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agents-scan-report
+          path: agents-scan-report.json
+          if-no-files-found: ignore

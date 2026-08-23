@@ -6,6 +6,13 @@ Twelve specialized agents (73 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.9.0 — Every agent reachable from Claude Code, plus opt-in CI/pre-commit gating
+
+- **6 missing Claude Code subagent mirrors added**: `.claude/agents/` previously only mirrored 6 of the 12 Python agents. Added `auth-security-reviewer`, `api-architect`, `database-architect`, `infra-monitor`, `mobile-deploy-advisor`, and `roblox-auditor` so every domain this package covers is now reachable as a subagent inside a Claude Code session, not just from the standalone Python API/CLI.
+- **`agents-scan` Claude Code skill**: wraps `agents.cli scan`/`luau-scan` so a session can run either and correctly interpret the JSON report — the `coverage` trust boundary, triage vs. learned-feedback dismissals, and the `agf_*` feedback loop — without remembering CLI flags.
+- **`scan --fail-on` for CI/pre-commit gating**: `scan` now supports the same `--fail-on {CRITICAL,HIGH,MEDIUM,LOW,never}` threshold `luau-scan` already had. Default is `never` (report-only; exits 0 regardless of findings), so nothing changes for existing callers — pass e.g. `--fail-on HIGH` to make the process exit non-zero when an active (non-dismissed) finding meets the threshold.
+- **Ready-to-adopt pre-commit hook and CI template**: `scripts/pre-commit-agents-scan.sh` (plain git hook or `pre-commit` framework) and `ci-templates/agents-scan.yml` (reusable GitHub Actions workflow) — both opt-in and report-only until deliberately switched to a blocking threshold. See `docs/pre-commit-and-ci.md`.
+
 ## 🆕 Version 2.8.0 — Runtime-aware Roblox scans
 
 - **Dependency-aware reproducibility gaps**: a dependency-free `package.json` no longer produces a misleading missing-lockfile warning; projects with declared dependencies still require a recognized lockfile.
@@ -717,4 +724,4 @@ MIT
 
 Built by [Rushing Technologies](https://rushingtechnologies.com) — solo operator, full stack + security + AI.
 
-**Version 2.1.0** — Auth security + mobile deploy agents, no-API-key CLI, multi-round tool calling, heuristic accuracy fixes.
+**Version 2.9.0** — Every agent mirrored as a Claude Code subagent, an `agents-scan` skill, and opt-in pre-commit/CI gating via `scan --fail-on`.
