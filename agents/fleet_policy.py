@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import re
+
+import yaml
 from dataclasses import dataclass
 from typing import Callable, Dict, List
 
@@ -98,9 +100,19 @@ def check_dependabot_grouping(path: str, content: str) -> List[PolicyFinding]:
     """
     out: List[PolicyFinding] = []
     try:
-        import yaml
         data = yaml.safe_load(content) or {}
-    except Exception:
+    except yaml.YAMLError:
+        # Malformed config is itself worth reporting. Returning [] here would
+        # read as "this repo is fine", which is how a broken parser silently
+        # turns a policy checker into a no-op.
+        return [PolicyFinding(
+            rule="dependabot-unparseable",
+            severity="LOW",
+            file=path,
+            message="dependabot config could not be parsed as YAML, so grouping was not checked",
+            fix="fix the YAML syntax so dependabot actually reads this file",
+        )]
+    if not isinstance(data, dict):
         return out
     for entry in data.get("updates", []) or []:
         eco = entry.get("package-ecosystem", "?")

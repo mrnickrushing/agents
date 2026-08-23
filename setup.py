@@ -12,6 +12,11 @@ setup(
     install_requires=[
         "openai>=1.50.0",
         "anthropic>=0.40.0",
+        # fleet_policy parses dependabot.yml. Declared rather than optional:
+        # an absent parser made the rule report "no findings", which is a
+        # silent false-negative in a policy checker — the worst failure mode
+        # it has.
+        "PyYAML>=6.0",
     ],
     extras_require={
         "dev": ["pytest", "black", "ruff"],

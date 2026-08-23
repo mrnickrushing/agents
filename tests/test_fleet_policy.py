@@ -192,11 +192,23 @@ def test_run_policies_on_clean_fleet_returns_nothing():
     }) == []
 
 
-def test_unparseable_files_do_not_crash():
-    assert run_policies({
+def test_unparseable_files_are_reported_not_swallowed():
+    # A parser that returns [] on malformed input turns the whole checker into
+    # a silent no-op — which is exactly what happened when PyYAML was missing
+    # from the dependency list and `except Exception` ate the ImportError.
+    findings = run_policies({
         ".github/dependabot.yml": "{{{ not yaml",
         "package.json": "not json at all",
-    }) == []
+    })
+    assert [f.rule for f in findings] == ["dependabot-unparseable"]
+
+
+def test_yaml_is_a_hard_dependency():
+    # Guards the regression directly: if PyYAML ever falls out of
+    # install_requires again, this fails loudly instead of the grouping rule
+    # quietly reporting every repo as clean.
+    import agents.fleet_policy as fp
+    assert fp.yaml is not None
 
 
 def test_override_target_handles_scopes_and_nesting():
