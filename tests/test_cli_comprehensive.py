@@ -1,7 +1,15 @@
 import json
 import sys
 
-from agents.cli import MAX_FILE_BYTES, _entry_findings, _format_report, _inline_local_imports, _run_scan
+from agents.cli import (
+    MAX_FILE_BYTES,
+    _entry_findings,
+    _format_report,
+    _highest_active_severity_at_or_above,
+    _inline_local_imports,
+    _partition_active_dismissed,
+    _run_scan,
+)
 
 
 def _write(root, relative, content):
@@ -228,3 +236,121 @@ def test_apple_review_sees_local_verifier_context(tmp_path):
     ]
 
     assert not any("Apple" in issue or "nonce" in issue or "JWKS" in issue for issue in issues)
+
+
+def _synthetic_report(*entries):
+    return {"project": ".", "results": list(entries), "summary": {}, "coverage": {}}
+
+
+def _entry(severity, verdict=None, feedback_verdict=None):
+    entry = {
+        "file": "src/x.ts",
+        "agent": "security_audit",
+        "tool": "audit_sql_injection",
+        "source_hash": "abc",
+        "result": {"findings": [{"severity": severity, "issue": "example finding"}]},
+    }
+    if verdict:
+        entry["triage"] = {"verdict": verdict, "reason": "because"}
+    if feedback_verdict:
+        entry["feedback"] = {"verdict": feedback_verdict, "reason": "because", "source": "human"}
+    return entry
+
+
+def test_fail_on_trips_for_active_finding_at_or_above_threshold():
+    report = _synthetic_report(_entry("HIGH"))
+
+    assert _highest_active_severity_at_or_above(report, "HIGH") is True
+    assert _highest_active_severity_at_or_above(report, "CRITICAL") is False
+
+
+def test_fail_on_ignores_finding_below_threshold():
+    report = _synthetic_report(_entry("LOW"))
+
+    assert _highest_active_severity_at_or_above(report, "HIGH") is False
+
+
+def test_fail_on_excludes_triage_dismissed_findings():
+    report = _synthetic_report(_entry("CRITICAL", verdict="FALSE_POSITIVE"))
+
+    assert _highest_active_severity_at_or_above(report, "LOW") is False
+
+
+def test_fail_on_excludes_learned_feedback_dismissed_findings_even_if_triage_disagrees():
+    # Human feedback is authoritative over triage per _effective_entry_verdict.
+    report = _synthetic_report(
+        _entry("CRITICAL", verdict="CONFIRMED", feedback_verdict="FALSE_POSITIVE")
+    )
+
+    assert _highest_active_severity_at_or_above(report, "LOW") is False
+
+
+def test_partition_active_dismissed_splits_on_effective_verdict():
+    active_entry = _entry("HIGH")
+    dismissed_entry = _entry("HIGH", verdict="FALSE_POSITIVE")
+    report = _synthetic_report(active_entry, dismissed_entry)
+
+    active, dismissed = _partition_active_dismissed(report["results"])
+
+    assert active == [active_entry]
+    assert dismissed == [dismissed_entry]
+
+
+def _mixed_verdict_entry():
+    # Mirrors how triage_report()/apply_feedback() actually annotate a
+    # multi-finding entry: each finding gets its own verdict, and the
+    # entry-level verdict is CONFIRMED because *any* finding was confirmed
+    # — even though the HIGH finding specifically was dismissed.
+    return {
+        "file": "src/x.ts",
+        "agent": "security_audit",
+        "tool": "audit_sql_injection",
+        "source_hash": "abc",
+        "result": {
+            "findings": [
+                {
+                    "severity": "HIGH",
+                    "issue": "dismissed high finding",
+                    "triage": {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
+                },
+                {
+                    "severity": "LOW",
+                    "issue": "confirmed low finding",
+                    "triage": {"verdict": "CONFIRMED", "reason": "real"},
+                },
+            ]
+        },
+        "triage": {"verdict": "CONFIRMED", "reason": "real"},
+    }
+
+
+def test_fail_on_evaluates_dismissals_per_finding_not_per_entry():
+    # Regression test: a naive per-entry check would see the entry's
+    # aggregate CONFIRMED verdict and treat the individually-dismissed HIGH
+    # finding as still active, incorrectly tripping --fail-on HIGH.
+    report = _synthetic_report(_mixed_verdict_entry())
+
+    assert _highest_active_severity_at_or_above(report, "HIGH") is False
+    assert _highest_active_severity_at_or_above(report, "LOW") is True
+
+
+def test_fail_on_finding_level_feedback_overrides_finding_level_triage():
+    entry = {
+        "file": "src/x.ts",
+        "agent": "security_audit",
+        "tool": "audit_sql_injection",
+        "source_hash": "abc",
+        "result": {
+            "findings": [
+                {
+                    "severity": "CRITICAL",
+                    "issue": "triage confirmed, human dismissed",
+                    "triage": {"verdict": "CONFIRMED", "reason": "model thinks real"},
+                    "feedback": {"verdict": "FALSE_POSITIVE", "reason": "human knows better", "source": "human"},
+                },
+            ]
+        },
+    }
+    report = _synthetic_report(entry)
+
+    assert _highest_active_severity_at_or_above(report, "LOW") is False

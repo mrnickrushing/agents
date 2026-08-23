@@ -1,0 +1,115 @@
+# Reusable GitHub Actions workflow: this repo's no-API-key static scan
+# (agents.cli scan / luau-scan) as a job any project can call.
+#
+# It never runs in THIS repo's own CI (there is no push/pull_request
+# trigger below, only workflow_call) — call it from a target project's
+# own workflow file instead:
+#
+#   # .github/workflows/agents-scan.yml in the target project
+#   jobs:
+#     scan:
+#       uses: mrnickrushing/agents/.github/workflows/agents-scan.yml@main
+#       with:
+#         fail-on: never   # start here; see docs/pre-commit-and-ci.md
+#       secrets: inherit   # only needed for ANTHROPIC_API_KEY triage
+#
+# The `fail-on` input controls whether this job blocks the PR:
+#   - "never" (default): report-only, always green, findings visible in
+#     the job log and as an uploaded JSON artifact. Safe to add to any
+#     repo immediately.
+#   - "HIGH"/"CRITICAL"/etc.: the job fails when a finding not
+#     individually dismissed (by triage or by `agents.cli feedback`) at
+#     or above that severity exists. Only switch this on once you've run
+#     the scan against the project a few times and are comfortable with
+#     what it flags — this is the "changes the merge gate" step, so it
+#     should be a deliberate choice, not a default.
+#
+# ANTHROPIC_API_KEY / OPENAI_API_KEY are intentionally NOT wired in here.
+# Without one, the scan stays purely heuristic (no LLM triage, no
+# network calls beyond checkout/pip install) — add one as a repo secret
+# only if you want the triage pass that cuts heuristic false positives.
+
+name: agents-scan
+
+on:
+  workflow_call:
+    inputs:
+      fail-on:
+        description: "Severity threshold that fails the job: CRITICAL, HIGH, MEDIUM, LOW, or never"
+        type: string
+        default: "never"
+      agents-ref:
+        description: "Branch/tag/commit of mrnickrushing/agents to check out"
+        type: string
+        default: "main"
+      scan-path:
+        description: "Path within this repo to scan"
+        type: string
+        default: "."
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "Optional — enables LLM triage of findings if provided. Pass with `secrets: inherit` from the calling workflow, or omit to stay purely heuristic."
+        required: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout agents toolkit
+        uses: actions/checkout@v4
+        with:
+          repository: mrnickrushing/agents
+          ref: ${{ inputs.agents-ref }}
+          path: .agents-toolkit
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install agents toolkit
+        run: pip install -e .agents-toolkit
+
+      # Persists the evolution DB (dismissed/confirmed finding verdicts)
+      # across workflow runs on a shared GitHub Actions cache key, keyed
+      # per calling repository. Without this, every run starts from an
+      # empty DB and `agents.cli feedback ... dismiss` done in one run
+      # (or locally, if you separately sync it) would have no effect
+      # here — a dismissed finding would keep tripping --fail-on forever.
+      - name: Restore evolution feedback cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/state/rushingtech-agents
+          key: agents-evolution-${{ github.repository }}-${{ github.run_id }}
+          restore-keys: |
+            agents-evolution-${{ github.repository }}-
+
+      - name: Run Luau static scan (if applicable)
+        if: hashFiles('**/*.lua', '**/*.luau') != ''
+        # luau-scan has no CRITICAL severity (its rules top out at HIGH),
+        # so a CRITICAL threshold — which it can never produce — maps to
+        # "never block from this check" rather than an invalid argument.
+        run: python -m agents.cli luau-scan "${{ inputs.scan-path }}" --fail-on "${{ inputs.fail-on == 'CRITICAL' && 'never' || inputs.fail-on }}"
+
+      - name: Run project scan
+        run: |
+          python -m agents.cli scan \
+            --path "${{ inputs.scan-path }}" \
+            --out agents-scan-report.json \
+            --fail-on "${{ inputs.fail-on }}"
+        env:
+          # Only used if the secret exists in the calling repo; triage
+          # stays off automatically otherwise (see agents.cli's own
+          # auto-detect behavior).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agents-scan-report
+          path: agents-scan-report.json
+          if-no-files-found: ignore
