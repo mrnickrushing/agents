@@ -224,24 +224,37 @@ def _override_target(key: str) -> str:
 def check_forced_version_without_dependabot_ignore(
     package_json: str, dependabot_yml: str, path: str = "package.json"
 ) -> List[PolicyFinding]:
-    """A forced version (`overrides` / `resolutions`) with nothing telling
-    dependabot to leave the package alone.
+    """A *direct* dependency that is also force-pinned, with no dependabot
+    ignore — i.e. a holdback dependabot can actively fight.
 
-    This is the regression shape exactly: a version is held back to satisfy a
-    peer range or patch a CVE, dependabot bumps it the same week, and the fix
-    silently undoes itself. A holdback without a matching ignore is a fix
-    with an expiry date.
+    Scope was narrowed twice, both times because the rule was firing on things
+    it could not protect:
 
-    Scoped to `overrides`/`resolutions` on purpose. A plain caret range is not
-    evidence of intent — flagging every pinned dependency would fire dozens of
-    times per repo, and a rule that cries wolf gets muted, and a muted rule
-    catches nothing. Detecting the plain-pin case properly needs registry data
-    (is a newer major even available?) and is deliberately out of scope here.
+    1. Only where dependabot version updates are configured at all. With no
+       config nothing can bump past a pin, and "fixing" it would mean adding a
+       config that generates PRs and CI spend.
+    2. Only where the pinned package is a *direct* dependency. Dependabot
+       opens version-update PRs for direct dependencies; an override on a
+       purely transitive package (the common case — forcing a patched
+       `postcss` deep in the tree) is not something dependabot bumps, so a
+       `dependency-name` ignore for it would match nothing and protect
+       nothing. An earlier version flagged 28 of these across the fleet, all
+       of them unactionable.
+
+    Known gap, stated rather than papered over: the case that motivated this
+    module — a direct dependency pinned below its own latest major, which
+    dependabot then bumps past (eslint ^9 -> ^10) — is *not* detectable from
+    package.json alone, because nothing in the file says a newer major exists.
+    Catching that needs registry data and is deliberately out of scope here.
     """
     out: List[PolicyFinding] = []
     try:
         pkg = json.loads(package_json)
     except Exception:
+        return out
+
+    direct = set(pkg.get("dependencies") or {}) | set(pkg.get("devDependencies") or {})
+    if not direct:
         return out
 
     ignored: set[str] = set()
@@ -261,15 +274,18 @@ def check_forced_version_without_dependabot_ignore(
                     forced[_override_target(name)] = spec
 
     for name, spec in sorted(forced.items()):
-        if is_ignored(name):
+        if name not in direct or is_ignored(name):
             continue
         out.append(PolicyFinding(
             rule="forced-version-without-dependabot-ignore",
             severity="MEDIUM",
             file=path,
-            message=f"{name} is force-pinned to {spec} via overrides/resolutions, but dependabot has no ignore for it",
+            message=(
+                f"{name} is a direct dependency force-pinned to {spec}, but dependabot "
+                "has no ignore for it"
+            ),
             fix=(
-                f"add a dependabot ignore for {name} — otherwise dependabot can bump the "
+                f"add a dependabot ignore for {name} — dependabot can bump the direct "
                 "dependency past the pin and silently undo the holdback"
             ),
         ))

@@ -144,20 +144,35 @@ def test_known_token_shapes_are_flagged():
         assert check_plaintext_secrets("Dockerfile", blob), blob
 
 
-def test_forced_version_without_ignore_is_flagged():
-    pkg = json.dumps({"overrides": {"postcss": "8.5.26", "nanoid": "^3.3.18"}})
+def test_direct_dependency_holdback_without_ignore_is_flagged():
+    pkg = json.dumps({
+        "devDependencies": {"postcss": "^8.5.26", "nanoid": "^3.3.18"},
+        "overrides": {"postcss": "8.5.26", "nanoid": "^3.3.18"},
+    })
     out = check_forced_version_without_dependabot_ignore(pkg, "version: 2\nupdates: []\n")
     assert {f.message.split()[0] for f in out} == {"postcss", "nanoid"}
 
 
+def test_transitive_only_override_is_not_flagged():
+    # The case that made this rule useless: an override forcing a patched
+    # version deep in the tree. Dependabot does not open version-update PRs
+    # for transitive packages, so an ignore would match nothing. 28 of these
+    # were reported across the real fleet before this was narrowed.
+    pkg = json.dumps({"dependencies": {"react": "^18.2.0"},
+                      "overrides": {"postcss": "8.5.26"}})
+    assert check_forced_version_without_dependabot_ignore(pkg, "updates: []") == []
+
+
 def test_forced_version_with_matching_ignore_is_clean():
-    pkg = json.dumps({"overrides": {"postcss": "8.5.26"}})
+    pkg = json.dumps({"devDependencies": {"postcss": "^8.5.26"},
+                      "overrides": {"postcss": "8.5.26"}})
     dep = 'updates:\n  - ignore:\n      - dependency-name: "postcss"\n'
     assert check_forced_version_without_dependabot_ignore(pkg, dep) == []
 
 
 def test_wildcard_ignore_matches_prefix():
-    pkg = json.dumps({"resolutions": {"@radix-ui/react-slot": "1.3.3"}})
+    pkg = json.dumps({"dependencies": {"@radix-ui/react-slot": "^1.3.3"},
+                      "resolutions": {"@radix-ui/react-slot": "1.3.3"}})
     dep = 'updates:\n  - ignore:\n      - dependency-name: "@radix-ui/*"\n'
     assert check_forced_version_without_dependabot_ignore(pkg, dep) == []
 
@@ -174,7 +189,10 @@ def test_run_policies_dispatches_and_sorts_by_severity():
         ".github/workflows/security-scan.yml": TRIVY_BROKEN,
         ".github/workflows/ci.yml": "on:\n  push:\n\njobs:\n  t:\n",
         ".github/dependabot.yml": DEPENDABOT_UNGROUPED,
-        "package.json": json.dumps({"overrides": {"postcss": "8.5.26"}}),
+        "package.json": json.dumps({
+            "devDependencies": {"postcss": "^8.5.26"},
+            "overrides": {"postcss": "8.5.26"},
+        }),
     })
     rules = [f.rule for f in findings]
     assert "trivy-sarif-gate" in rules
@@ -232,13 +250,19 @@ def test_holdback_rule_is_silent_without_a_dependabot_config():
     # With no dependabot config nothing can bump past the pin, so the finding
     # is not actionable — and "fixing" it would mean adding a config, which
     # starts generating PRs and CI spend instead of protecting anything.
-    findings = run_policies({"package.json": json.dumps({"overrides": {"postcss": "8.5.26"}})})
+    findings = run_policies({"package.json": json.dumps({
+        "devDependencies": {"postcss": "^8.5.26"},
+        "overrides": {"postcss": "8.5.26"},
+    })})
     assert findings == []
 
 
 def test_holdback_rule_fires_when_dependabot_is_configured():
     findings = run_policies({
-        "package.json": json.dumps({"overrides": {"postcss": "8.5.26"}}),
+        "package.json": json.dumps({
+            "devDependencies": {"postcss": "^8.5.26"},
+            "overrides": {"postcss": "8.5.26"},
+        }),
         ".github/dependabot.yml": 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n'
                                   '    directory: "/"\n    schedule:\n      interval: "weekly"\n'
                                   '    groups:\n      m:\n        patterns: ["*"]\n',
