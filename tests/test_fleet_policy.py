@@ -221,3 +221,8 @@ def test_override_target_handles_scopes_and_nesting():
     assert _override_target("parent/child") == "child"
     assert _override_target("**/pkg") == "pkg"
     assert _override_target("pkg") == "pkg"
+    # npm override keys may carry a version range; the range is not part of
+    # the package name, and emitting it would produce a dependabot ignore
+    # that matches nothing.
+    assert _override_target("zod@<4.4.0") == "zod"
+    assert _override_target("@babel/core@^7.1.0") == "@babel/core"

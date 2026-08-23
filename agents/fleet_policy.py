@@ -210,8 +210,15 @@ def _override_target(key: str) -> str:
     if not parts:
         return key
     if len(parts) >= 2 and parts[-2].startswith("@"):
-        return f"{parts[-2]}/{parts[-1]}"
-    return parts[-1]
+        name = f"{parts[-2]}/{parts[-1]}"
+    else:
+        name = parts[-1]
+    # npm override keys may carry a version range: "zod@<4.4.0". Strip it, but
+    # not the leading @ of a scope — searching from index 1 does both.
+    at = name.find("@", 1)
+    if at > 0:
+        name = name[:at]
+    return name
 
 
 def check_forced_version_without_dependabot_ignore(
