@@ -935,6 +935,24 @@ def _effective_entry_verdict(entry: Dict[str, Any]) -> Optional[str]:
     return entry.get("triage", {}).get("verdict")
 
 
+def _effective_finding_verdict(finding: Dict[str, Any], entry: Dict[str, Any]) -> Optional[str]:
+    # triage_report()/apply_feedback() record a verdict on each individual
+    # finding first, then derive a summary verdict on the entry (CONFIRMED
+    # if *any* finding was confirmed, FALSE_POSITIVE only if *all* were).
+    # A finding's own verdict is authoritative for that finding; the entry
+    # aggregate is only a fallback for findings nothing has verdicted
+    # individually — using the aggregate directly would treat a dismissed
+    # finding as active just because another finding in the same file was
+    # confirmed (or vice versa).
+    feedback = finding.get("feedback") or {}
+    if feedback.get("verdict"):
+        return feedback["verdict"]
+    triage = finding.get("triage") or {}
+    if triage.get("verdict"):
+        return triage["verdict"]
+    return _effective_entry_verdict(entry)
+
+
 def _partition_active_dismissed(
     results: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -945,11 +963,12 @@ def _partition_active_dismissed(
 
 
 def _highest_active_severity_at_or_above(report: Dict[str, Any], fail_on: str) -> bool:
-    """True if an active (non-dismissed) finding meets or exceeds the fail_on severity."""
+    """True if a finding not individually dismissed meets or exceeds fail_on severity."""
     threshold = SEVERITY_RANK[fail_on]
-    active, _ = _partition_active_dismissed(report.get("results", []))
-    for entry in active:
+    for entry in report.get("results", []):
         for finding in _entry_findings(entry):
+            if _effective_finding_verdict(finding, entry) == "FALSE_POSITIVE":
+                continue
             if SEVERITY_RANK.get(finding.get("severity", "INFO"), 9) <= threshold:
                 return True
     return False

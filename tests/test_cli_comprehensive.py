@@ -294,3 +294,63 @@ def test_partition_active_dismissed_splits_on_effective_verdict():
 
     assert active == [active_entry]
     assert dismissed == [dismissed_entry]
+
+
+def _mixed_verdict_entry():
+    # Mirrors how triage_report()/apply_feedback() actually annotate a
+    # multi-finding entry: each finding gets its own verdict, and the
+    # entry-level verdict is CONFIRMED because *any* finding was confirmed
+    # — even though the HIGH finding specifically was dismissed.
+    return {
+        "file": "src/x.ts",
+        "agent": "security_audit",
+        "tool": "audit_sql_injection",
+        "source_hash": "abc",
+        "result": {
+            "findings": [
+                {
+                    "severity": "HIGH",
+                    "issue": "dismissed high finding",
+                    "triage": {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
+                },
+                {
+                    "severity": "LOW",
+                    "issue": "confirmed low finding",
+                    "triage": {"verdict": "CONFIRMED", "reason": "real"},
+                },
+            ]
+        },
+        "triage": {"verdict": "CONFIRMED", "reason": "real"},
+    }
+
+
+def test_fail_on_evaluates_dismissals_per_finding_not_per_entry():
+    # Regression test: a naive per-entry check would see the entry's
+    # aggregate CONFIRMED verdict and treat the individually-dismissed HIGH
+    # finding as still active, incorrectly tripping --fail-on HIGH.
+    report = _synthetic_report(_mixed_verdict_entry())
+
+    assert _highest_active_severity_at_or_above(report, "HIGH") is False
+    assert _highest_active_severity_at_or_above(report, "LOW") is True
+
+
+def test_fail_on_finding_level_feedback_overrides_finding_level_triage():
+    entry = {
+        "file": "src/x.ts",
+        "agent": "security_audit",
+        "tool": "audit_sql_injection",
+        "source_hash": "abc",
+        "result": {
+            "findings": [
+                {
+                    "severity": "CRITICAL",
+                    "issue": "triage confirmed, human dismissed",
+                    "triage": {"verdict": "CONFIRMED", "reason": "model thinks real"},
+                    "feedback": {"verdict": "FALSE_POSITIVE", "reason": "human knows better", "source": "human"},
+                },
+            ]
+        },
+    }
+    report = _synthetic_report(entry)
+
+    assert _highest_active_severity_at_or_above(report, "LOW") is False

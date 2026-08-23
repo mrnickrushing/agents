@@ -1,22 +1,28 @@
-# Drop-in GitHub Actions job for a project that wants this repo's
-# no-API-key static scan (agents.cli scan / luau-scan) run on every push
-# and pull request.
+# Reusable GitHub Actions workflow: this repo's no-API-key static scan
+# (agents.cli scan / luau-scan) as a job any project can call.
 #
-# Copy this file (or the `agents-scan` job below) into the target
-# project's own .github/workflows/, adjusting the checked-out ref of this
-# `agents` repo as needed. It is opt-in and separate from that project's
-# own CI — nothing here modifies an existing workflow or merge gate.
+# It never runs in THIS repo's own CI (there is no push/pull_request
+# trigger below, only workflow_call) — call it from a target project's
+# own workflow file instead:
+#
+#   # .github/workflows/agents-scan.yml in the target project
+#   jobs:
+#     scan:
+#       uses: mrnickrushing/agents/.github/workflows/agents-scan.yml@main
+#       with:
+#         fail-on: never   # start here; see docs/pre-commit-and-ci.md
+#       secrets: inherit   # only needed for ANTHROPIC_API_KEY triage
 #
 # The `fail-on` input controls whether this job blocks the PR:
 #   - "never" (default): report-only, always green, findings visible in
 #     the job log and as an uploaded JSON artifact. Safe to add to any
 #     repo immediately.
-#   - "HIGH"/"CRITICAL"/etc.: the job fails when an active
-#     (non-dismissed) finding at or above that severity exists. Only
-#     switch this on once you've run the scan against the project a few
-#     times and are comfortable with what it flags — this is the "changes
-#     the merge gate" step, so it should be a deliberate choice, not a
-#     default.
+#   - "HIGH"/"CRITICAL"/etc.: the job fails when a finding not
+#     individually dismissed (by triage or by `agents.cli feedback`) at
+#     or above that severity exists. Only switch this on once you've run
+#     the scan against the project a few times and are comfortable with
+#     what it flags — this is the "changes the merge gate" step, so it
+#     should be a deliberate choice, not a default.
 #
 # ANTHROPIC_API_KEY / OPENAI_API_KEY are intentionally NOT wired in here.
 # Without one, the scan stays purely heuristic (no LLM triage, no
@@ -67,15 +73,31 @@ jobs:
       - name: Install agents toolkit
         run: pip install -e .agents-toolkit
 
+      # Persists the evolution DB (dismissed/confirmed finding verdicts)
+      # across workflow runs on a shared GitHub Actions cache key, keyed
+      # per calling repository. Without this, every run starts from an
+      # empty DB and `agents.cli feedback ... dismiss` done in one run
+      # (or locally, if you separately sync it) would have no effect
+      # here — a dismissed finding would keep tripping --fail-on forever.
+      - name: Restore evolution feedback cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/state/rushingtech-agents
+          key: agents-evolution-${{ github.repository }}-${{ github.run_id }}
+          restore-keys: |
+            agents-evolution-${{ github.repository }}-
+
       - name: Run Luau static scan (if applicable)
         if: hashFiles('**/*.lua', '**/*.luau') != ''
-        run: python -m agents.cli luau-scan "${{ inputs.scan-path }}" --fail-on "${{ inputs.fail-on }}"
+        # luau-scan has no CRITICAL severity (its rules top out at HIGH),
+        # so a CRITICAL threshold — which it can never produce — maps to
+        # "never block from this check" rather than an invalid argument.
+        run: python -m agents.cli luau-scan "${{ inputs.scan-path }}" --fail-on "${{ inputs.fail-on == 'CRITICAL' && 'never' || inputs.fail-on }}"
 
       - name: Run project scan
         run: |
           python -m agents.cli scan \
             --path "${{ inputs.scan-path }}" \
-            --no-record \
             --out agents-scan-report.json \
             --fail-on "${{ inputs.fail-on }}"
         env:

@@ -10,13 +10,24 @@
       operator having to remember CLI flags
 - [x] Wired `scan` into pre-commit and CI: added `--fail-on` to `scan` (mirroring `luau-scan`'s existing flag),
       a `scripts/pre-commit-agents-scan.sh` git/pre-commit-framework hook, a reusable
-      `ci-templates/agents-scan.yml` GitHub Actions workflow, and `docs/pre-commit-and-ci.md` — all opt-in and
+      `.github/workflows/agents-scan.yml` GitHub Actions workflow, and `docs/pre-commit-and-ci.md` — all opt-in and
       report-only (`--fail-on never`) by default, so adopting this doesn't silently change any project's merge
       gate
-- [x] Refactored the active/dismissed-findings split (triage + learned feedback precedence) out of
-      `_format_report` into reusable `_partition_active_dismissed`/`_effective_entry_verdict` helpers, shared
-      with the new `--fail-on` check; added regression tests for the fail-on threshold and the dismissal
-      precedence it relies on
+- [x] `--fail-on` evaluates each finding's own triage/feedback verdict (`_effective_finding_verdict`), not the
+      entry-level aggregate `_format_report` uses for display — a multi-finding file where one finding is
+      dismissed and another confirmed previously tripped the entry-aggregate `CONFIRMED` verdict even for the
+      dismissed finding; added regression tests for the mixed-verdict case and for feedback-overrides-triage
+      precedence at the finding level
+- [x] Fixed the pre-commit hook silently defaulting to a blocking `HIGH` gate on install (contradicted its own
+      docs) and running `scan --no-record`, which skipped `apply_feedback` and made `agents.cli feedback ...
+      dismiss` a no-op for the hook's own documented escape hatch; the CI workflow now caches the evolution DB
+      across runs for the same reason
+- [x] Mapped `--fail-on CRITICAL` to `never` for `luau-scan` specifically (its rules top out at `HIGH`, so it
+      has no `CRITICAL` to fail on and previously errored on that argument) in both the pre-commit hook and the
+      CI workflow
+- [x] Moved the reusable workflow to `.github/workflows/agents-scan.yml` (it must live there for GitHub's
+      `uses: owner/repo/.github/workflows/file.yml@ref` syntax to resolve at all — it was previously
+      unreachable at `ci-templates/`)
 
 ## ✅ COMPLETED (v2.5.0)
 
@@ -155,7 +166,7 @@ against real Vitality/shield-ai code after each new check, same discipline as th
 ## NEXT STEPS
 
 - The pre-commit hook and CI template are ready but not installed anywhere yet — actually adopt
-  `scripts/pre-commit-agents-scan.sh` and/or `ci-templates/agents-scan.yml` on Vitality/shield-ai if the manual
+  `scripts/pre-commit-agents-scan.sh` and/or `.github/workflows/agents-scan.yml` on Vitality/shield-ai if the manual
   CLI has proven useful in practice, starting in report-only mode before turning on `--fail-on`
 - Consider an EcommerceAgent (checkout flow, inventory, abandoned cart) for aegisapparel/A-Yard-Apparel/sugarhaus
   if that becomes active work
