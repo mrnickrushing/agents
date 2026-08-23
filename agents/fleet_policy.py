@@ -54,8 +54,14 @@ def check_trivy_sarif_gate(path: str, content: str) -> List[PolicyFinding]:
             continue
         has_sarif = re.search(r"format:\s*['\"]?sarif", block, re.I)
         has_exit = re.search(r"exit-code:\s*['\"]?1", block, re.I)
-        has_sev = re.search(r"severity:\s*", block, re.I)
-        if has_sarif and has_exit and has_sev:
+        has_sev = re.search(r"^\s*severity:\s*\S", block, re.I | re.M)
+        # trivy-action's documented escape hatch: with this set, the severity
+        # filter *is* applied to sarif output, so the gate behaves correctly
+        # and there is nothing to report.
+        limited = re.search(
+            r"limit-severities-for-sarif:\s*['\"]?true", block, re.I
+        )
+        if has_sarif and has_exit and has_sev and not limited:
             out.append(PolicyFinding(
                 rule="trivy-sarif-gate",
                 severity="HIGH",

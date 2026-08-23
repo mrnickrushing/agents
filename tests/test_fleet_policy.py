@@ -268,3 +268,24 @@ def test_holdback_rule_fires_when_dependabot_is_configured():
                                   '    groups:\n      m:\n        patterns: ["*"]\n',
     })
     assert [f.rule for f in findings] == ["forced-version-without-dependabot-ignore"]
+
+
+TRIVY_SARIF_BUT_LIMITED = """
+jobs:
+  trivy:
+    steps:
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
+          exit-code: '1'
+          format: sarif
+"""
+
+
+def test_sarif_with_limit_severities_is_not_flagged():
+    # trivy-action's documented escape hatch: with limit-severities-for-sarif
+    # the severity filter *is* honoured in sarif mode, so the gate is correct.
+    # Flagging it sent me to "fix" a repo that was already right.
+    assert check_trivy_sarif_gate(".github/workflows/security-scan.yml",
+                                  TRIVY_SARIF_BUT_LIMITED) == []
