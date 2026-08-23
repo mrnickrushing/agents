@@ -226,3 +226,21 @@ def test_override_target_handles_scopes_and_nesting():
     # that matches nothing.
     assert _override_target("zod@<4.4.0") == "zod"
     assert _override_target("@babel/core@^7.1.0") == "@babel/core"
+
+
+def test_holdback_rule_is_silent_without_a_dependabot_config():
+    # With no dependabot config nothing can bump past the pin, so the finding
+    # is not actionable — and "fixing" it would mean adding a config, which
+    # starts generating PRs and CI spend instead of protecting anything.
+    findings = run_policies({"package.json": json.dumps({"overrides": {"postcss": "8.5.26"}})})
+    assert findings == []
+
+
+def test_holdback_rule_fires_when_dependabot_is_configured():
+    findings = run_policies({
+        "package.json": json.dumps({"overrides": {"postcss": "8.5.26"}}),
+        ".github/dependabot.yml": 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n'
+                                  '    directory: "/"\n    schedule:\n      interval: "weekly"\n'
+                                  '    groups:\n      m:\n        patterns: ["*"]\n',
+    })
+    assert [f.rule for f in findings] == ["forced-version-without-dependabot-ignore"]

@@ -305,10 +305,13 @@ def run_policies(files: Dict[str, str]) -> List[PolicyFinding]:
                 findings.extend(rule(path, content))
 
     pkg = files.get("package.json")
-    if pkg:
-        dependabot = (
-            files.get(".github/dependabot.yml") or files.get(".github/dependabot.yaml") or ""
-        )
+    dependabot = files.get(".github/dependabot.yml") or files.get(".github/dependabot.yaml")
+    # Only meaningful where dependabot version updates are actually configured.
+    # With no config there is nothing that can bump a dependency past the pin,
+    # so reporting it would be noise — and acting on it would mean *adding* a
+    # dependabot config, which starts generating PRs and CI spend rather than
+    # protecting anything.
+    if pkg and dependabot:
         findings.extend(check_forced_version_without_dependabot_ignore(pkg, dependabot))
 
     order = {s: i for i, s in enumerate(SEVERITIES)}
