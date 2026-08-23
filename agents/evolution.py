@@ -17,7 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SCHEMA_VERSION = 1
+from agents.incidents import fingerprint
+
+SCHEMA_VERSION = 2
 VALID_VERDICTS = {"CONFIRMED", "FALSE_POSITIVE"}
 
 
@@ -191,6 +193,27 @@ class EvolutionStore:
             );
             CREATE INDEX IF NOT EXISTS feedback_finding_idx
                 ON feedback(finding_id, source, created_at DESC);
+            -- Operational failure memory (schema v2). Distinct from `findings`,
+            -- which is static analysis of source. This records how a *build or
+            -- deploy* broke and what actually fixed it, keyed by a normalized
+            -- signature so the same failure recurring in a different repo
+            -- months later still matches. See agents/incidents.py.
+            CREATE TABLE IF NOT EXISTS incidents (
+                incident_id  TEXT PRIMARY KEY,
+                signature    TEXT NOT NULL,
+                project_key  TEXT NOT NULL,
+                surface      TEXT NOT NULL,
+                check_name   TEXT,
+                summary      TEXT NOT NULL,
+                root_cause   TEXT NOT NULL,
+                fix          TEXT NOT NULL,
+                fix_ref      TEXT,
+                created_at   TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS incidents_signature_idx
+                ON incidents(signature, created_at DESC);
+            CREATE INDEX IF NOT EXISTS incidents_project_idx
+                ON incidents(project_key, created_at DESC);
             """)
         self.connection.execute(
             "INSERT OR REPLACE INTO metadata(key, value) VALUES ('schema_version', ?)",
@@ -498,3 +521,102 @@ class EvolutionStore:
             params,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    # --- operational failure memory (schema v2) ------------------------------
+
+    def record_incident(
+        self,
+        log: str,
+        project_key: str,
+        surface: str,
+        summary: str,
+        root_cause: str,
+        fix: str,
+        check_name: Optional[str] = None,
+        fix_ref: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Remember how a build/deploy failure was actually resolved.
+
+        `log` is the raw failure output; it is fingerprinted, not stored — the
+        log may contain tokens, and a signature is all that matching needs.
+        """
+        if surface not in {"ci", "deploy", "build"}:
+            raise ValueError(f"surface must be ci|deploy|build, got {surface!r}")
+
+        signature, lines = fingerprint(log)
+        incident_id = uuid.uuid4().hex
+        self.connection.execute(
+            """
+            INSERT INTO incidents(
+                incident_id, signature, project_key, surface, check_name,
+                summary, root_cause, fix, fix_ref, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                incident_id, signature, project_key, surface, check_name,
+                summary, root_cause, fix, fix_ref, _utc_now(),
+            ),
+        )
+        self.connection.commit()
+        return {
+            "incident_id": incident_id,
+            "signature": signature,
+            "matched_on": lines,
+        }
+
+    def match_incidents(
+        self, log: str, limit: int = 5, exclude_project: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Prior incidents whose failure signature matches `log`.
+
+        Deliberately searches across *every* project: the whole value is that
+        a fix found in one repo surfaces the next time the same failure
+        appears somewhere else. `exclude_project` is for the "has this ever
+        happened anywhere but here" question, not the default.
+        """
+        signature, lines = fingerprint(log)
+        params: List[Any] = [signature]
+        where = "signature = ?"
+        if exclude_project:
+            where += " AND project_key != ?"
+            params.append(exclude_project)
+        params.append(limit)
+
+        rows = self.connection.execute(
+            f"""
+            SELECT incident_id, signature, project_key, surface, check_name,
+                   summary, root_cause, fix, fix_ref, created_at
+            FROM incidents
+            WHERE {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return {
+            "signature": signature,
+            "matched_on": lines,
+            "incidents": [dict(r) for r in rows],
+        }
+
+    def recent_incidents(
+        self, project: Optional[str] = None, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        params: List[Any] = []
+        where = "1=1"
+        if project:
+            where = "project_key = ?"
+            params.append(project)
+        params.append(limit)
+        rows = self.connection.execute(
+            f"""
+            SELECT incident_id, signature, project_key, surface, check_name,
+                   summary, root_cause, fix, fix_ref, created_at
+            FROM incidents
+            WHERE {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
