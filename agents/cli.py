@@ -43,6 +43,7 @@ from agents.api_architect import APIArchitectAgent
 from agents.auth_security import AuthSecurityAgent
 from agents.code_review import CodeReviewAgent
 from agents.config_audit import ConfigAuditAgent
+from agents import autofix
 from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.mobile_deploy import MobileDeployAgent
@@ -1297,6 +1298,48 @@ def rule_precision(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     return out
 
 
+def cmd_fix(args: argparse.Namespace) -> None:
+    """Apply the mechanical fixes. Dry-run is the default, on purpose: this
+    edits workflow files and committed config, and a fixer you cannot preview
+    is a fixer you have to trust blindly."""
+    root = args.path or "."
+    kinds = {k.strip() for k in args.kinds.split(",")} if args.kinds else None
+
+    result = autofix.plan(root, apply=args.apply, kinds=kinds)
+
+    if not result.changes:
+        print("nothing to fix" + ("" if args.apply else " (dry run)"))
+    else:
+        verb = "fixed" if args.apply else "would fix"
+        for change in result.changes:
+            print(f"  [{change.kind}] {change.path}: {change.detail}")
+        totals = ", ".join(f"{n} {k}" for k, n in sorted(result.by_kind().items()))
+        print(f"\n{verb}: {totals}")
+
+    if result.unresolved:
+        # A tag whose SHA could not be resolved is left exactly as it was.
+        # Rewriting it to a guess would break the workflow while looking like
+        # a security improvement.
+        print(f"\ncould not resolve {len(result.unresolved)} action ref(s) — left unchanged:",
+              file=sys.stderr)
+        for item in result.unresolved[:10]:
+            print(f"  {item}", file=sys.stderr)
+
+    if args.apply:
+        problems = autofix.validate_workflows(root)
+        if problems:
+            # A fixer that emits invalid YAML has broken CI in the name of
+            # securing it. Say so loudly; the edits are already on disk.
+            print("\n❌ workflow files no longer parse after fixing — revert and report:",
+                  file=sys.stderr)
+            for problem in problems:
+                print(f"  {problem}", file=sys.stderr)
+            raise SystemExit(1)
+        print("workflow YAML re-validated OK")
+    else:
+        print("\n(dry run — nothing written. Re-run with --apply)")
+
+
 def cmd_precision(args: argparse.Namespace) -> None:
     rows = rule_precision(args.db)
     if not rows:
@@ -1416,6 +1459,18 @@ def main() -> None:
     p_run.add_argument("--file", action="append", help="key=path — read file contents into this argument (repeatable)")
     p_run.add_argument("--stdin", help="argument name to fill from stdin")
     p_run.set_defaults(func=cmd_run)
+    p_fix = sub.add_parser(
+        "fix",
+        help="Apply mechanical fixes (pin actions, scope workflow tokens, document env vars, harden compose)",
+    )
+    p_fix.add_argument("path", nargs="?", help="Repository root (default: .)")
+    p_fix.add_argument("--apply", action="store_true",
+                       help="write the changes (default: dry run)")
+    p_fix.add_argument("--kinds",
+                       help="comma-separated subset: pin-actions, workflow-permissions, "
+                            "env-example, compose")
+    p_fix.set_defaults(func=cmd_fix)
+
 
     p_precision = sub.add_parser(
         "precision",

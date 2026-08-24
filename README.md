@@ -6,6 +6,45 @@ Twelve specialized agents (73 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.12.0 — `agents fix`, and cheaper triage
+
+**`agents fix`** applies the findings that are mechanical — the ones with
+exactly one correct fix that is the same fix everywhere:
+
+- **Pin actions** to the SHA their tag points at, tag kept as a comment so
+  dependabot maintains the pin. A tag that cannot be resolved is left alone
+  and reported: rewriting it to a guess would break the workflow while
+  looking like a security improvement.
+- **Scope workflow tokens** — a least-privilege top-level `permissions:` for
+  workflows that have none, plus `security-events: write` on any job that
+  uploads SARIF. That second half is not optional; without it, restricting
+  the token turns a passing security scan into a failing one.
+- **Document env vars** the code reads but `.env.example` never mentions —
+  the "works locally, dies on deploy" failure, caught before the deploy.
+- **Harden compose** — database ports to loopback, stock passwords
+  parameterized with today's literal as the default, so local behaviour is
+  unchanged and the file simply stops being reusable with a real password.
+
+Dry run is the default and writes nothing; `--apply` re-validates every
+workflow afterwards and exits non-zero if the YAML no longer parses. Every
+fixer is idempotent. This began as a throwaway script that hardened fifteen
+repositories in one pass (156 actions pinned, 21 tokens scoped, ~90 env
+vars documented) and earns a place here because the rule behind most of
+that work, `config_audit.audit_workflow`, scores **100% precision** against
+recorded verdicts.
+
+Deliberately absent: Dockerfile `USER` fixes. Each needs a judgment about
+what the runtime writes and where its toolchains cache — Playwright installs
+browsers into the invoking user's home, so adding `USER app` without first
+pinning `PLAYWRIGHT_BROWSERS_PATH` produces an image that builds and then
+fails at runtime. A fixer right nine times in ten is worse than none.
+
+**Triage now costs one call per file, not one per finding.** Findings within
+an entry share a file and a rule, so they are judged together; the old loop
+re-uploaded the whole file for every finding in it. Verdicts return as an
+indexed array so a short response degrades to UNKNOWN rather than sliding
+verdicts onto the wrong findings.
+
 ## 🆕 Version 2.11.0 — The scanner earns belief
 
 **`agents precision`** — per-rule precision from every recorded verdict
