@@ -24,10 +24,15 @@ OPENAI_API_KEY is set in the environment, unless overridden with
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import math
 import os
 import re
-from typing import Any, Dict, List, Optional
+import sqlite3
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base import BaseAgent
 
@@ -438,3 +443,340 @@ async def triage_report_async(
         else:
             coverage["confidence"] = "heuristics-triaged-runtime-unverified"
     return report
+
+
+# ── TriageRAG — RAG-enhanced triage with historical context ───────────────────
+
+_RAG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS rag_findings (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint    TEXT    NOT NULL UNIQUE,
+    agent          TEXT,
+    rule           TEXT,
+    file           TEXT,
+    issue          TEXT,
+    verdict        TEXT,
+    reason         TEXT,
+    embedding_json TEXT,
+    created_at     REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_rule   ON rag_findings(rule);
+CREATE INDEX IF NOT EXISTS idx_rag_agent  ON rag_findings(agent);
+CREATE INDEX IF NOT EXISTS idx_rag_verdict ON rag_findings(verdict);
+"""
+
+_DEFAULT_RAG_DB = Path.home() / ".rushingtech" / "evolution.db"
+
+
+def _finding_fingerprint(finding: Dict[str, Any]) -> str:
+    """Stable fingerprint for a finding, used as the primary de-dup key."""
+    key = json.dumps(
+        {
+            "agent": finding.get("agent", ""),
+            "rule": finding.get("rule", ""),
+            "file": finding.get("file", ""),
+            "issue": finding.get("issue", ""),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _simple_embed(text: str, dim: int = 64) -> List[float]:
+    """
+    Lightweight pseudo-embedding (no ML library required).
+
+    Hashes trigrams of the normalised text into a fixed-size float vector.
+    Cosine similarity between these vectors tracks lexical overlap reasonably
+    well for our use-case (same rule + same file type) without requiring
+    sentence-transformers or any external dependency.
+    """
+    text = re.sub(r"\W+", " ", text.lower()).strip()
+    tokens = text.split()
+    vec = [0.0] * dim
+    for i, tok in enumerate(tokens):
+        for ch in tok:
+            idx = (ord(ch) * (i + 1) * 31) % dim
+            vec[idx] += 1.0
+    # L2-normalise
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [x / norm for x in vec]
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _finding_text(finding: Dict[str, Any]) -> str:
+    """Human-readable text representation of a finding for embedding."""
+    parts = [
+        finding.get("agent", ""),
+        finding.get("rule", ""),
+        os.path.basename(finding.get("file", "")),
+        finding.get("issue", ""),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+class TriageRAG:
+    """
+    Retrieval-Augmented Generation helper for triage.
+
+    Stores past finding verdicts in SQLite and retrieves the most similar
+    historical findings as context for the LLM triage prompt.  This allows
+    the triage agent to reason about patterns it has seen before:
+
+        "We've seen this rule fire 12 times before.  10 were CONFIRMED,
+         2 were FALSE_POSITIVE (both in test directories)."
+
+    Usage::
+
+        rag = TriageRAG(project_root="/path/to/project")
+
+        # Retrieve context for a new finding
+        context = rag.retrieve_context(finding)
+
+        # After triage, record the verdict so future scans benefit
+        rag.record_verdict(finding, verdict="CONFIRMED", reason="...")
+
+        # Full RAG-enhanced triage (requires TriageAgent)
+        result = await rag.triage_with_rag(agent, finding, min_confidence=0.75)
+    """
+
+    def __init__(
+        self,
+        project_root: str = ".",
+        db_path: Optional[str] = None,
+        min_similarity: float = 0.5,
+        top_k: int = 5,
+    ) -> None:
+        self._project_root = os.path.realpath(project_root)
+        self._min_similarity = min_similarity
+        self._top_k = top_k
+        _path = Path(db_path) if db_path else _DEFAULT_RAG_DB
+        _path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(_path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.executescript(_RAG_SCHEMA)
+        self._conn.commit()
+
+    # ── record ────────────────────────────────────────────────────────
+
+    def record_verdict(
+        self,
+        finding: Dict[str, Any],
+        verdict: str,
+        reason: str = "",
+    ) -> None:
+        """Persist a triage verdict so future scans can learn from it."""
+        fp = _finding_fingerprint(finding)
+        embedding = _simple_embed(_finding_text(finding))
+        self._conn.execute(
+            """
+            INSERT INTO rag_findings
+                (fingerprint, agent, rule, file, issue, verdict, reason, embedding_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(fingerprint) DO UPDATE SET
+                verdict        = excluded.verdict,
+                reason         = excluded.reason,
+                embedding_json = excluded.embedding_json
+            """,
+            (
+                fp,
+                finding.get("agent", ""),
+                finding.get("rule", ""),
+                finding.get("file", ""),
+                finding.get("issue", ""),
+                verdict.upper(),
+                reason,
+                json.dumps(embedding),
+                time.time(),
+            ),
+        )
+        self._conn.commit()
+
+    # ── retrieve ──────────────────────────────────────────────────────
+
+    def retrieve_context(self, finding: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Retrieve similar past findings and compute a confidence score.
+
+        Returns a dict with:
+        - ``similar``: list of the top-K past findings (sorted by similarity)
+        - ``confirmed_count``: how many were CONFIRMED
+        - ``false_positive_count``: how many were FALSE_POSITIVE
+        - ``confidence``: float 0–1 (fraction that were CONFIRMED)
+        - ``context_text``: formatted string suitable for injection into an LLM prompt
+        """
+        embedding = _simple_embed(_finding_text(finding))
+
+        # Pull candidates by same rule first (fast); fall back to all if sparse
+        rows = self._conn.execute(
+            "SELECT fingerprint, agent, rule, file, issue, verdict, reason, embedding_json "
+            "FROM rag_findings WHERE rule = ?",
+            (finding.get("rule", ""),),
+        ).fetchall()
+
+        if len(rows) < 20:
+            # Broaden to same agent
+            rows = self._conn.execute(
+                "SELECT fingerprint, agent, rule, file, issue, verdict, reason, embedding_json "
+                "FROM rag_findings WHERE agent = ?",
+                (finding.get("agent", ""),),
+            ).fetchall()
+
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        for row in rows:
+            try:
+                row_emb = json.loads(row["embedding_json"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                row_emb = []
+            if not row_emb:
+                continue
+            sim = _cosine(embedding, row_emb)
+            if sim >= self._min_similarity:
+                scored.append((sim, dict(row)))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = [item for _, item in scored[: self._top_k]]
+
+        confirmed = sum(1 for t in top if t["verdict"] == "CONFIRMED")
+        fp_count = sum(1 for t in top if t["verdict"] == "FALSE_POSITIVE")
+        total = len(top)
+        confidence = (confirmed / total) if total > 0 else 0.0
+
+        lines = []
+        for item in top:
+            lines.append(
+                f"- {item['verdict']}: {item['issue']} in {os.path.basename(item['file'] or '')} "
+                f"— {item['reason'] or 'no reason recorded'}"
+            )
+        context_text = "\n".join(lines) if lines else "No similar past findings."
+
+        return {
+            "similar": top,
+            "confirmed_count": confirmed,
+            "false_positive_count": fp_count,
+            "total_similar": total,
+            "confidence": confidence,
+            "context_text": context_text,
+        }
+
+    # ── triage_with_rag ───────────────────────────────────────────────
+
+    async def triage_with_rag(
+        self,
+        agent: "TriageAgent",
+        finding: Dict[str, Any],
+        min_confidence: float = 0.75,
+    ) -> Dict[str, Any]:
+        """
+        Run an LLM triage pass enhanced with historical RAG context.
+
+        If ``min_confidence`` is met (enough historical agreement), the
+        historical verdict is returned directly without an LLM call.
+
+        Returns::
+
+            {
+                "verdict": "CONFIRMED" | "FALSE_POSITIVE" | "UNKNOWN",
+                "confidence": 0.92,
+                "reason": "...",
+                "similar": [...],
+                "source": "rag_cache" | "llm",
+            }
+        """
+        ctx = self.retrieve_context(finding)
+
+        # Fast path: high-confidence historical verdict
+        if ctx["total_similar"] >= 3 and ctx["confidence"] >= min_confidence:
+            verdict = "CONFIRMED"
+            reason = (
+                f"RAG: {ctx['confirmed_count']}/{ctx['total_similar']} similar past findings "
+                f"were CONFIRMED ({ctx['confidence'] * 100:.0f}% confidence)."
+            )
+            return {
+                "verdict": verdict,
+                "confidence": ctx["confidence"],
+                "reason": reason,
+                "similar": ctx["similar"],
+                "source": "rag_cache",
+            }
+
+        # Low confidence: call low-FP path: pass context into a synthetic
+        # "entry" and run the standard triage with additional historical note
+        file_path = finding.get("file", "")
+        abs_path = os.path.join(self._project_root, file_path) if file_path else ""
+        file_content = "<could not read file>"
+        if abs_path and os.path.isfile(abs_path):
+            try:
+                with open(abs_path, "r", errors="ignore") as fh:
+                    file_content = fh.read(MAX_TRIAGE_FILE_BYTES)
+            except OSError:
+                pass
+
+        history_block = ctx["context_text"]
+        prompt = (
+            f"Finding: {finding.get('issue', '')} in {file_path}\n"
+            f"Severity: {finding.get('severity', 'UNKNOWN')}\n\n"
+            f"Historical context (similar past findings):\n{history_block}\n\n"
+            f"File contents:\n```\n{file_content}\n```\n\n"
+            "Respond with ONLY a JSON object:\n"
+            '{"verdict": "CONFIRMED" or "FALSE_POSITIVE", "reason": "<one sentence>"}'
+        )
+
+        conversation_id = f"rag:{_finding_fingerprint(finding)}"
+        try:
+            response = await agent.run_async(prompt, conversation_id=conversation_id)
+        finally:
+            agent.reset(conversation_id)
+
+        verdict_obj = _extract_verdict(response.content)
+        return {
+            "verdict": verdict_obj["verdict"],
+            "confidence": ctx["confidence"],
+            "reason": verdict_obj["reason"],
+            "similar": ctx["similar"],
+            "source": "llm",
+        }
+
+    def record_report_verdicts(self, report: Dict[str, Any]) -> int:
+        """
+        Bulk-record all triaged findings from a completed triage report.
+
+        Call this after ``triage_report()`` to populate the RAG store for
+        future scans.  Returns the number of records written.
+        """
+        written = 0
+        for entry in report.get("results", []):
+            agent_name = entry.get("agent", "")
+            rule = entry.get("tool", "")
+            file_path = entry.get("file", "")
+            for finding in _findings_of(entry):
+                triage = finding.get("triage")
+                if not isinstance(triage, dict):
+                    continue
+                verdict = triage.get("verdict", "UNKNOWN")
+                if verdict not in ("CONFIRMED", "FALSE_POSITIVE"):
+                    continue
+                self.record_verdict(
+                    {
+                        "agent": agent_name,
+                        "rule": rule,
+                        "file": file_path,
+                        "issue": finding.get("issue", ""),
+                    },
+                    verdict=verdict,
+                    reason=triage.get("reason", ""),
+                )
+                written += 1
+        return written
+
+    def close(self) -> None:
+        self._conn.close()

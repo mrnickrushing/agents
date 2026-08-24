@@ -36,6 +36,10 @@ from agents.healing import HealingAgent
 from agents.training import DetectorTrainer
 from agents.figma_scaffold import FigmaScaffoldAgent
 from agents.workflow import WorkflowOrchestrator
+from agents.durability import DurableStep, DurabilityDB, durable_step, durable_workflow
+from agents.knowledge_graph import CodebaseGraph
+from agents.streaming import StreamingEventBus, get_default_bus, emit
+from agents.triage import TriageAgent, TriageRAG
 
 __all__ = [
     "SecurityAuditAgent",
@@ -61,6 +65,17 @@ __all__ = [
     "DetectorTrainer",
     "FigmaScaffoldAgent",
     "WorkflowOrchestrator",
+    # New v2.14 capabilities
+    "DurableStep",
+    "DurabilityDB",
+    "durable_step",
+    "durable_workflow",
+    "CodebaseGraph",
+    "StreamingEventBus",
+    "get_default_bus",
+    "emit",
+    "TriageAgent",
+    "TriageRAG",
 ]
 
-__version__ = "2.13.0"
+__version__ = "2.14.0"
