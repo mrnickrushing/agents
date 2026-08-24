@@ -1,5 +1,5 @@
 """
-Web Dashboard — Flask app with WebSocket live-scan progress updates.
+Web Dashboard — Flask app with Server-Sent Events live-scan progress updates.
 
 Serves a minimal dark-mode HTML UI that shows:
 - Historical scan overview

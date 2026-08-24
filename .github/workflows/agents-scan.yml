@@ -74,7 +74,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install agents toolkit
-        run: pip install -e .agents-toolkit
+        # Non-editable install, then remove the checkout so a default
+        # scan-path of "." scans the caller's project, not this toolkit too.
+        run: |
+          pip install .agents-toolkit
+          rm -rf .agents-toolkit
 
       # Persists the evolution DB (dismissed/confirmed finding verdicts)
       # across workflow runs on a shared GitHub Actions cache key, keyed

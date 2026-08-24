@@ -13,7 +13,10 @@ Example flow:
 Usage:
     from agents.workflow import WorkflowOrchestrator
     orch = WorkflowOrchestrator()
-    report = orch.run_chain(["security_audit", "auth_security"], code="...")
+    report = orch.run_chain(
+        [("security_audit", "check_jwt_implementation", {"code": src})],
+        auto_route=True,   # keyword hits route findings on to specialist agents
+    )
 """
 
 from __future__ import annotations

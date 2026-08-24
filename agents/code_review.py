@@ -493,14 +493,28 @@ Always provide the fix with code, not just a description of what's wrong.
                     "fix": "Use text() with JSON.stringify/parse or migrate to PostgreSQL",
                 }
             )
-        if "primarykey" not in code_lower.replace(" ", ""):
-            findings.append(
-                {
-                    "severity": "HIGH",
-                    "issue": "No primary key defined",
-                    "fix": "Add id: serial('id').primaryKey() or uuid('id').primaryKey().defaultRandom()",
-                }
+        # Per table, not per file: a multi-table schema with one keyed table
+        # used to pass on the strength of that single primaryKey().
+        table_starts = [
+            (m.start(), m.group(1))
+            for m in re.finditer(
+                r"(?:pg|sqlite|mysql)Table\s*\(\s*['\"]([\w.]+)['\"]", schema_code
             )
+        ]
+        for index, (start, table_name) in enumerate(table_starts):
+            end = (
+                table_starts[index + 1][0]
+                if index + 1 < len(table_starts)
+                else len(schema_code)
+            )
+            if "primarykey" not in schema_code[start:end].lower().replace(" ", ""):
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": f"Table `{table_name}` has no primary key defined",
+                        "fix": "Add id: serial('id').primaryKey() or uuid('id').primaryKey().defaultRandom()",
+                    }
+                )
 
         return {
             "database": database,

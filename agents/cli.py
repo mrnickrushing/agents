@@ -48,6 +48,7 @@ from agents.config_audit import ConfigAuditAgent
 from agents import autofix
 from agents.database_architect import DatabaseArchitectAgent
 from agents.figma_scaffold import FigmaScaffoldAgent
+from agents.fleet_policy import FleetPolicyAgent
 from agents.flow_audit import FlowAuditAgent
 from agents.frontend_performance import FrontendPerformanceAgent
 from agents.healing import HealingAgent
@@ -89,6 +90,7 @@ AGENTS: Dict[str, type] = {
     "healing": HealingAgent,
     "training": DetectorTrainer,
     "figma_scaffold": FigmaScaffoldAgent,
+    "fleet_policy": FleetPolicyAgent,
 }
 
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
@@ -2595,6 +2597,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
     serve(host=args.host, port=args.port, db_path=args.db, threads=args.threads)
 
 
+def cmd_prospect_report(args: argparse.Namespace) -> None:
+    """Delegate to agents.prospect_report's own argument parser."""
+    from agents.prospect_report import main as prospect_main
+
+    sys.argv = ["agents prospect-report", *args.prospect_args]
+    raise SystemExit(prospect_main())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m agents.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2808,6 +2818,13 @@ def main() -> None:
     )
     p_serve.add_argument("--threads", type=int, default=8)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_prospect = sub.add_parser(
+        "prospect-report",
+        help="Render a prospect-facing report from a scan (same flags as python -m agents.prospect_report)",
+    )
+    p_prospect.add_argument("prospect_args", nargs=argparse.REMAINDER)
+    p_prospect.set_defaults(func=cmd_prospect_report)
 
     args = parser.parse_args()
     args.func(args)

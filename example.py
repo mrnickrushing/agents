@@ -27,11 +27,13 @@ def example_security_audit():
     agent = SecurityAuditAgent()  # Uses OPENAI_API_KEY env var
 
     # Example: Analyze a Helmet config
-    helmet_config = json.dumps({
-        "contentSecurityPolicy": False,  # Disabled!
-        "hsts": {"maxAge": 86400},  # Only 1 day
-        "noSniff": True,
-    })
+    helmet_config = json.dumps(
+        {
+            "contentSecurityPolicy": False,  # Disabled!
+            "hsts": {"maxAge": 86400},  # Only 1 day
+            "noSniff": True,
+        }
+    )
 
     print("=" * 60)
     print("SECURITY AUDIT AGENT")
@@ -39,8 +41,7 @@ def example_security_audit():
 
     # Use the tool directly for structured output
     result = agent._tool_handlers["analyze_helmet_config"](
-        config_json=helmet_config,
-        framework="express"
+        config_json=helmet_config, framework="express"
     )
     print("\n📋 Helmet Config Analysis:")
     print(json.dumps(result, indent=2))
@@ -67,11 +68,37 @@ def example_stripe_billing():
     # Design a subscription model
     model = agent._tool_handlers["design_subscription_model"](
         product_name="CyberCore Academy",
-        tiers=json.dumps([
-            {"name": "Free", "price_monthly": 0, "price_yearly": 0, "features": ["5 modules", "basic progress"], "trial_days": 0},
-            {"name": "Pro", "price_monthly": 29, "price_yearly": 290, "features": ["all modules", "badges", "simulations", "admin panel"], "trial_days": 14},
-            {"name": "Enterprise", "price_monthly": 99, "price_yearly": 990, "features": ["everything in Pro", "SOC 2 mapping", "NIST CSF", "HIPAA", "cohort management"], "trial_days": 30},
-        ]),
+        tiers=json.dumps(
+            [
+                {
+                    "name": "Free",
+                    "price_monthly": 0,
+                    "price_yearly": 0,
+                    "features": ["5 modules", "basic progress"],
+                    "trial_days": 0,
+                },
+                {
+                    "name": "Pro",
+                    "price_monthly": 29,
+                    "price_yearly": 290,
+                    "features": ["all modules", "badges", "simulations", "admin panel"],
+                    "trial_days": 14,
+                },
+                {
+                    "name": "Enterprise",
+                    "price_monthly": 99,
+                    "price_yearly": 990,
+                    "features": [
+                        "everything in Pro",
+                        "SOC 2 mapping",
+                        "NIST CSF",
+                        "HIPAA",
+                        "cohort management",
+                    ],
+                    "trial_days": 30,
+                },
+            ]
+        ),
         mobile_iap=True,
     )
     print("\n💰 Subscription Model:")
@@ -88,7 +115,7 @@ def example_stripe_billing():
             res.send();
         });
         """,
-        events_handled="customer.subscription.deleted"
+        events_handled="customer.subscription.deleted",
     )
     print("\n⚠️  Webhook Handler Review:")
     print(json.dumps(review, indent=2))
@@ -172,18 +199,18 @@ def example_scaffolder():
 
 def example_ui_generation():
     """UI Generation Agent — Claude-powered component creation with multi-turn conversation."""
-    
+
     print("\n" + "=" * 60)
     print("UI GENERATION AGENT (CLAUDE-POWERED)")
     print("=" * 60)
-    
+
     # Initialize with Anthropic API key
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         print("\n⚠️  Set ANTHROPIC_API_KEY to run this example:")
         print("  set -gx ANTHROPIC_API_KEY 'sk-ant-...'")
         print("\nShowing pattern instead:")
-        
+
         # Show usage pattern
         pattern = """
 # Initialize UI Generation Agent with Claude
@@ -240,17 +267,17 @@ response = agent.process_wireframe(
 """
         print(pattern)
         return
-    
+
     # Run actual example if API key is present
     agent = UIGenerationAgent(
         api_key=api_key,
         provider="anthropic",
         model="claude-sonnet-4-6",
-        temperature=0.7
+        temperature=0.7,
     )
-    
+
     print("\n🎨 Creating a dashboard card component...")
-    
+
     response = agent.run(
         "Create a responsive dashboard card component with:"
         "- A title (string prop)"
@@ -261,68 +288,73 @@ response = agent.process_wireframe(
         "- Clickable with hover effects"
         "- Fully accessible (keyboard navigation, screen reader support)"
     )
-    
+
     print("\nGenerated Component:")
     print(response.content)
     print(f"\nModel: {response.model}")
     print(f"Tokens: {response.usage}")
-    
+
     # Multi-turn example
     print("\n" + "-" * 60)
     print("Multi-turn conversation example:")
     print("-" * 60)
-    
+
     conversation_id = "card-refinement"
-    
+
     print("\nTurn 1: Create a basic card")
-    response1 = agent.run("Create a simple stats card with title and value", conversation_id=conversation_id)
+    response1 = agent.run(
+        "Create a simple stats card with title and value",
+        conversation_id=conversation_id,
+    )
     print(f"✓ Generated (messages: {len(agent.history)})")
-    
+
     print("\nTurn 2: Add trend indicator")
-    response2 = agent.run("Now add a trend arrow that shows up/down/neutral", conversation_id=conversation_id)
+    response2 = agent.run(
+        "Now add a trend arrow that shows up/down/neutral",
+        conversation_id=conversation_id,
+    )
     print(f"✓ Updated (messages: {len(agent.history)})")
-    
+
     print("\nTurn 3: Make it darker theme")
-    response3 = agent.run("Update the styling for a dark theme", conversation_id=conversation_id)
+    response3 = agent.run(
+        "Update the styling for a dark theme", conversation_id=conversation_id
+    )
     print(f"✓ Styled (messages: {len(agent.history)})")
-    
+
     print(f"\nFinal conversation length: {len(agent.history)} messages")
 
 
 def example_multi_provider():
     """Demonstrate using agents with both OpenAI and Anthropic providers."""
-    
+
     print("\n" + "=" * 60)
     print("MULTI-PROVIDER SUPPORT")
     print("=" * 60)
-    
+
     # OpenAI provider (default)
     print("\n🤖 Using OpenAI:")
     openai_agent = SecurityAuditAgent(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        provider="openai"
+        api_key=os.getenv("OPENAI_API_KEY"), provider="openai"
     )
     print(f"  Provider: {openai_agent.provider}")
     print(f"  Model: {openai_agent.model}")
-    
+
     # Anthropic provider
     print("\n🧠 Using Anthropic (Claude):")
     anthropic_agent = SecurityAuditAgent(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
         provider="anthropic",
-        model="claude-sonnet-4-6"
+        model="claude-sonnet-4-6",
     )
     print(f"  Provider: {anthropic_agent.provider}")
     print(f"  Model: {anthropic_agent.model}")
-    
+
     # UI Generation is Anthropic by default
     print("\n🎨 UI Generation Agent:")
-    ui_agent = UIGenerationAgent(
-        api_key=os.getenv("ANTHROPIC_API_KEY")
-    )
+    ui_agent = UIGenerationAgent(api_key=os.getenv("ANTHROPIC_API_KEY"))
     print(f"  Provider: {ui_agent.provider}")
     print(f"  Model: {ui_agent.model}")
-    
+
     print("\n💡 Tip: Pass provider='openai' or provider='anthropic' to any agent!")
 
 
@@ -334,16 +366,29 @@ def example_openai_chat():
     print("CHAT COMPLETIONS INTERFACE")
     print("=" * 60)
 
-    # Get the raw payload — send to any OpenAI-compatible endpoint
-    payload = agent.format_payload(
-        user_input="Audit my Express app for security vulnerabilities",
-        context="The app uses Helmet with CSP disabled, JWT stored in localStorage, and CORS set to '*'"
+    # Build the raw request payload from the agent's public surface — the
+    # same system prompt and provider-native tool schema `agent.run()` sends,
+    # ready for any OpenAI-compatible endpoint.
+    context = (
+        "The app uses Helmet with CSP disabled, JWT stored in localStorage, "
+        "and CORS set to '*'"
     )
+    payload = {
+        "model": agent.model,
+        "messages": [
+            {"role": "system", "content": agent.system_prompt},
+            {
+                "role": "user",
+                "content": f"Audit my Express app for security vulnerabilities\n\n{context}",
+            },
+        ],
+        "tools": agent.format_tools() or [],
+    }
     print("\n📤 Chat Completion Payload:")
     print(f"  Model: {payload['model']}")
     print(f"  Provider: {agent.provider}")
     print(f"  Messages: {len(payload['messages'])}")
-    print(f"  Tools: {len(payload.get('tools', []))} functions defined")
+    print(f"  Tools: {len(payload['tools'])} functions defined")
 
 
 if __name__ == "__main__":
@@ -365,8 +410,8 @@ if __name__ == "__main__":
     print('  set -gx ANTHROPIC_API_KEY "sk-ant-..."')
     print('  agent = SecurityAuditAgent(provider="openai")')
     print('  result = agent.run("Audit my app")')
-    print('  print(result.content)')
-    print('\nFor UI generation:')
+    print("  print(result.content)")
+    print("\nFor UI generation:")
     print('  ui_agent = UIGenerationAgent(provider="anthropic")')
     print('  result = ui_agent.run("Create a dashboard card")')
-    print('  print(result.content)')
+    print("  print(result.content)")

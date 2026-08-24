@@ -53,7 +53,18 @@ repos:
         pass_filenames: false
 ```
 
-Both forms respect two env vars:
+**Or consume this repo as a pre-commit hook source** — the root
+`.pre-commit-hooks.yaml` registers the hook, so no local path is needed:
+
+```yaml
+repos:
+  - repo: https://github.com/mrnickrushing/agents
+    rev: main            # pin to a tag once one exists
+    hooks:
+      - id: agents-scan
+```
+
+All three forms respect two env vars:
 
 - `AGENTS_SCAN_FAIL_ON` — severity threshold that blocks the commit
   (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`/`never`). Default `never` — installing

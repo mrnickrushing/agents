@@ -467,6 +467,19 @@ CLIENT_VISIBLE = {
 }
 
 
+# Accepted `--rules` names for the Rojo project check: the ids it emits plus
+# the historical umbrella name.
+ROJO_RULE_IDS = frozenset(
+    {
+        "rojo_unparsable",
+        "rojo_missing_path",
+        "rojo_server_in_client",
+        "rojo_lighting_unset",
+        "rojo_project",
+    }
+)
+
+
 def check_rojo_project(path: str, raw: str, repo_root: str) -> List[Finding]:
     findings: List[Finding] = []
     try:
@@ -858,6 +871,7 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
     findings sorted most severe first, with a per-rule tally so a caller can
     see at a glance which class of problem dominates.
     """
+    rules = set(rules) if rules else None
     root = os.path.abspath(root)
     sources: Dict[str, str] = {}
     for absolute in iter_luau_files(root):
@@ -872,7 +886,7 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
 
     findings: List[Finding] = []
     for relative, text in sources.items():
-        if not rules or "unresolved_requires" in rules:
+        if not rules or rules & {"unresolved_require", "unresolved_requires"}:
             findings.extend(check_unresolved_requires(relative, text, module_names))
         for rule in FILE_RULES:
             if rules and rule.__name__.replace("check_", "") not in rules:
@@ -885,7 +899,7 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
             if filename.endswith(".project.json"):
                 absolute = os.path.join(directory, filename)
                 relative = os.path.relpath(absolute, root)
-                if rules and "rojo_project" not in rules:
+                if rules and not rules & ROJO_RULE_IDS:
                     continue
                 try:
                     raw = open(absolute, encoding="utf-8").read()
@@ -893,7 +907,7 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
                     continue
                 findings.extend(check_rojo_project(relative, raw, root))
 
-    if not rules or "unread_definition_fields" in rules:
+    if not rules or rules & {"unread_definition_field", "unread_definition_fields"}:
         findings.extend(check_unread_definition_fields(root, sources))
 
     findings.sort(

@@ -1,5 +1,25 @@
 # Agent Development Status
 
+## ✅ COMPLETED (v2.16.0)
+
+- [x] Hosted service: `agents serve` runs the dashboard, the HMAC-verified GitHub webhook receiver, `/health`
+      and `/ready` as one gunicorn app; webhook scans are recorded into the evolution store and pushed to the
+      dashboard's SSE feed. Deployed on Railway (`Dockerfile.server`, `railway.toml`, volume at `/data`) behind
+      `agents.rushingtechnologies.com` — runbook in `docs/deploy.md`
+- [x] Fixed the dashboard querying columns the evolution store never had (`file_path`/`detector`/`scanned_at`);
+      it swallowed the `OperationalError` and always showed zero findings
+- [x] Tag-driven release pipeline is wired end to end (PyPI trusted publishing via the `pypi` environment, GHCR
+      for both the CLI and server images, GitHub Release notes); the first `v*` tag is a deliberate manual step
+- [x] Restored the "every Python agent has a Claude Code subagent mirror" invariant that PRs #32/#33 broke:
+      added mirrors for `compliance`, `figma_scaffold`, `flow_audit`, `frontend_performance`, `healing`,
+      `iac_security`, `postmortem`, `supply_chain_audit`, `training`
+- [x] Direct unit tests for `flow_audit`, `frontend_performance`, `iac_security` (previously only exercised
+      indirectly through `cli scan` routing)
+- [x] `example.py` called `format_payload`, a method that no longer exists; rebuilt on the public surface
+      (`system_prompt`, `format_tools()`, `model`)
+- [x] No Dependabot on this repo by decision — README/autofix no longer claim it maintains the action SHA pins;
+      re-running `agents fix` refreshes them
+
 ## ✅ COMPLETED (v2.9.0)
 
 - [x] Added the 6 missing Claude Code subagent mirrors — `auth-security-reviewer`, `api-architect`, `database-architect`,
