@@ -50,9 +50,23 @@ railway up                                       # or connect the GitHub repo in
 railway domain agents.rushingtechnologies.com    # prints the CNAME target
 ```
 
-Then in Cloudflare (zone `rushingtechnologies.com`) add a **proxied** CNAME
-`agents` → the target Railway printed (`jh8ifzti.up.railway.app` for the current
-service — it is per-domain, read it from Railway → Settings → Networking, not a generic host). Railway issues the certificate once
+Then in Cloudflare (zone `rushingtechnologies.com`) add **two** records —
+Railway returns 404 "Application not found" on the custom domain until both
+verify:
+
+| Type | Name | Value | Proxy |
+|---|---|---|---|
+| CNAME | `agents` | `jh8ifzti.up.railway.app` (per-domain — read it from `railway domain status`, it is **not** the generic `cname.railway.app`) | proxied (orange) |
+| TXT | `_railway-verify.agents` | `railway-verify=<token>` from `railway domain status` | DNS only |
+
+```bash
+railway domain status agents.rushingtechnologies.com --project <project-id> -s agents-server -e production --json
+# .domain.dnsRecords[].requiredValue → CNAME target; .domain.verification.{dnsHost,token} → TXT
+```
+
+The MCP `generate-domain` call and the Railway dashboard agent only surface
+the CNAME; the TXT record is the missing piece when the CNAME resolves but the
+domain still 404s. Railway issues the certificate once
 the record resolves; Cloudflare SSL mode must be *Full* (it is for the other
 `*.rushingtechnologies.com` services).
 
