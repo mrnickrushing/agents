@@ -17,12 +17,23 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
+
+
+def _shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    freq: Dict[str, int] = {}
+    for char in value:
+        freq[char] = freq.get(char, 0) + 1
+    length = len(value)
+    return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
 
 class SecurityAuditAgent(BaseAgent):
@@ -533,18 +544,74 @@ Format findings as structured reports with severity, location, description, and 
         this stack have no package.json at all.
         """
         manifest = package_json.strip()
-        ecosystem = "npm"
         deps: Dict[str, str] = {}
+        findings = []
+        review_notes = []
+        ecosystem = "unknown"
+        lockfile = "manifest"
 
         if manifest.startswith("{"):
             try:
-                pkg = json.loads(manifest)
+                parsed = json.loads(manifest)
             except json.JSONDecodeError:
-                return {"error": "Invalid package.json"}
-            deps = {
-                **(pkg.get("dependencies") or {}),
-                **(pkg.get("devDependencies") or {}),
-            }
+                return {"error": "Invalid dependency manifest JSON"}
+            if isinstance(parsed, dict) and ("dependencies" in parsed or "devDependencies" in parsed):
+                ecosystem = "npm"
+                deps = {
+                    **(parsed.get("dependencies") or {}),
+                    **(parsed.get("devDependencies") or {}),
+                }
+            elif isinstance(parsed, dict) and "packageManager" in parsed:
+                ecosystem = "npm"
+            elif isinstance(parsed, dict) and "default" in parsed and isinstance(parsed.get("default"), dict):
+                ecosystem = "pip"
+                lockfile = "Pipfile.lock"
+                for name, details in (parsed.get("default") or {}).items():
+                    if isinstance(details, dict):
+                        deps[name.lower()] = str(details.get("version", "")).lstrip("=")
+            elif isinstance(parsed, dict) and "package" in parsed and isinstance(parsed.get("package"), list):
+                ecosystem = "pip"
+                lockfile = "poetry.lock"
+                for pkg in parsed.get("package") or []:
+                    if isinstance(pkg, dict) and pkg.get("name"):
+                        deps[str(pkg["name"]).lower()] = str(pkg.get("version", ""))
+            elif isinstance(parsed, dict) and "pins" in parsed:
+                ecosystem = "pip"
+                lockfile = "Pipenv/Poetry"
+        elif "lockfileVersion:" in manifest and "packages:" in manifest:
+            ecosystem = "npm"
+            lockfile = "pnpm-lock.yaml"
+            for name, version in re.findall(r"(?m)^\s{2,}([@A-Za-z0-9._/-]+)\s*:\s*([0-9][^,\s]*)\s*$", manifest):
+                deps[name.lower()] = version
+            if "overrides:" in manifest:
+                findings.append({"severity": "LOW", "issue": "pnpm lockfile uses overrides; verify they do not pin vulnerable versions"})
+        elif re.search(r"(?m)^\[\[package\]\]\s*$", manifest) and "python-versions" in manifest and "name =" in manifest and "version =" in manifest:
+            ecosystem = "pip"
+            lockfile = "poetry.lock"
+            pkg_names = re.findall(r'(?m)^\s*name\s*=\s*"([^"]+)"', manifest)
+            pkg_versions = re.findall(r'(?m)^\s*version\s*=\s*"([^"]+)"', manifest)
+            for name, version in zip(pkg_names, pkg_versions):
+                deps[name.lower()] = version
+        elif re.search(r"(?m)^\s*\"_meta\"\s*:\s*\{", manifest):
+            ecosystem = "pip"
+            lockfile = "Pipfile.lock"
+            for name, details in re.findall(r'"([A-Za-z0-9._-]+)"\s*:\s*\{[^}]*"version"\s*:\s*"([^"]+)"', manifest):
+                deps[name.lower()] = details.lstrip("=")
+        elif re.search(r"(?m)^\s*\w+\s+\(Hex package\)\s*=", manifest):
+            ecosystem = "elixir"
+            lockfile = "mix.lock"
+            for name, version in re.findall(r"(?m)^\s*:?([a-z0-9_]+)\s*,\s*\{\s*:hex,\s*:[a-z0-9_]+,\s*\"([^\"]+)\"", manifest, re.IGNORECASE):
+                deps[name.lower()] = version
+        elif "\"pins\"" in manifest and "\"identity\"" in manifest and "\"version\"" in manifest:
+            ecosystem = "swift"
+            lockfile = "Package.resolved"
+            for name, version in re.findall(r'"identity"\s*:\s*"([^"]+)"[\s\S]{0,200}?"version"\s*:\s*"([^"]+)"', manifest):
+                deps[name.lower()] = version
+        elif re.search(r"(?m)^version\s*=\s*3\s*$", manifest) and "[[package]]" in manifest:
+            ecosystem = "rust"
+            lockfile = "Cargo.lock"
+            for name, version in re.findall(r'(?m)^name\s*=\s*"([^"]+)"\nversion\s*=\s*"([^"]+)"', manifest):
+                deps[name.lower()] = version
         else:
             ecosystem = "pip"
             for line in manifest.splitlines():
@@ -555,42 +622,42 @@ Format findings as structured reports with severity, location, description, and 
                 if match:
                     deps[match.group(1).lower()] = match.group(3) or ""
 
-        findings = []
-        review_notes = []
+        risky = {
+            "npm": {
+                "express": "Ensure express is updated to 4.21+ or 5.x for security patches",
+                "jsonwebtoken": "Verify you're using RS256/ES256, not HS256 with a weak secret",
+                "cors": "Ensure origin is not set to '*' in production",
+            },
+            "pip": {
+                "pyjwt": "Confirm algorithms=[...] is passed explicitly to jwt.decode()",
+                "pyyaml": "Ensure yaml.safe_load() is used, never yaml.load() default loader",
+                "requests": "Ensure outbound requests set a timeout",
+            },
+            "rust": {"openssl": "Track RustSec advisories for openssl and transitive native deps"},
+            "elixir": {"plug_cowboy": "Ensure Phoenix/Plug stack versions include latest security patches"},
+            "swift": {"alamofire": "Track GHSA/CVE advisories for networking libraries"},
+        }
+        for name, note in risky.get(ecosystem, {}).items():
+            if name in deps:
+                review_notes.append({"package": name, "note": note})
 
-        if ecosystem == "npm":
-            risky = {
-                "express": {"note": "Ensure express is updated to 4.21+ or 5.x for security patches", "severity": "INFO"},
-                "jsonwebtoken": {"note": "Verify you're using RS256/ES256, not HS256 with a weak secret", "severity": "MEDIUM"},
-                "bcrypt": {"note": "Ensure bcrypt rounds >= 12 for modern hardware", "severity": "MEDIUM"},
-                "cors": {"note": "Ensure origin is not set to '*' in production", "severity": "HIGH"},
-                "body-parser": {"note": "Set size limits to prevent denial-of-service via large payloads", "severity": "MEDIUM"},
-            }
-            # Helmet is Express-specific middleware — flagging it as missing
-            # from a mobile (Expo/React Native) or frontend package.json that
-            # has no server to harden in the first place is a false alarm.
-            if "express" in deps and "helmet" not in deps:
-                findings.append({"severity": "MEDIUM", "package": "helmet", "issue": "Express is installed but Helmet is not declared — verify equivalent security headers are applied by code or the edge proxy"})
-            for name, info in risky.items():
-                if name in deps:
-                    review_notes.append({"package": name, "note": info["note"]})
-        else:
-            risky = {
-                "fastapi": {"note": "Ensure request bodies are Pydantic models (never raw dict) at every route boundary", "severity": "INFO"},
-                "flask": {"note": "Flask ships no security headers by default — add flask-talisman or equivalent", "severity": "MEDIUM"},
-                "django": {"note": "Confirm DEBUG=False and ALLOWED_HOSTS is restricted in production settings", "severity": "MEDIUM"},
-                "pyjwt": {"note": "Confirm algorithms=[...] is passed explicitly to jwt.decode() — omitting it lets a token choose its own algorithm", "severity": "HIGH"},
-                "python-jose": {"note": "Confirm algorithms=[...] is passed explicitly to jwt.decode() — omitting it lets a token choose its own algorithm", "severity": "HIGH"},
-                "bcrypt": {"note": "Ensure bcrypt inputs are truncated/handled for the 72-byte limit", "severity": "LOW"},
-                "pyyaml": {"note": "Ensure yaml.safe_load() is used, never yaml.load() with the default Loader", "severity": "HIGH"},
-                "requests": {"note": "Ensure outbound requests set a timeout — requests has no default and will hang forever", "severity": "MEDIUM"},
-                "sqlalchemy": {"note": "Ensure raw SQL (text()) uses bound parameters, never f-string/format interpolation", "severity": "MEDIUM"},
-            }
-            for name, info in risky.items():
-                if name in deps:
-                    review_notes.append({"package": name, "note": info["note"]})
+        if ecosystem == "npm" and "express" in deps and "helmet" not in deps:
+            findings.append({"severity": "MEDIUM", "package": "helmet", "issue": "Express is installed but Helmet is not declared"})
 
-        return {"ecosystem": ecosystem, "dependencies_count": len(deps), "findings": findings, "review_notes": review_notes, "threshold": severity_threshold}
+        if lockfile == "pnpm-lock.yaml" and re.search(r"(?m)^\s*neverBuiltDependencies:\s*$", manifest):
+            findings.append({"severity": "LOW", "issue": "pnpm lockfile includes neverBuiltDependencies; verify skipped build scripts are intentional"})
+
+        if ecosystem in {"rust", "pip", "elixir", "swift"} and not deps:
+            findings.append({"severity": "LOW", "issue": f"{lockfile} detected but no dependencies were parsed; verify lockfile parser coverage"})
+
+        return {
+            "ecosystem": ecosystem,
+            "lockfile": lockfile,
+            "dependencies_count": len(deps),
+            "findings": findings,
+            "review_notes": review_notes,
+            "threshold": severity_threshold,
+        }
 
     def _audit_cors_config(self, cors_code: str, allowed_origins: str = "") -> Dict[str, Any]:
         """Audit CORS configuration — Express cors() or FastAPI/Starlette CORSMiddleware."""
@@ -878,37 +945,67 @@ Format findings as structured reports with severity, location, description, and 
     def _audit_hardcoded_secrets(self, code: str) -> Dict[str, Any]:
         """NEW: Scan code for hardcoded secrets with advanced pattern matching."""
         findings = []
-
-        # Patterns: API keys, tokens, passwords with high confidence
+        ignore_re = re.compile(r"(?:CHANGE_ME|PLACEHOLDER|YOUR_KEY_HERE|EXAMPLE|DUMMY|REPLACE_ME)", re.IGNORECASE)
         secret_patterns = [
             (r"api[_-]?key\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{20,})[\"']", "API Key"),
-            (r"sk[_-]?(live|test)[_-]?[a-z0-9_]*\s*[:=]\s*[\"']sk[a-z0-9_]+[\"']", "Stripe Secret Key"),
-            (r"password\s*[:=]\s*[\"']([^\"']+)[\"']", "Password"),
+            (r"password\s*[:=]\s*[\"']([^\"']{10,})[\"']", "Password"),
             (r"secret\s*[:=]\s*[\"']([^\"']{20,})[\"']", "Secret"),
-            (r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=]+\.eyJ[A-Za-z0-9\-_=]+\.?[A-Za-z0-9\-_.]*)[\"']", "JWT Token"),
-            (r"refresh[_-]?token\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{30,})[\"']", "Refresh Token"),
+            (r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=.]+\.eyJ[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_.=]*)[\"']", "JWT Token"),
             (r"AWS[_-]?SECRET[_-]?ACCESS[_-]?KEY\s*[:=]\s*[\"']([A-Za-z0-9/+=]{40})[\"']", "AWS Secret"),
-            (r"database[_-]?url\s*[:=]\s*[\"']([a-z]+://[^\"']+)[\"']", "Database URL"),
+            (r"(?:postgres|mysql|mongodb(?:\+srv)?|redis)://[^:@\s]+:([^@\s/]+)@", "Database URL with embedded credential"),
+            (r"https?://([^:@/\s]{12,})@[\w.-]+", "URL-embedded credential"),
         ]
-
         for pattern, secret_type in secret_patterns:
             for match in re.finditer(pattern, code, re.IGNORECASE):
                 matched_text = match.group(0)
-                if re.search(r"(?:example|placeholder|changeme|replace[_-]?me|your[_-]?(?:key|token|secret|password)|dummy|test[_-]?only)", matched_text, re.IGNORECASE):
-                    continue
-                # RevenueCat's `appl_...` values are public mobile SDK keys.
-                # They identify the app but cannot authorize server API calls,
-                # so committing them is expected and not a secret exposure.
-                if re.search(r"\bappl_[A-Za-z0-9_]+\b", matched_text):
+                if ignore_re.search(matched_text) or re.search(r"\bappl_[A-Za-z0-9_]+\b", matched_text):
                     continue
                 line = code.count("\n", 0, match.start()) + 1
                 findings.append({
                     "severity": "CRITICAL",
                     "issue": f"Hardcoded {secret_type} detected",
                     "line": line,
-                    "fix": "Move to environment variables; use process.env or os.getenv() at runtime"
+                    "fix": "Move to environment variables or secret manager references.",
                 })
 
+        for pem in (
+            ("BEGIN RSA PRIVATE KEY", "RSA private key block"),
+            ("BEGIN OPENSSH PRIVATE KEY", "OpenSSH private key block"),
+            ("BEGIN EC PRIVATE KEY", "EC private key block"),
+        ):
+            if pem[0] in code:
+                findings.append({
+                    "severity": "CRITICAL",
+                    "issue": f"Multi-line secret detected: {pem[1]}",
+                    "fix": "Remove key material from source control and rotate affected credentials.",
+                })
+
+        for match in re.finditer(r"Bearer\s+(eyJ[A-Za-z0-9\-_=.]+\.[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_=.]+)", code):
+            token = match.group(1)
+            if ignore_re.search(token):
+                continue
+            findings.append({
+                "severity": "HIGH",
+                "issue": "****** appears in code/comment/log text",
+                "line": code.count("\n", 0, match.start()) + 1,
+                "fix": "Remove logged tokens and redact authorization headers.",
+            })
+
+        for match in re.finditer(r"[\"']([A-Za-z0-9_\-./+=]{28,})[\"']", code):
+            candidate = match.group(1)
+            if ignore_re.search(candidate):
+                continue
+            if candidate.lower().startswith(("http", "npm", "node", "react", "typescript")):
+                continue
+            entropy = _shannon_entropy(candidate)
+            if entropy >= 4.0 and re.search(r"[A-Za-z]", candidate) and re.search(r"\d", candidate):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "High-entropy string may be a hardcoded secret",
+                    "line": code.count("\n", 0, match.start()) + 1,
+                    "fix": "Confirm this value is non-sensitive or move it to a secret store.",
+                    "entropy": round(entropy, 2),
+                })
         return {"findings": findings, "total_issues": len(findings)}
 
     def _audit_error_handling(self, code: str) -> Dict[str, Any]:

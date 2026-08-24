@@ -111,6 +111,39 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                     "required": ["title", "endpoints"],
                 },
             },
+            {
+                "name": "review_rate_limit_contract",
+                "description": "Review API handlers for rate-limit headers and retry guidance.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "The route handler/middleware code"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "review_graphql_error_contract",
+                "description": "Review GraphQL responses for errors[] contract consistency and extensions.code.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "GraphQL resolver/server code"},
+                    },
+                    "required": ["code"],
+                },
+            },
+            {
+                "name": "review_webhook_reliability",
+                "description": "Review webhook handlers for idempotency and retry/backoff behavior.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Webhook handling code"},
+                    },
+                    "required": ["code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -119,6 +152,9 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
             "review_error_response_shape": self._review_error_response_shape,
             "audit_status_codes": self._audit_status_codes,
             "generate_openapi_stub": self._generate_openapi_stub,
+            "review_rate_limit_contract": self._review_rate_limit_contract,
+            "review_graphql_error_contract": self._review_graphql_error_contract,
+            "review_webhook_reliability": self._review_webhook_reliability,
         }
 
     def _review_pagination(self, code: str, endpoint: str = "") -> Dict[str, Any]:
@@ -281,3 +317,43 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
             "paths": paths,
         }
         return {"openapi_stub": spec, "endpoint_count": len(paths)}
+
+    def _review_rate_limit_contract(self, code: str) -> Dict[str, Any]:
+        findings = []
+        if re.search(r"status\(\s*429\s*\)|HTTP_429|Too Many Requests", code, re.IGNORECASE):
+            if not re.search(r"Retry-After|X-RateLimit-(Limit|Remaining|Reset)", code, re.IGNORECASE):
+                findings.append({
+                    "severity": "MEDIUM",
+                    "issue": "429 handling appears without Retry-After / X-RateLimit-* headers",
+                    "fix": "Include Retry-After and X-RateLimit-Limit/Remaining/Reset headers for client backoff.",
+                })
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _review_graphql_error_contract(self, code: str) -> Dict[str, Any]:
+        findings = []
+        returns_errors = bool(re.search(r"(?:[\"']errors[\"']|\berrors)\s*:", code))
+        has_extensions_code = bool(re.search(r"extensions\s*:\s*\{[\s\S]{0,160}\bcode\s*:", code, re.IGNORECASE))
+        if returns_errors and not has_extensions_code:
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "GraphQL error payload includes errors[] with no extensions.code",
+                "fix": "Include extensions.code for machine-readable error classification.",
+            })
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _review_webhook_reliability(self, code: str) -> Dict[str, Any]:
+        findings = []
+        if re.search(r"webhook|constructEvent|svix|signature", code, re.IGNORECASE):
+            if not re.search(r"idempotenc|dedup|event\.id|delivery[_-]?id|redis\.setnx", code, re.IGNORECASE):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": "Webhook handler has no visible idempotency guard",
+                    "fix": "Persist processed event IDs and ignore duplicates.",
+                })
+            if re.search(r"retry|backoff|attempt", code, re.IGNORECASE) and not re.search(r"exponential|2\s*\*\*|Math\.pow", code, re.IGNORECASE):
+                findings.append({
+                    "severity": "LOW",
+                    "issue": "Webhook retry logic has no visible exponential backoff",
+                    "fix": "Use bounded exponential backoff with jitter for retryable failures.",
+                })
+        return {"findings": findings, "total_issues": len(findings)}
