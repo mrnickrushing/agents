@@ -6,6 +6,20 @@ Twelve specialized agents (73 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.15.0 — PyPI + container distribution
+
+Install globally from PyPI:
+
+```bash
+pip install rushingtech-agents
+```
+
+Run via Docker:
+
+```bash
+docker run --rm -v "$(pwd)":/app rushingtech/agents scan --path /app --fail-on never
+```
+
 ## 🆕 Version 2.12.0 — `agents fix`, and cheaper triage
 
 **`agents fix`** applies the findings that are mechanical — the ones with

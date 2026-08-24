@@ -1,0 +1,9 @@
+services:
+  agents:
+    build:
+      context: .
+    image: rushingtech/agents:local
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["scan", "--path", "/app", "--fail-on", "never"]
