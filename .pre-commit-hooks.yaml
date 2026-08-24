@@ -1,0 +1,7 @@
+- id: agents-scan
+  name: Agents Security Scan
+  description: Run agents static scan against the current repository.
+  entry: scripts/pre-commit-agents-scan.sh
+  language: script
+  pass_filenames: false
+  stages: [pre-commit]

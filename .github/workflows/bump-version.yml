@@ -1,0 +1,38 @@
+name: Bump package version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New package version (for example 2.15.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update pyproject version
+        run: |
+          python - <<'PY'
+          import pathlib, re
+          version = "${{ inputs.version }}"
+          path = pathlib.Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+          new_text, count = re.subn(r'(?m)^version = "[^"]+"$', f'version = "{version}"', text, count=1)
+          if count != 1:
+              raise SystemExit("Failed to update version in pyproject.toml")
+          path.write_text(new_text, encoding="utf-8")
+          PY
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: copilot/bump-version-${{ inputs.version }}
+          title: "chore: bump package version to ${{ inputs.version }}"
+          commit-message: "chore: bump package version to ${{ inputs.version }}"
+          body: "Automated version bump for PyPI release."

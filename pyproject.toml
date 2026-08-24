@@ -4,27 +4,41 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rushingtech-agents"
-version = "2.12.0"
-description = "OpenAI-compatible AI agents for solo full-stack operators — security audit, Stripe billing, Railway deploy, code review, and project scaffolding."
+version = "2.15.0"
+description = "AI agents for solo full-stack operators — security, billing, deploy, code review"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-  { name = "Rushing Technologies", email = "nickrushing@rushingtechnologies.com" },
+  { name = "RushingTech", email = "team@rushingtechnologies.com" },
 ]
+keywords = ["agents", "security", "code-review", "ai", "llm"]
 dependencies = [
   "openai>=1.50.0",
   "anthropic>=0.40.0",
+  "click>=8.1.0",
+  "flask>=3.0.0",
+  "flask-cors>=4.0.0",
+  "tree-sitter>=0.21.0",
+  "sentence-transformers>=3.0.0",
   "PyYAML>=6.0",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Software Development :: Libraries",
-  "Topic :: Security",
+  "Topic :: Software :: Quality Assurance",
 ]
+
+[project.scripts]
+agents = "agents.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mrnickrushing/agents"
+Documentation = "https://rushingtech-agents.readthedocs.io"
+Repository = "https://github.com/mrnickrushing/agents"
+Issues = "https://github.com/mrnickrushing/agents/issues"
 
 [project.optional-dependencies]
 dev = [
