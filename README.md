@@ -6,6 +6,24 @@ Twelve specialized agents (73 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.11.0 — The scanner earns belief
+
+**`agents precision`** — per-rule precision from every recorded verdict
+(human `feedback`, the MCP's `record(kind="verdict")`, or scan-time LLM
+triage). Rules with enough verdicts to mean something get scored; precision
+over a handful of data points is a coin toss with a decimal, so under five
+verdicts nothing is scored at all.
+
+**`agents precision --write-trust`** — the self-correcting part. A scored
+rule below 50% precision is written into a trust map that every subsequent
+scan consults: its findings keep appearing (the rule might be fixed
+tomorrow) but demote to INFO, carry their original severity in
+`pre_demotion_severity`, and say why (`"rule precision 20% over recorded
+verdicts"`). A detector that is wrong more than half the time it is judged
+costs more attention than it saves — now that costs it its severity
+automatically, instead of costing the operator their trust in the whole
+report. First live run found one: `validate_accessibility`, 0-for-12.
+
 ## 🆕 Version 2.10.0 — Config surfaces, and a prospect-facing report
 
 **`config_audit` — the files the code scanners never opened.** A fleet

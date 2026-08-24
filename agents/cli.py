@@ -859,6 +859,20 @@ def _run_scan(
                 result = {"error": f"{type(exc).__name__}: {exc}"}
 
             findings = _normalize_findings(result)
+            # A rule that measured verdicts have shown to be mostly wrong
+            # keeps running — the fix might land tomorrow — but its findings
+            # stop spending HIGH-severity attention until it earns it back.
+            demoted_rules = load_rule_trust().get("demoted", {})
+            rule_key = f"{agent_key}.{tool_name}"
+            if rule_key in demoted_rules:
+                for f_item in findings:
+                    if f_item.get("severity") != "INFO":
+                        f_item["pre_demotion_severity"] = f_item["severity"]
+                        f_item["severity"] = "INFO"
+                        f_item["demoted"] = (
+                            f"rule precision {demoted_rules[rule_key]:.0%} over "
+                            "recorded verdicts — see `agents precision`"
+                        )
             if findings:
                 result = dict(result)
                 result["findings"] = findings
@@ -1197,6 +1211,91 @@ def cmd_scan(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+RULE_TRUST_FILE = "rule_trust.json"
+# Below this confirmed-precision, a rule's findings demote to INFO until the
+# rule is fixed. Chosen from lived data: session 12 found two of five policy
+# rules wrong, and the config_audit first pass had seven false secrets — a
+# rule that is wrong more than half the time it is judged costs more
+# attention than it saves.
+TRUST_THRESHOLD = 0.5
+# Precision over fewer verdicts than this is noise, not a measurement.
+TRUST_MIN_VERDICTS = 5
+
+
+def _trust_path() -> str:
+    import os as _os
+    root = _os.environ.get("AGENTS_STATE_DIR") or _os.path.join(
+        _os.path.expanduser("~"), ".local", "state", "rushingtech-agents")
+    return _os.path.join(root, RULE_TRUST_FILE)
+
+
+def load_rule_trust() -> Dict[str, Any]:
+    try:
+        with open(_trust_path()) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def rule_precision(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Per-rule confirmed precision from recorded verdicts.
+
+    The scanner does not rewrite its own detectors (evolution.py's opening
+    line); this is the measurement that decides which detectors still deserve
+    their severity. Only rules with enough verdicts to mean something are
+    scored — precision over three data points is a coin toss with a decimal.
+    """
+    with EvolutionStore(db_path) as store:
+        rows = store.connection.execute(
+            """
+            SELECT f.agent, f.tool, fb.verdict, COUNT(*) AS n
+            FROM feedback fb
+            JOIN findings f ON f.finding_id = fb.finding_id
+            GROUP BY f.agent, f.tool, fb.verdict
+            """
+        ).fetchall()
+    by_rule: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        key = f"{r['agent']}.{r['tool']}"
+        by_rule.setdefault(key, {"CONFIRMED": 0, "FALSE_POSITIVE": 0})
+        by_rule[key][r["verdict"]] = by_rule[key].get(r["verdict"], 0) + r["n"]
+    out = []
+    for rule, counts in sorted(by_rule.items()):
+        total = counts["CONFIRMED"] + counts["FALSE_POSITIVE"]
+        out.append({
+            "rule": rule, "confirmed": counts["CONFIRMED"],
+            "false_positive": counts["FALSE_POSITIVE"], "verdicts": total,
+            "precision": counts["CONFIRMED"] / total if total else None,
+            "scored": total >= TRUST_MIN_VERDICTS,
+        })
+    return out
+
+
+def cmd_precision(args: argparse.Namespace) -> None:
+    rows = rule_precision(args.db)
+    if not rows:
+        print("No verdicts recorded yet. Verdicts come from `agents feedback`, "
+              "the MCP's record(kind='verdict'), or scan-time triage "
+              "(needs ANTHROPIC_API_KEY).")
+        return
+    demoted = {}
+    for r in rows:
+        flag = ""
+        if r["scored"] and r["precision"] is not None and r["precision"] < TRUST_THRESHOLD:
+            flag = "  → DEMOTE to INFO"
+            demoted[r["rule"]] = round(r["precision"], 3)
+        p = f"{r['precision']:.0%}" if r["precision"] is not None else "—"
+        note = "" if r["scored"] else f"  (only {r['verdicts']} verdicts — not scored)"
+        print(f"{p:>5}  {r['rule']:<44} {r['confirmed']}✓ {r['false_positive']}✗{note}{flag}")
+    if args.write_trust:
+        path = _trust_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump({"demoted": demoted}, fh, indent=2)
+        print(f"\nwrote {path} — {len(demoted)} rule(s) demoted. Scans now tag "
+              "their findings INFO until precision recovers or the file is removed.")
+
+
 def cmd_feedback(args: argparse.Namespace) -> None:
     try:
         with EvolutionStore(args.db) as store:
@@ -1291,6 +1390,15 @@ def main() -> None:
     p_run.add_argument("--file", action="append", help="key=path — read file contents into this argument (repeatable)")
     p_run.add_argument("--stdin", help="argument name to fill from stdin")
     p_run.set_defaults(func=cmd_run)
+
+    p_precision = sub.add_parser(
+        "precision",
+        help="Per-rule precision from recorded verdicts; --write-trust demotes low-precision rules to INFO",
+    )
+    p_precision.add_argument("--db", help="Path to evolution.db (default: standard location)")
+    p_precision.add_argument("--write-trust", action="store_true",
+                             help="write the demotion map scans consult")
+    p_precision.set_defaults(func=cmd_precision)
 
     p_scan = sub.add_parser("scan", help="Auto-discover relevant files in a project and run matching checks")
     p_scan.add_argument("path", nargs="?", help="Project root to scan (positional form)")
