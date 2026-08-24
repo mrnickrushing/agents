@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 
+from agents import FleetPolicyAgent as ExportedFleetPolicyAgent
 from agents.fleet_policy import (
+    FleetPolicyAgent,
     check_dependabot_grouping,
     check_forced_version_without_dependabot_ignore,
     check_plaintext_secrets,
@@ -57,6 +59,14 @@ def test_trivy_sarif_gate_is_flagged():
     assert len(out) == 1
     assert out[0].rule == "trivy-sarif-gate"
     assert out[0].severity == "HIGH"
+
+
+def test_fleet_policy_agent_is_exported_and_wraps_findings():
+    assert ExportedFleetPolicyAgent is FleetPolicyAgent
+    result = FleetPolicyAgent().run_fleet_policies(
+        {".github/workflows/security-scan.yml": TRIVY_BROKEN}
+    )
+    assert result["total_issues"] >= 1
 
 
 def test_trivy_split_gate_is_clean():

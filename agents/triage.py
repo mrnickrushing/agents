@@ -23,6 +23,7 @@ OPENAI_API_KEY is set in the environment, unless overridden with
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -222,6 +223,55 @@ Return exactly {len(findings)} objects, including every index."""
     return _extract_verdicts(response.content, len(findings))
 
 
+async def triage_entry_findings_async(
+    agent: "TriageAgent", project_root: str, entry: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    findings = _findings_of(entry)
+    if not findings:
+        return []
+
+    file_path = entry["file"]
+    abs_path = os.path.join(project_root, file_path)
+    try:
+        with open(abs_path, "r", errors="ignore") as fh:
+            file_content = fh.read(MAX_TRIAGE_FILE_BYTES)
+    except OSError:
+        file_content = "<could not read file>"
+
+    numbered = "\n".join(
+        f"[{i}] {f.get('severity', 'INFO')}: {f.get('issue', f.get('message', ''))}"
+        + (f" (line {f['line']})" if f.get("line") else "")
+        for i, f in enumerate(findings)
+    )
+    prompt = f"""Tool: {entry['agent']}.{entry['tool']}
+File: {file_path}
+
+Findings reported by the scanner, each with an index:
+{numbered}
+
+Contents of {file_path}:
+```
+{file_content}
+```
+
+Verify EACH finding independently. Read other project files if the real
+answer could live elsewhere. Judge every finding on its own merits — they
+share a file, not a fate.
+
+Respond with a JSON array only, one object per finding, each with:
+  "index"   the finding's index above
+  "verdict" either "CONFIRMED" or "FALSE_POSITIVE"
+  "reason"  one sentence
+Return exactly {len(findings)} objects, including every index."""
+
+    conversation_id = f"{file_path}:{entry['tool']}"
+    try:
+        response = await agent.run_async(prompt, conversation_id=conversation_id)
+    finally:
+        agent.reset(conversation_id)
+    return _extract_verdicts(response.content, len(findings))
+
+
 def _findings_of(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
     result = entry["result"]
     findings = (
@@ -316,6 +366,65 @@ def triage_report(
                 entry_verdict = "UNKNOWN"
             reasons = "; ".join(v["reason"] for v in verdicts if v.get("reason"))
             entry["triage"] = {"verdict": entry_verdict, "reason": reasons}
+
+    report["triage_summary"] = {
+        "confirmed": confirmed,
+        "false_positive": dismissed,
+        "unknown": unknown,
+    }
+    coverage = report.get("coverage")
+    if isinstance(coverage, dict):
+        if coverage.get("tool_errors") or coverage.get("skipped_files") or unknown:
+            coverage["confidence"] = "incomplete"
+        else:
+            coverage["confidence"] = "heuristics-triaged-runtime-unverified"
+    return report
+
+
+async def triage_report_async(
+    report: Dict[str, Any],
+    provider: str = "anthropic",
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    project_root = os.path.realpath(report["project"])
+    agent = TriageAgent(project_root, provider=provider, model=model, api_key=api_key)
+
+    async def process_entry(entry: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, str]]] | None:
+        if entry["result"].get("error"):
+            return None
+        findings = _findings_of(entry)
+        verdicts = await triage_entry_findings_async(agent, project_root, entry)
+        return entry, findings, verdicts
+
+    confirmed = 0
+    dismissed = 0
+    unknown = 0
+    try:
+        processed = await asyncio.gather(*(process_entry(entry) for entry in report["results"]))
+        for item in processed:
+            if item is None:
+                continue
+            entry, findings, verdicts = item
+            for finding, triage in zip(findings, verdicts):
+                finding["triage"] = triage
+                if triage["verdict"] == "CONFIRMED":
+                    confirmed += 1
+                elif triage["verdict"] == "FALSE_POSITIVE":
+                    dismissed += 1
+                else:
+                    unknown += 1
+            if verdicts:
+                if any(v["verdict"] == "CONFIRMED" for v in verdicts):
+                    entry_verdict = "CONFIRMED"
+                elif all(v["verdict"] == "FALSE_POSITIVE" for v in verdicts):
+                    entry_verdict = "FALSE_POSITIVE"
+                else:
+                    entry_verdict = "UNKNOWN"
+                reasons = "; ".join(v["reason"] for v in verdicts if v.get("reason"))
+                entry["triage"] = {"verdict": entry_verdict, "reason": reasons}
+    finally:
+        await agent.aclose()
 
     report["triage_summary"] = {
         "confirmed": confirmed,

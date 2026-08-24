@@ -18,6 +18,7 @@ from agents import (
     CodeReviewAgent,
     ScaffolderAgent,
     UIGenerationAgent,  # NEW: Claude-powered UI component generator
+    FleetPolicyAgent,
 )
 
 

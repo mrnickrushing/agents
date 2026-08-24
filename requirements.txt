@@ -1,6 +1,3 @@
-# Core SDK support for both OpenAI and Anthropic
-openai>=1.0.0
-anthropic>=0.40.0
-
-# Optional UI agent dependencies
-class-variance-authority>=0.7.0  # For CVA styling variants (used by UI agent)
+# Deprecated: dependency versions now live in pyproject.toml.
+# Install from the project metadata instead:
+-e .

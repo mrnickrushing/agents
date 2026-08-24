@@ -25,6 +25,7 @@ from agents.api_architect import APIArchitectAgent
 from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.roblox_audit import RobloxAuditAgent
+from agents.fleet_policy import FleetPolicyAgent
 
 __all__ = [
     "SecurityAuditAgent",
@@ -39,6 +40,7 @@ __all__ = [
     "DatabaseArchitectAgent",
     "InfraMonitorAgent",
     "RobloxAuditAgent",
+    "FleetPolicyAgent",
 ]
 
 __version__ = "2.12.0"
