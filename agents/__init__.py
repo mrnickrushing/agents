@@ -30,6 +30,12 @@ from agents.flow_audit import FlowAuditAgent
 from agents.frontend_performance import FrontendPerformanceAgent
 from agents.iac_security import IACSecurityAgent
 from agents.supply_chain_audit import SupplyChainAuditAgent
+from agents.compliance import ComplianceAuditAgent
+from agents.postmortem import PostmortemAgent
+from agents.healing import HealingAgent
+from agents.training import DetectorTrainer
+from agents.figma_scaffold import FigmaScaffoldAgent
+from agents.workflow import WorkflowOrchestrator
 
 __all__ = [
     "SecurityAuditAgent",
@@ -49,6 +55,12 @@ __all__ = [
     "FrontendPerformanceAgent",
     "IACSecurityAgent",
     "SupplyChainAuditAgent",
+    "ComplianceAuditAgent",
+    "PostmortemAgent",
+    "HealingAgent",
+    "DetectorTrainer",
+    "FigmaScaffoldAgent",
+    "WorkflowOrchestrator",
 ]
 
-__version__ = "2.12.0"
+__version__ = "2.13.0"

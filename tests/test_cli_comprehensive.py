@@ -68,6 +68,7 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
         "api_architect",
         "auth_security",
         "code_review",
+        "compliance",
         "config_audit",
         "database_architect",
         "flow_audit",
