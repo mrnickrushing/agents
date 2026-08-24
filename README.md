@@ -39,11 +39,18 @@ browsers into the invoking user's home, so adding `USER app` without first
 pinning `PLAYWRIGHT_BROWSERS_PATH` produces an image that builds and then
 fails at runtime. A fixer right nine times in ten is worse than none.
 
-**Triage now costs one call per file, not one per finding.** Findings within
-an entry share a file and a rule, so they are judged together; the old loop
-re-uploaded the whole file for every finding in it. Verdicts return as an
-indexed array so a short response degrades to UNKNOWN rather than sliding
-verdicts onto the wrong findings.
+**Triage now costs one call per file, not one per finding — and the cost was
+quadratic, not linear.** Findings within an entry share a file and a rule,
+so they are judged together. The old loop made one call per finding *and*
+keyed the conversation by file+tool, so BaseAgent's history accumulated:
+finding #2 re-sent finding #1's whole prompt (file included), #3 re-sent
+both, and so on. A 27-finding entry sent **378 copies of one source file**.
+Across this fleet that is 775 file-copies where 299 would do. Conversations
+are now also reset after every verdict — a verdict is a one-shot judgement,
+not a dialogue — which additionally stops the agent holding every file it
+has read in memory for the length of a run. Verdicts return as an indexed
+array so a short response degrades to UNKNOWN rather than sliding verdicts
+onto the wrong findings.
 
 ## 🆕 Version 2.11.0 — The scanner earns belief
 
