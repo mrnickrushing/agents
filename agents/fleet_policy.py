@@ -23,7 +23,9 @@ import re
 
 import yaml
 from dataclasses import dataclass
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List
+
+from agents.base import BaseAgent
 
 SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 
@@ -339,3 +341,40 @@ def run_policies(files: Dict[str, str]) -> List[PolicyFinding]:
     order = {s: i for i, s in enumerate(SEVERITIES)}
     findings.sort(key=lambda f: (order.get(f.severity, 9), f.rule, f.file))
     return findings
+
+
+class FleetPolicyAgent(BaseAgent):
+    """Programmatic wrapper around repository-wide fleet policy checks."""
+
+    name = "fleet_policy"
+    description = "Checks repository configuration files for recurring fleet-wide policy drift."
+    system_prompt = "You analyze repository policy/configuration drift."
+
+    def _define_tools(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": "run_fleet_policies",
+                "description": "Run repository-wide policy checks over a {relative_path: content} map.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                            "description": "Mapping of relative file paths to file contents.",
+                        }
+                    },
+                    "required": ["files"],
+                },
+            }
+        ]
+
+    def _bind_tool_handlers(self) -> Dict[str, Callable]:
+        return {"run_fleet_policies": self.run_fleet_policies}
+
+    def run_fleet_policies(self, files: Dict[str, str]) -> Dict[str, Any]:
+        findings = run_policies(files)
+        return {
+            "findings": [finding.__dict__ for finding in findings],
+            "total_issues": len(findings),
+        }

@@ -336,9 +336,6 @@ Confirmed findings stay in the main report with a `triage: CONFIRMED — <reason
 git clone https://github.com/mrnickrushing/agents.git
 cd agents
 pip install -e .
-
-# Install dependencies
-pip install openai>=1.0.0 anthropic>=0.40.0
 ```
 
 All shell snippets below are `fish`. All `python` blocks are Python code, not shell commands, and should be run with `python` or saved to a `.py` file first.
@@ -402,6 +399,10 @@ result = agent.run(
 )
 ```
 
+If you prefer OpenAI for UI generation, either omit `model` to use `gpt-5` or
+pass an OpenAI model explicitly. Passing a Claude-only model with
+`provider="openai"` raises an early error.
+
 ### Wireframe to Component
 
 ```python
@@ -447,6 +448,47 @@ print(f"Messages: {len(agent.history)}")
 
 # Reset if needed
 agent.reset(conversation_id=conversation_id)
+```
+
+Persist a conversation across agent instances with SQLite:
+
+```python
+from agents import UIGenerationAgent
+
+agent = UIGenerationAgent(
+    api_key="sk-ant-...",
+    conversation_store_path="state/conversations.db",
+)
+agent.run("Create a stats card", conversation_id="stats-v1")
+```
+
+You can also override tool round limits per call:
+
+```python
+agent.run("Scaffold a dashboard", max_tool_rounds=8)
+agent.run("Quick polish pass", max_tool_rounds=2)
+```
+
+Async callers can use `run_async()`:
+
+```python
+import asyncio
+from agents import SecurityAuditAgent
+
+async def main():
+    agent = SecurityAuditAgent(provider="openai")
+    result = await agent.run_async("Audit this Express app")
+    print(result.content)
+
+asyncio.run(main())
+```
+
+## Fleet Policy Checks
+
+```python
+from agents import FleetPolicyAgent
+
+agent = FleetPolicyAgent()
 ```
 
 ## Using Tools Directly (No API Key Needed)
@@ -819,9 +861,8 @@ python example_ui_generation.py
 ## Requirements
 
 - Python 3.11+
-- `openai>=1.0.0` — For OpenAI provider
+- `openai>=1.50.0` — For OpenAI provider
 - `anthropic>=0.40.0` — For Anthropic provider
-- `class-variance-authority>=0.7.0` — Optional, for UI agent styling
 
 ## License
 

@@ -10,11 +10,15 @@ conversation flows and tool execution.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import inspect
 import time
 from typing import Any, Callable, Dict, List, Optional
+
+from agents.conversation_store import ConversationStore
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -85,6 +89,8 @@ class BaseAgent:
         base_url: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         verbose: bool = False,
+        conversation_store: Optional[ConversationStore] = None,
+        conversation_store_path: Optional[str] = None,
     ):
         self.provider = provider.lower()
         self.api_key = api_key or os.getenv(f"{self.provider.upper()}_API_KEY")
@@ -110,6 +116,16 @@ class BaseAgent:
                 self.model = "claude-sonnet-4-6"  # Default Claude model
         else:
             self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+        self._openai_client: Any = None
+        self._openai_async_client: Any = None
+        self._anthropic_client: Any = None
+        self._anthropic_async_client: Any = None
+        self._owns_conversation_store = conversation_store is None and conversation_store_path is not None
+        self._conversation_store = conversation_store or (
+            ConversationStore(conversation_store_path) if conversation_store_path else None
+        )
+        self._conversation_namespace = f"{self.name}:{self.provider}"
         
         # Conversation storage — supports multi-turn with conversation_id
         self._conversations: Dict[str, List[Dict[str, Any]]] = {}
@@ -127,17 +143,34 @@ class BaseAgent:
         """Get or create conversation by ID."""
         cid = conversation_id or "default"
         if cid not in self._conversations:
-            self._conversations[cid] = []
+            persisted = None
+            if self._conversation_store:
+                persisted = self._conversation_store.load_conversation(self._conversation_namespace, cid)
+                if self.verbose and persisted:
+                    logger.debug(f"Loaded persisted conversation: {cid} ({len(persisted)} messages)")
+            self._conversations[cid] = list(persisted or [])
             if self.verbose:
                 logger.debug(f"Created new conversation: {cid}")
         self._current_conversation_id = cid
         return self._conversations[cid]
+
+    def _persist_conversation(self, conversation_id: Optional[str] = None) -> None:
+        cid = conversation_id or self._current_conversation_id
+        if not cid or not self._conversation_store:
+            return
+        self._conversation_store.save_conversation(
+            self._conversation_namespace, cid, self._conversations.get(cid, [])
+        )
+        if self.verbose:
+            logger.debug(f"Persisted conversation: {cid} ({len(self._conversations.get(cid, []))} messages)")
 
     def reset(self, conversation_id: Optional[str] = None) -> None:
         """Clear conversation history."""
         cid = conversation_id or "default"
         old_len = len(self._conversations.get(cid, []))
         self._conversations[cid] = []
+        if self._conversation_store:
+            self._conversation_store.delete_conversation(self._conversation_namespace, cid)
         if self.verbose:
             logger.debug(f"Reset conversation {cid} (cleared {old_len} messages)")
 
@@ -224,11 +257,12 @@ class BaseAgent:
         user_input: str, 
         context: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        images: Optional[List[Dict[str, Any]]] = None
+        images: Optional[List[Dict[str, Any]]] = None,
+        max_tool_rounds: Optional[int] = None,
     ) -> AgentResponse:
         """Execute agent with user input (supports both providers)."""
-        
-        conversation = self._get_conversation(conversation_id)
+        cid = conversation_id or "default"
+        conversation = self._get_conversation(cid)
         
         if self.verbose:
             logger.debug(f"Running {self.__class__.__name__} with input ({len(user_input)} chars), "
@@ -236,10 +270,66 @@ class BaseAgent:
         
         try:
             if self.provider == "anthropic":
-                return self._run_anthropic(user_input, conversation, context, images)
+                return self._run_anthropic(
+                    user_input,
+                    conversation,
+                    context,
+                    images,
+                    conversation_id=cid,
+                    max_tool_rounds=max_tool_rounds,
+                )
             else:
-                return self._run_openai(user_input, conversation, context)
+                return self._run_openai(
+                    user_input,
+                    conversation,
+                    context,
+                    conversation_id=cid,
+                    max_tool_rounds=max_tool_rounds,
+                )
                 
+        except ImportError as e:
+            error_msg = f"[SDK not installed for {self.provider}] {str(e)}\nInstall: {'pip install anthropic' if self.provider == 'anthropic' else 'pip install openai'}"
+            logger.error(error_msg)
+            return AgentResponse(
+                content=error_msg,
+                model=self.model,
+                usage=None,
+                raw=None,
+            )
+
+    async def run_async(
+        self,
+        user_input: str,
+        context: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        images: Optional[List[Dict[str, Any]]] = None,
+        max_tool_rounds: Optional[int] = None,
+    ) -> AgentResponse:
+        """Async execution path for concurrent callers."""
+        cid = conversation_id or "default"
+        conversation = self._get_conversation(cid)
+
+        if self.verbose:
+            logger.debug(f"Running async {self.__class__.__name__} with input ({len(user_input)} chars), "
+                         f"conversation_id={conversation_id or 'default'}, history_len={len(conversation)}")
+
+        try:
+            if self.provider == "anthropic":
+                return await self._run_anthropic_async(
+                    user_input,
+                    conversation,
+                    context,
+                    images,
+                    conversation_id=cid,
+                    max_tool_rounds=max_tool_rounds,
+                )
+            return await self._run_openai_async(
+                user_input,
+                conversation,
+                context,
+                conversation_id=cid,
+                max_tool_rounds=max_tool_rounds,
+            )
         except ImportError as e:
             error_msg = f"[SDK not installed for {self.provider}] {str(e)}\nInstall: {'pip install anthropic' if self.provider == 'anthropic' else 'pip install openai'}"
             logger.error(error_msg)
@@ -274,33 +364,113 @@ class BaseAgent:
                 if self.verbose:
                     logger.warning(f"Transient error (attempt {attempt}/{self.max_retries}): {error_name}. "
                                   f"Retrying in {backoff}s...")
-                
+                 
                 time.sleep(backoff)
+
+    async def _call_with_retries_async(self, fn: Callable[[], Any]) -> Any:
+        """Async variant of retry handling using asyncio.sleep."""
+        attempt = 0
+        while True:
+            try:
+                result = fn()
+                return await result if inspect.isawaitable(result) else result
+            except Exception as e:
+                attempt += 1
+                error_name = type(e).__name__
+                backoff = min(2 ** attempt, 60)
+                status_code = getattr(e, "status_code", None)
+                retryable_status = status_code is None or status_code in {408, 409, 425, 429} or (isinstance(status_code, int) and status_code >= 500)
+                retryable = error_name in _RETRYABLE_ERROR_NAMES and (error_name != "APIStatusError" or retryable_status)
+                if attempt > self.max_retries or not retryable:
+                    if self.verbose:
+                        logger.error(f"Non-retryable async error: {error_name}: {str(e)}")
+                    raise
+                if self.verbose:
+                    logger.warning(f"Transient async error (attempt {attempt}/{self.max_retries}): {error_name}. "
+                                   f"Retrying in {backoff}s...")
+                await asyncio.sleep(backoff)
+
+    def _get_openai_client(self) -> Any:
+        if self._openai_client is None:
+            from openai import OpenAI
+
+            self._openai_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            if self.verbose:
+                logger.debug("[OpenAI] Created sync client")
+        elif self.verbose:
+            logger.debug("[OpenAI] Reusing sync client")
+        return self._openai_client
+
+    def _get_openai_async_client(self) -> Any:
+        if self._openai_async_client is None:
+            from openai import AsyncOpenAI
+
+            self._openai_async_client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            if self.verbose:
+                logger.debug("[OpenAI] Created async client")
+        elif self.verbose:
+            logger.debug("[OpenAI] Reusing async client")
+        return self._openai_async_client
+
+    def _get_anthropic_client(self) -> Any:
+        if self._anthropic_client is None:
+            import anthropic
+
+            self._anthropic_client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
+            if self.verbose:
+                logger.debug("[Anthropic] Created sync client")
+        elif self.verbose:
+            logger.debug("[Anthropic] Reusing sync client")
+        return self._anthropic_client
+
+    def _get_anthropic_async_client(self) -> Any:
+        if self._anthropic_async_client is None:
+            import anthropic
+
+            self._anthropic_async_client = anthropic.AsyncAnthropic(api_key=self.api_key, base_url=self.base_url)
+            if self.verbose:
+                logger.debug("[Anthropic] Created async client")
+        elif self.verbose:
+            logger.debug("[Anthropic] Reusing async client")
+        return self._anthropic_async_client
+
+    def _resolve_tool_output_sync(self, output: Any) -> Any:
+        if not inspect.isawaitable(output):
+            return output
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(output)
+        raise RuntimeError("Async tool handler returned awaitable in sync execution; use run_async()")
+
+    async def _resolve_tool_output_async(self, output: Any) -> Any:
+        return await output if inspect.isawaitable(output) else output
 
     def _run_openai(
         self,
         user_input: str,
         conversation: List[Dict[str, Any]],
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        max_tool_rounds: Optional[int] = None,
     ) -> AgentResponse:
         """Run using OpenAI API. Loops on tool calls until the model stops
         requesting them or max_tool_rounds is reached."""
-        from openai import OpenAI
-
         if self.verbose:
             logger.debug(f"[OpenAI] Starting execution with {len(conversation)} prior turns")
 
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        client = self._get_openai_client()
         messages = self._build_openai_messages(user_input, context, conversation)
+        tool_round_limit = self.max_tool_rounds if max_tool_rounds is None else max_tool_rounds
 
         tools = self.format_tools()
         turn_messages: List[Dict[str, Any]] = []
         response = None
         assistant_message = None
 
-        for round_num in range(self.max_tool_rounds + 1):
+        for round_num in range(tool_round_limit + 1):
             if self.verbose:
-                logger.debug(f"[OpenAI] Tool round {round_num + 1}/{self.max_tool_rounds + 1}")
+                logger.debug(f"[OpenAI] Tool round {round_num + 1}/{tool_round_limit + 1}")
 
             payload = {
                 "model": self.model,
@@ -311,7 +481,7 @@ class BaseAgent:
             # Reserve the last round for synthesis. Otherwise a model that
             # keeps requesting tools at the cap returns an empty answer and
             # silently discards its final tool request.
-            allow_tools = bool(tools) and round_num < self.max_tool_rounds
+            allow_tools = bool(tools) and round_num < tool_round_limit
             if allow_tools:
                 payload["tools"] = [{"type": "function", "function": t} for t in tools]
                 payload["tool_choice"] = "auto"
@@ -324,7 +494,7 @@ class BaseAgent:
                 logger.debug(f"[OpenAI] Got response: finish_reason={choice.finish_reason}, "
                             f"has_tool_calls={bool(assistant_message.tool_calls)}")
 
-            if not assistant_message.tool_calls or round_num == self.max_tool_rounds:
+            if not assistant_message.tool_calls or round_num == tool_round_limit:
                 turn_messages.append({"role": "assistant", "content": assistant_message.content or ""})
                 if self.verbose:
                     logger.debug(f"[OpenAI] Stopping (no tool calls or max rounds reached)")
@@ -350,6 +520,7 @@ class BaseAgent:
             {"role": "user", "content": user_input},
             *turn_messages,
         ])
+        self._persist_conversation(conversation_id)
 
         if self.verbose:
             logger.debug(f"[OpenAI] Conversation now has {len(conversation)} total messages")
@@ -363,22 +534,92 @@ class BaseAgent:
             raw=response,
         )
 
+    async def _run_openai_async(
+        self,
+        user_input: str,
+        conversation: List[Dict[str, Any]],
+        context: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        max_tool_rounds: Optional[int] = None,
+    ) -> AgentResponse:
+        if self.verbose:
+            logger.debug(f"[OpenAI] Starting async execution with {len(conversation)} prior turns")
+
+        client = self._get_openai_async_client()
+        messages = self._build_openai_messages(user_input, context, conversation)
+        tool_round_limit = self.max_tool_rounds if max_tool_rounds is None else max_tool_rounds
+        tools = self.format_tools()
+        turn_messages: List[Dict[str, Any]] = []
+        response = None
+        assistant_message = None
+
+        for round_num in range(tool_round_limit + 1):
+            if self.verbose:
+                logger.debug(f"[OpenAI] Async tool round {round_num + 1}/{tool_round_limit + 1}")
+
+            payload = {
+                "model": self.model,
+                "messages": messages + turn_messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            allow_tools = bool(tools) and round_num < tool_round_limit
+            if allow_tools:
+                payload["tools"] = [{"type": "function", "function": t} for t in tools]
+                payload["tool_choice"] = "auto"
+
+            response = await self._call_with_retries_async(lambda: client.chat.completions.create(**payload))
+            choice = response.choices[0]
+            assistant_message = choice.message
+
+            if not assistant_message.tool_calls or round_num == tool_round_limit:
+                turn_messages.append({"role": "assistant", "content": assistant_message.content or ""})
+                break
+
+            tool_results = await self._execute_tool_calls_async(assistant_message.tool_calls)
+            turn_messages.append({
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls],
+            })
+            for tool_result in tool_results:
+                tool_content = tool_result.get("result", {"error": tool_result.get("error", "Tool execution failed")})
+                turn_messages.append({
+                    "role": "tool",
+                    "content": json.dumps(tool_content),
+                    "tool_call_id": tool_result["tool_call_id"],
+                })
+
+        conversation.extend([
+            {"role": "user", "content": user_input},
+            *turn_messages,
+        ])
+        self._persist_conversation(conversation_id)
+
+        return AgentResponse(
+            content=assistant_message.content or "",
+            model=response.model,
+            usage=response.usage.model_dump() if response.usage else None,
+            raw=response,
+        )
+
     def _run_anthropic(
         self,
         user_input: str,
         conversation: List[Dict[str, Any]],
         context: Optional[str] = None,
-        images: Optional[List[Dict[str, Any]]] = None
+        images: Optional[List[Dict[str, Any]]] = None,
+        conversation_id: Optional[str] = None,
+        max_tool_rounds: Optional[int] = None,
     ) -> AgentResponse:
         """Run using Anthropic (Claude) API. Loops on tool use until the model
         stops requesting tools or max_tool_rounds is reached."""
-        import anthropic
-
         if self.verbose:
             logger.debug(f"[Anthropic] Starting execution with {len(conversation)} prior turns")
 
-        client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
+        client = self._get_anthropic_client()
         messages = self._build_anthropic_messages(user_input, conversation, images)
+        tool_round_limit = self.max_tool_rounds if max_tool_rounds is None else max_tool_rounds
 
         # Add context to system prompt if provided
         system_prompt = self.system_prompt
@@ -394,9 +635,9 @@ class BaseAgent:
         total_input_tokens = 0
         total_output_tokens = 0
 
-        for round_num in range(self.max_tool_rounds + 1):
+        for round_num in range(tool_round_limit + 1):
             if self.verbose:
-                logger.debug(f"[Anthropic] Tool round {round_num + 1}/{self.max_tool_rounds + 1}")
+                logger.debug(f"[Anthropic] Tool round {round_num + 1}/{tool_round_limit + 1}")
 
             payload = {
                 "model": self.model,
@@ -411,7 +652,7 @@ class BaseAgent:
             # the call is not.
             if _ANTHROPIC_ACCEPTS_TEMPERATURE:
                 payload["temperature"] = self.temperature
-            allow_tools = bool(tools) and round_num < self.max_tool_rounds
+            allow_tools = bool(tools) and round_num < tool_round_limit
             if allow_tools:
                 payload["tools"] = tools
 
@@ -426,7 +667,7 @@ class BaseAgent:
                 logger.debug(f"[Anthropic] Got response: stop_reason={response.stop_reason}, "
                             f"has_tool_calls={len(tool_blocks)}, text_len={len(text_content)}")
 
-            if not tool_blocks or round_num == self.max_tool_rounds:
+            if not tool_blocks or round_num == tool_round_limit:
                 turn_messages.append({"role": "assistant", "content": response.content})
                 if self.verbose:
                     logger.debug(f"[Anthropic] Stopping (no tool calls or max rounds reached)")
@@ -454,11 +695,93 @@ class BaseAgent:
             {"role": "user", "content": user_message_content},
             *turn_messages,
         ])
+        self._persist_conversation(conversation_id)
 
         if self.verbose:
             logger.debug(f"[Anthropic] Conversation now has {len(conversation)} total messages")
             logger.debug(f"[Anthropic] Response: text={len(text_content)} chars, "
                         f"tokens: input={total_input_tokens}, output={total_output_tokens}")
+
+        return AgentResponse(
+            content=text_content,
+            model=response.model,
+            usage={
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens,
+            },
+            raw=response,
+        )
+
+    async def _run_anthropic_async(
+        self,
+        user_input: str,
+        conversation: List[Dict[str, Any]],
+        context: Optional[str] = None,
+        images: Optional[List[Dict[str, Any]]] = None,
+        conversation_id: Optional[str] = None,
+        max_tool_rounds: Optional[int] = None,
+    ) -> AgentResponse:
+        if self.verbose:
+            logger.debug(f"[Anthropic] Starting async execution with {len(conversation)} prior turns")
+
+        client = self._get_anthropic_async_client()
+        messages = self._build_anthropic_messages(user_input, conversation, images)
+        tool_round_limit = self.max_tool_rounds if max_tool_rounds is None else max_tool_rounds
+
+        system_prompt = self.system_prompt
+        if context:
+            system_prompt = f"{system_prompt}\n\nContext:\n{context}"
+
+        tools = self.format_tools()
+        turn_messages: List[Dict[str, Any]] = []
+        response = None
+        text_content = ""
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        for round_num in range(tool_round_limit + 1):
+            payload = {
+                "model": self.model,
+                "system": system_prompt,
+                "messages": messages + turn_messages,
+                "max_tokens": self.max_tokens,
+            }
+            if _ANTHROPIC_ACCEPTS_TEMPERATURE:
+                payload["temperature"] = self.temperature
+            allow_tools = bool(tools) and round_num < tool_round_limit
+            if allow_tools:
+                payload["tools"] = tools
+
+            response = await self._call_with_retries_async(lambda: client.messages.create(**payload))
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
+            tool_blocks = [b for b in response.content if b.type == "tool_use"]
+            text_content = "".join(b.text for b in response.content if b.type == "text")
+
+            if not tool_blocks or round_num == tool_round_limit:
+                turn_messages.append({"role": "assistant", "content": response.content})
+                break
+
+            tool_calls = [{"id": b.id, "name": b.name, "arguments": b.input} for b in tool_blocks]
+            tool_results = await self._execute_tool_calls_anthropic_async(tool_calls)
+            turn_messages.append({"role": "assistant", "content": response.content})
+            result_blocks = []
+            for result in tool_results:
+                result_content = result.get("result", {"error": result.get("error", "Tool execution failed")})
+                result_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": result["tool_use_id"],
+                    "content": json.dumps(result_content),
+                })
+            turn_messages.append({"role": "user", "content": result_blocks})
+
+        user_message_content = messages[-1]["content"]
+        conversation.extend([
+            {"role": "user", "content": user_message_content},
+            *turn_messages,
+        ])
+        self._persist_conversation(conversation_id)
 
         return AgentResponse(
             content=text_content,
@@ -486,7 +809,7 @@ class BaseAgent:
             
             if handler:
                 try:
-                    output = handler(**func_args)
+                    output = self._resolve_tool_output_sync(handler(**func_args))
                     results.append({"tool_call_id": tc.id, "result": output})
                     if self.verbose:
                         logger.debug(f"Tool {func_name} succeeded")
@@ -514,7 +837,7 @@ class BaseAgent:
             
             if handler:
                 try:
-                    output = handler(**func_args)
+                    output = self._resolve_tool_output_sync(handler(**func_args))
                     results.append({"tool_use_id": tc["id"], "result": output})
                     if self.verbose:
                         logger.debug(f"Tool {func_name} succeeded")
@@ -529,6 +852,44 @@ class BaseAgent:
         
         return results
 
+    async def _execute_tool_calls_async(self, tool_calls: List[Any]) -> List[Dict[str, Any]]:
+        results = []
+        for tc in tool_calls:
+            func_name = tc.function.name
+            func_args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+            handler = self._tool_handlers.get(func_name)
+            if handler:
+                try:
+                    output = await self._resolve_tool_output_async(handler(**func_args))
+                    results.append({"tool_call_id": tc.id, "result": output})
+                except Exception as e:
+                    results.append({"tool_call_id": tc.id, "error": str(e)})
+                    logger.error(f"Tool {func_name} failed: {e}")
+            else:
+                error_msg = f"Unknown tool: {func_name}"
+                results.append({"tool_call_id": tc.id, "error": error_msg})
+                logger.error(error_msg)
+        return results
+
+    async def _execute_tool_calls_anthropic_async(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        results = []
+        for tc in tool_calls:
+            func_name = tc["name"]
+            func_args = tc["arguments"]
+            handler = self._tool_handlers.get(func_name)
+            if handler:
+                try:
+                    output = await self._resolve_tool_output_async(handler(**func_args))
+                    results.append({"tool_use_id": tc["id"], "result": output})
+                except Exception as e:
+                    results.append({"tool_use_id": tc["id"], "error": str(e)})
+                    logger.error(f"Tool {func_name} failed: {e}")
+            else:
+                error_msg = f"Unknown tool: {func_name}"
+                results.append({"tool_use_id": tc["id"], "error": error_msg})
+                logger.error(error_msg)
+        return results
+
     def _define_tools(self) -> List[Dict[str, Any]]:
         """Override in subclass to define tool schemas."""
         return []
@@ -541,6 +902,42 @@ class BaseAgent:
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} provider={self.provider} model={self.model}>"
+
+    def close(self) -> None:
+        for attr_name, label in (
+            ("_openai_client", "[OpenAI] Closed sync client"),
+            ("_anthropic_client", "[Anthropic] Closed sync client"),
+        ):
+            client = getattr(self, attr_name, None)
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+            setattr(self, attr_name, None)
+            if client is not None and self.verbose:
+                logger.debug(label)
+        if self._conversation_store and self._owns_conversation_store:
+            self._conversation_store.close()
+            self._conversation_store = None
+
+    async def aclose(self) -> None:
+        for attr_name, label in (
+            ("_openai_async_client", "[OpenAI] Closed async client"),
+            ("_anthropic_async_client", "[Anthropic] Closed async client"),
+        ):
+            client = getattr(self, attr_name, None)
+            close = getattr(client, "aclose", None)
+            if callable(close):
+                await close()
+            setattr(self, attr_name, None)
+            if client is not None and self.verbose:
+                logger.debug(label)
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class AgentResponse:

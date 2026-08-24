@@ -1,10 +1,20 @@
+import asyncio
 import os
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents.triage import TriageAgent, _extract_verdict, triage_entry, triage_report
+from agents.evolution import EvolutionStore
+from agents.triage import (
+    TriageAgent,
+    _extract_verdict,
+    triage_entry,
+    triage_entry_findings,
+    triage_entry_findings_async,
+    triage_report,
+    triage_report_async,
+)
 
 
 def test_extract_verdict_parses_confirmed():
@@ -52,6 +62,17 @@ def test_read_project_file_confines_to_root(tmp_path):
 
     missing = agent._read_project_file("does_not_exist.txt")
     assert "error" in missing
+
+
+def test_read_project_file_reads_cross_file_context(tmp_path):
+    project = tmp_path / "project"
+    nested = project / "src"
+    nested.mkdir(parents=True)
+    (nested / "auth.py").write_text("def issue_token(): return True")
+
+    agent = TriageAgent(str(project), provider="anthropic", api_key="test-key")
+    result = agent._bind_tool_handlers()["read_project_file"]("src/auth.py")
+    assert result == {"path": "src/auth.py", "content": "def issue_token(): return True"}
 
 
 def test_triage_entry_uses_agent_run_and_parses_verdict(tmp_path):
@@ -153,8 +174,6 @@ def test_triage_verdicts_are_per_finding_not_per_file(tmp_path):
 def test_one_call_per_entry_however_many_findings(tmp_path):
     """The per-finding loop this replaced re-uploaded the file once per
     finding: a 14-finding component sent its own source fourteen times."""
-    from agents.triage import triage_entry_findings
-
     project = tmp_path / "p"
     project.mkdir()
     (project / "big.tsx").write_text("export const C = () => null;")
@@ -177,8 +196,6 @@ def test_a_dropped_verdict_never_shifts_onto_another_finding(tmp_path):
     """Indexes exist so a short response degrades to UNKNOWN for the missing
     finding rather than sliding later verdicts onto earlier ones — a
     misaligned verdict teaches the scorer the opposite of the truth."""
-    from agents.triage import triage_entry_findings
-
     project = tmp_path / "p"
     project.mkdir()
     (project / "f.py").write_text("x")
@@ -199,8 +216,6 @@ def test_a_dropped_verdict_never_shifts_onto_another_finding(tmp_path):
 
 
 def test_malformed_batch_response_is_unknown_for_every_finding(tmp_path):
-    from agents.triage import triage_entry_findings
-
     project = tmp_path / "p"
     project.mkdir()
     (project / "f.py").write_text("x")
@@ -220,8 +235,6 @@ def test_the_conversation_is_reset_after_every_verdict(tmp_path):
     That is what made the old per-finding loop quadratic: 1+2+...+N copies
     of one source file.
     """
-    from agents.triage import triage_entry_findings
-
     project = tmp_path / "p"
     project.mkdir()
     (project / "f.py").write_text("x = 1")
@@ -253,3 +266,110 @@ def test_the_conversation_is_reset_even_when_the_call_raises(tmp_path):
     with pytest.raises(RuntimeError):
         triage_entry_findings(agent, str(project), entry)
     agent.reset.assert_called_once_with("f.py:t")
+
+
+def test_async_triage_entry_findings_resets_after_success(tmp_path):
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "f.py").write_text("x = 1")
+    entry = {"file": "f.py", "agent": "x", "tool": "t",
+             "result": {"findings": [{"issue": "a"}]}}
+
+    response = MagicMock(content=json.dumps([{"index": 0, "verdict": "CONFIRMED", "reason": "r"}]))
+
+    async def fake_run_async(*_args, **_kwargs):
+        return response
+
+    agent = MagicMock()
+    agent.run_async = fake_run_async
+
+    verdicts = asyncio.run(triage_entry_findings_async(agent, str(project), entry))
+    assert verdicts[0]["verdict"] == "CONFIRMED"
+    agent.reset.assert_called_once_with("f.py:t")
+
+
+def test_async_triage_report_aggregates_entries(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "a.py").write_text("a")
+    (project / "b.py").write_text("b")
+    report = {
+        "project": str(project),
+        "files_matched": 2,
+        "summary": {},
+        "coverage": {"tool_errors": 0, "skipped_files": []},
+        "results": [
+            {"file": "a.py", "agent": "x", "tool": "t1", "result": {"findings": [{"issue": "i1"}]}},
+            {"file": "b.py", "agent": "x", "tool": "t2", "result": {"findings": [{"issue": "i2"}]}},
+        ],
+    }
+
+    async def fake_entry(*_args, **_kwargs):
+        if fake_entry.calls == 0:
+            fake_entry.calls += 1
+            return [{"verdict": "CONFIRMED", "reason": "real"}]
+        return [{"verdict": "FALSE_POSITIVE", "reason": "handled"}]
+
+    fake_entry.calls = 0
+
+    async def run_test():
+        with patch("agents.triage.TriageAgent") as MockAgent:
+            instance = MagicMock()
+
+            async def fake_aclose():
+                return None
+
+            instance.aclose = fake_aclose
+            MockAgent.return_value = instance
+            with patch("agents.triage.triage_entry_findings_async", side_effect=fake_entry):
+                return await triage_report_async(report, provider="anthropic", api_key="test-key")
+
+    result = asyncio.run(run_test())
+    assert result["triage_summary"] == {"confirmed": 1, "false_positive": 1, "unknown": 0}
+    assert result["results"][0]["triage"]["verdict"] == "CONFIRMED"
+    assert result["results"][1]["triage"]["verdict"] == "FALSE_POSITIVE"
+
+
+def test_triage_results_are_recorded_in_evolution_store(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "route.py").write_text("def route(): return True\n")
+    report = {
+        "project": str(project),
+        "files_scanned": 1,
+        "files_matched": 1,
+        "summary": {"HIGH": 1},
+        "coverage": {},
+        "results": [
+            {
+                "file": "route.py",
+                "agent": "auth_security",
+                "tool": "audit_shared_secret_auth",
+                "result": {
+                    "findings": [
+                        {"severity": "HIGH", "issue": "Missing auth", "fix": "Add auth"}
+                    ]
+                },
+            }
+        ],
+    }
+
+    with patch("agents.triage.TriageAgent") as MockAgent:
+        MockAgent.return_value = MagicMock()
+        with patch(
+            "agents.triage.triage_entry_findings",
+            return_value=[{"verdict": "FALSE_POSITIVE", "reason": "covered by middleware"}],
+        ):
+            triaged = triage_report(report, provider="anthropic", api_key="test-key")
+
+    with EvolutionStore(str(tmp_path / "evolution.db")) as store:
+        store.record_scan(triaged, detector_version="test")
+        row = store.connection.execute(
+            "SELECT verdict, reason, source FROM feedback"
+        ).fetchone()
+
+    assert dict(row) == {
+        "verdict": "FALSE_POSITIVE",
+        "reason": "covered by middleware",
+        "source": "triage",
+    }

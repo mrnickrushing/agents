@@ -33,10 +33,14 @@ from agents.base import BaseAgent
 
 class UIGenerationAgent(BaseAgent):
     """
-    UI component generation specialist powered by Claude.
-    
+    UI component generation specialist powered by Claude by default.
+     
     Transforms natural language descriptions into production-ready
     React/TypeScript components with Tailwind CSS styling.
+
+    Anthropic/Claude models are the default and recommended choice. If you use
+    provider="openai", pass an OpenAI model explicitly or let the agent fall
+    back to gpt-5 instead of sending a Claude-only model name to OpenAI.
     """
     
     name = "ui_generation"
@@ -194,6 +198,15 @@ TOOL USAGE:
 
 You're not decorating screens — you're crafting the thing the user feels every time they open the app. Make it the kind of UI that makes people want to screenshot it.
 """
+
+    def __init__(self, provider: str = "anthropic", model: Optional[str] = None, **kwargs: Any):
+        normalized_provider = provider.lower()
+        resolved_model = model
+        if normalized_provider == "openai":
+            if resolved_model and resolved_model.startswith("claude-"):
+                raise ValueError("UIGenerationAgent cannot use a Claude model with provider='openai'. Pass an OpenAI model or omit model to use gpt-5.")
+            resolved_model = resolved_model or "gpt-5"
+        super().__init__(provider=provider, model=resolved_model, **kwargs)
 
     def _define_tools(self) -> List[Dict[str, Any]]:
         return [
