@@ -1245,20 +1245,46 @@ def rule_precision(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     their severity. Only rules with enough verdicts to mean something are
     scored — precision over three data points is a coin toss with a decimal.
     """
+    # Count each *finding* once, not once per scan that recorded it.
+    #
+    # The obvious join — feedback JOIN findings ON finding_id — multiplies
+    # every verdict by the number of scans the finding appears in, because
+    # findings carries one row per (finding, scan). Two real verdicts read
+    # as twelve after six rescans, which is enough to push a rule past the
+    # "scored" threshold and demote it on a single human opinion. Caught by
+    # noticing a rule reported 12 verdicts while the feedback table held 2.
+    #
+    # Multiple verdicts on one finding resolve the way evolution.py resolves
+    # them: any CONFIRMED wins, since a human confirming something once
+    # settles it regardless of earlier dismissals.
     with EvolutionStore(db_path) as store:
         rows = store.connection.execute(
             """
-            SELECT f.agent, f.tool, fb.verdict, COUNT(*) AS n
-            FROM feedback fb
-            JOIN findings f ON f.finding_id = fb.finding_id
-            GROUP BY f.agent, f.tool, fb.verdict
+            WITH resolved AS (
+                SELECT finding_id,
+                       MAX(CASE WHEN verdict = 'CONFIRMED' THEN 1 ELSE 0 END) AS confirmed
+                FROM feedback
+                GROUP BY finding_id
+            ),
+            rule_of AS (
+                SELECT finding_id, MIN(agent) AS agent, MIN(tool) AS tool
+                FROM findings
+                GROUP BY finding_id
+            )
+            SELECT r.agent AS agent, r.tool AS tool,
+                   SUM(v.confirmed) AS confirmed,
+                   SUM(1 - v.confirmed) AS false_positive
+            FROM resolved v
+            JOIN rule_of r ON r.finding_id = v.finding_id
+            GROUP BY r.agent, r.tool
             """
         ).fetchall()
     by_rule: Dict[str, Dict[str, int]] = {}
     for r in rows:
-        key = f"{r['agent']}.{r['tool']}"
-        by_rule.setdefault(key, {"CONFIRMED": 0, "FALSE_POSITIVE": 0})
-        by_rule[key][r["verdict"]] = by_rule[key].get(r["verdict"], 0) + r["n"]
+        by_rule[f"{r['agent']}.{r['tool']}"] = {
+            "CONFIRMED": r["confirmed"] or 0,
+            "FALSE_POSITIVE": r["false_positive"] or 0,
+        }
     out = []
     for rule, counts in sorted(by_rule.items()):
         total = counts["CONFIRMED"] + counts["FALSE_POSITIVE"]
