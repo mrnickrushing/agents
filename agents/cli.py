@@ -2582,6 +2582,19 @@ def cmd_scaffold_figma(args: argparse.Namespace) -> None:
     print(f"Generated {len(result['files'])} files in {output}")
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Run the hosted service: dashboard + GitHub webhook receiver + /health."""
+    try:
+        from agents.server import serve
+    except ImportError as exc:
+        raise SystemExit(
+            f"{exc}\nThe hosted service needs the web extra: "
+            "pip install 'rushingtech-agents[web]'"
+        ) from exc
+
+    serve(host=args.host, port=args.port, db_path=args.db, threads=args.threads)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m agents.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2774,6 +2787,27 @@ def main() -> None:
     p_eval.add_argument("--project", help="Only evaluate one project path")
     p_eval.add_argument("--db", default=default_database_path())
     p_eval.set_defaults(func=cmd_eval)
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Run the hosted service: dashboard, GitHub webhook receiver, /health (needs the [web] extra)",
+    )
+    p_serve.add_argument(
+        "--host",
+        default=os.environ.get("HOST", "0.0.0.0"),
+        help="Bind host (default: $HOST or 0.0.0.0)",
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", "8000")),
+        help="Bind port (default: $PORT or 8000)",
+    )
+    p_serve.add_argument(
+        "--db", default=None, help="Path to evolution.db (default: $AGENTS_DB or XDG)"
+    )
+    p_serve.add_argument("--threads", type=int, default=8)
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
