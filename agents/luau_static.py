@@ -35,23 +35,54 @@ OPENERS = "([{"
 CLOSERS = ")]}"
 
 SKIP_DIRECTORIES = {
-    ".git", "node_modules", "build", "dist", "out", "__pycache__",
-    ".rokit", "Packages", "ServerPackages", "DevPackages", ".vscode",
+    ".git",
+    "node_modules",
+    "build",
+    "dist",
+    "out",
+    "__pycache__",
+    ".rokit",
+    "Packages",
+    "ServerPackages",
+    "DevPackages",
+    ".vscode",
 }
 
 # Calls that reach the network, the datastore, or the asset pipeline. Each can
 # fail for reasons the caller does not control, and an unprotected failure
 # takes down whatever thread it runs on.
 YIELDING_CALLS = (
-    "GetAsync", "SetAsync", "UpdateAsync", "IncrementAsync", "RemoveAsync",
-    "GetSortedAsync", "GetOrderedDataStore", "LoadCharacter",
-    "LoadAsset", "GetProductInfo", "UserOwnsGamePassAsync",
-    "GetUserThumbnailAsync", "RequestStreamAroundAsync", "PromptPurchase",
-    "PublishAsync", "GetPlayerPlaceInstanceAsync", "TeleportAsync",
-    "ReserveServer", "HttpGet", "RequestAsync", "GetHumanoidDescriptionFromUserId",
+    "GetAsync",
+    "SetAsync",
+    "UpdateAsync",
+    "IncrementAsync",
+    "RemoveAsync",
+    "GetSortedAsync",
+    "GetOrderedDataStore",
+    "LoadCharacter",
+    "LoadAsset",
+    "GetProductInfo",
+    "UserOwnsGamePassAsync",
+    "GetUserThumbnailAsync",
+    "RequestStreamAroundAsync",
+    "PromptPurchase",
+    "PublishAsync",
+    "GetPlayerPlaceInstanceAsync",
+    "TeleportAsync",
+    "ReserveServer",
+    "HttpGet",
+    "RequestAsync",
+    "GetHumanoidDescriptionFromUserId",
 )
 
-CREATABLE_PARTS = ("Part", "MeshPart", "WedgePart", "TrussPart", "CornerWedgePart", "SpawnLocation")
+CREATABLE_PARTS = (
+    "Part",
+    "MeshPart",
+    "WedgePart",
+    "TrussPart",
+    "CornerWedgePart",
+    "SpawnLocation",
+)
 
 
 def strip_noise(code: str) -> str:
@@ -137,7 +168,9 @@ def iter_luau_files(root: str) -> Iterable[str]:
 
 
 class Finding(dict):
-    def __init__(self, rule: str, severity: str, path: str, line: int, issue: str, fix: str):
+    def __init__(
+        self, rule: str, severity: str, path: str, line: int, issue: str, fix: str
+    ):
         super().__init__(
             rule=rule, severity=severity, file=path, line=line, issue=issue, fix=fix
         )
@@ -185,12 +218,17 @@ def check_call_arity(path: str, source: str) -> List[Finding]:
             inner = text[opened + 1 : closed]
             passed = len(split_top_level(inner)) if inner.strip() else 0
             if passed < required:
-                findings.append(Finding(
-                    "call_arity", "HIGH", path, line_of(text, call.start()),
-                    f"{name}() is called with {passed} argument(s) but requires {required} of {total}",
-                    f"Pass the missing argument(s). Luau supplies nil silently, so this surfaces "
-                    f"as a nil-index or nil-argument error deep inside {name}, far from this line.",
-                ))
+                findings.append(
+                    Finding(
+                        "call_arity",
+                        "HIGH",
+                        path,
+                        line_of(text, call.start()),
+                        f"{name}() is called with {passed} argument(s) but requires {required} of {total}",
+                        f"Pass the missing argument(s). Luau supplies nil silently, so this surfaces "
+                        f"as a nil-index or nil-argument error deep inside {name}, far from this line.",
+                    )
+                )
     return findings
 
 
@@ -212,14 +250,21 @@ def check_use_before_definition(path: str, source: str) -> List[Finding]:
         for m in re.finditer(r"^local function ([A-Za-z_]\w*)\(", text, re.M)
     }
     for name, defined_at in definitions.items():
-        for call in re.finditer(r"^\s{0,3}(?:local \w+ = )?" + re.escape(name) + r"\(", text, re.M):
+        for call in re.finditer(
+            r"^\s{0,3}(?:local \w+ = )?" + re.escape(name) + r"\(", text, re.M
+        ):
             if call.start() < defined_at:
-                findings.append(Finding(
-                    "use_before_definition", "HIGH", path, line_of(text, call.start()),
-                    f"{name}() is called before `local function {name}` on line {line_of(text, defined_at)}",
-                    "local functions are not hoisted; the name is nil until its definition runs. "
-                    "Move the definition above this call, or forward-declare with `local name`.",
-                ))
+                findings.append(
+                    Finding(
+                        "use_before_definition",
+                        "HIGH",
+                        path,
+                        line_of(text, call.start()),
+                        f"{name}() is called before `local function {name}` on line {line_of(text, defined_at)}",
+                        "local functions are not hoisted; the name is nil until its definition runs. "
+                        "Move the definition above this call, or forward-declare with `local name`.",
+                    )
+                )
     return findings
 
 
@@ -233,12 +278,17 @@ def check_deprecated_scheduler(path: str, source: str) -> List[Finding]:
     # only `.` missed `self._enemyService:spawn(...)`.
     for match in re.finditer(r"(?<![\w.:])(wait|spawn|delay)\s*\(", text):
         name = match.group(1)
-        findings.append(Finding(
-            "deprecated_scheduler", "LOW", path, line_of(text, match.start()),
-            f"`{name}()` is the deprecated global scheduler",
-            f"Use task.{name}() — the globals throttle unpredictably under load and "
-            f"`spawn`/`delay` can defer far longer than asked.",
-        ))
+        findings.append(
+            Finding(
+                "deprecated_scheduler",
+                "LOW",
+                path,
+                line_of(text, match.start()),
+                f"`{name}()` is the deprecated global scheduler",
+                f"Use task.{name}() — the globals throttle unpredictably under load and "
+                f"`spawn`/`delay` can defer far longer than asked.",
+            )
+        )
     return findings
 
 
@@ -262,13 +312,18 @@ def check_unprotected_async(path: str, source: str) -> List[Finding]:
                 window = "\n".join(lines[max(0, index - 6) : index + 6])
                 if "pcall" in window or "xpcall" in window:
                     continue
-                findings.append(Finding(
-                    "unprotected_async", "MEDIUM", path, index + 1,
-                    f"{call} is called without a nearby pcall",
-                    "Wrap it in pcall and handle the failure. Datastore, asset and teleport "
-                    "calls fail for reasons the caller does not control, and an unhandled "
-                    "error kills the thread that was mid-way through something.",
-                ))
+                findings.append(
+                    Finding(
+                        "unprotected_async",
+                        "MEDIUM",
+                        path,
+                        index + 1,
+                        f"{call} is called without a nearby pcall",
+                        "Wrap it in pcall and handle the failure. Datastore, asset and teleport "
+                        "calls fail for reasons the caller does not control, and an unhandled "
+                        "error kills the thread that was mid-way through something.",
+                    )
+                )
                 break
     return findings
 
@@ -281,13 +336,18 @@ def check_player_chatted(path: str, source: str) -> List[Finding]:
         return []
     findings: List[Finding] = []
     for match in re.finditer(r"\.Chatted\s*:\s*Connect", text):
-        findings.append(Finding(
-            "player_chatted", "HIGH", path, line_of(text, match.start()),
-            "Player.Chatted does not fire when the experience uses TextChatService",
-            "TextChatService is the default for new experiences, and Player.Chatted is a "
-            "legacy-chat event. Register a TextChatCommand (set AutocompleteVisible = false "
-            "to keep it out of the autocomplete list) or handle TextChannel messages instead.",
-        ))
+        findings.append(
+            Finding(
+                "player_chatted",
+                "HIGH",
+                path,
+                line_of(text, match.start()),
+                "Player.Chatted does not fire when the experience uses TextChatService",
+                "TextChatService is the default for new experiences, and Player.Chatted is a "
+                "legacy-chat event. Register a TextChatCommand (set AutocompleteVisible = false "
+                "to keep it out of the autocomplete list) or handle TextChannel messages instead.",
+            )
+        )
     return findings
 
 
@@ -302,13 +362,20 @@ def check_unanchored_parts(path: str, source: str) -> List[Finding]:
     if "Anchored" in text:
         return []
     findings: List[Finding] = []
-    for match in re.finditer(r'Instance\.new\(\s*"(' + "|".join(CREATABLE_PARTS) + r')"', text):
-        findings.append(Finding(
-            "unanchored_part", "MEDIUM", path, line_of(text, match.start()),
-            f'Instance.new("{match.group(1)}") in a file that never sets Anchored',
-            "Parts are unanchored by default and will fall out of the world. Set "
-            "`part.Anchored = true` for scenery, or make the physics intent explicit.",
-        ))
+    for match in re.finditer(
+        r'Instance\.new\(\s*"(' + "|".join(CREATABLE_PARTS) + r')"', text
+    ):
+        findings.append(
+            Finding(
+                "unanchored_part",
+                "MEDIUM",
+                path,
+                line_of(text, match.start()),
+                f'Instance.new("{match.group(1)}") in a file that never sets Anchored',
+                "Parts are unanchored by default and will fall out of the world. Set "
+                "`part.Anchored = true` for scenery, or make the physics intent explicit.",
+            )
+        )
     return findings
 
 
@@ -324,13 +391,18 @@ def check_shadow_lights_in_loops(path: str, source: str) -> List[Finding]:
     for match in re.finditer(r"Shadows\s*=\s*true", text):
         before = text[max(0, match.start() - 900) : match.start()]
         if re.search(r"\n\s*(for|while)\b[^\n]*\bdo\b", before):
-            findings.append(Finding(
-                "shadow_light_in_loop", "MEDIUM", path, line_of(text, match.start()),
-                "A shadow-casting light is created inside a loop",
-                "Under Future lighting each one costs every frame. Cast shadows only from "
-                "lights a player looks for a shadow from, and leave decorative fill lights "
-                "with Shadows = false.",
-            ))
+            findings.append(
+                Finding(
+                    "shadow_light_in_loop",
+                    "MEDIUM",
+                    path,
+                    line_of(text, match.start()),
+                    "A shadow-casting light is created inside a loop",
+                    "Under Future lighting each one costs every frame. Cast shadows only from "
+                    "lights a player looks for a shadow from, and leave decorative fill lights "
+                    "with Shadows = false.",
+                )
+            )
     return findings
 
 
@@ -346,7 +418,9 @@ def check_connection_leaks(path: str, source: str) -> List[Finding]:
     if re.search(r":\s*Disconnect\s*\(|\bConnectionsTo\w*\b|:\s*Once\s*\(", text):
         return []
     findings: List[Finding] = []
-    for match in re.finditer(r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text):
+    for match in re.finditer(
+        r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text
+    ):
         # A connection opened during service startup lives as long as the
         # server does. There is nothing to leak into, because the thing it
         # serves never goes away.
@@ -357,15 +431,25 @@ def check_connection_leaks(path: str, source: str) -> List[Finding]:
         # handle on, which is the whole prerequisite for disconnecting it
         # later. Only a discarded return value is unambiguously unrecoverable.
         line_start = text.rfind("\n", 0, match.start()) + 1
-        if re.search(r"=\s*$", text[line_start : match.start()].rstrip() + " ".rstrip()) or "=" in text[line_start : match.start()]:
+        if (
+            re.search(
+                r"=\s*$", text[line_start : match.start()].rstrip() + " ".rstrip()
+            )
+            or "=" in text[line_start : match.start()]
+        ):
             continue
-        findings.append(Finding(
-            "connection_leak", "MEDIUM", path, line_of(text, match.start()),
-            f"{match.group(1)} is connected in a file that never calls Disconnect",
-            "A per-frame connection that outlives what it was watching keeps running and "
-            "keeps its upvalues alive. Store the connection and disconnect it when the "
-            "thing it serves goes away.",
-        ))
+        findings.append(
+            Finding(
+                "connection_leak",
+                "MEDIUM",
+                path,
+                line_of(text, match.start()),
+                f"{match.group(1)} is connected in a file that never calls Disconnect",
+                "A per-frame connection that outlives what it was watching keeps running and "
+                "keeps its upvalues alive. Store the connection and disconnect it when the "
+                "thing it serves goes away.",
+            )
+        )
     return findings
 
 
@@ -373,8 +457,13 @@ def check_connection_leaks(path: str, source: str) -> List[Finding]:
 
 
 CLIENT_VISIBLE = {
-    "ReplicatedStorage", "ReplicatedFirst", "StarterPlayer", "StarterGui",
-    "StarterPack", "Workspace", "Lighting",
+    "ReplicatedStorage",
+    "ReplicatedFirst",
+    "StarterPlayer",
+    "StarterGui",
+    "StarterPack",
+    "Workspace",
+    "Lighting",
 }
 
 
@@ -383,9 +472,16 @@ def check_rojo_project(path: str, raw: str, repo_root: str) -> List[Finding]:
     try:
         project = json.loads(raw)
     except json.JSONDecodeError as error:
-        return [Finding("rojo_unparsable", "HIGH", path, 1,
-                        f"Rojo project is not valid JSON: {error}",
-                        "Fix the syntax; Rojo cannot build this project at all.")]
+        return [
+            Finding(
+                "rojo_unparsable",
+                "HIGH",
+                path,
+                1,
+                f"Rojo project is not valid JSON: {error}",
+                "Fix the syntax; Rojo cannot build this project at all.",
+            )
+        ]
 
     tree = project.get("tree")
     if not isinstance(tree, dict):
@@ -398,19 +494,31 @@ def check_rojo_project(path: str, raw: str, repo_root: str) -> List[Finding]:
         if isinstance(source, str):
             resolved = os.path.join(repo_root, source)
             if not os.path.exists(resolved):
-                findings.append(Finding(
-                    "rojo_missing_path", "HIGH", path, 1,
-                    f'{location} maps $path "{source}", which does not exist',
-                    "Rojo silently produces an empty container for a missing path, so the "
-                    "code simply is not in the built place. Fix the path or remove the entry.",
-                ))
-            if service in CLIENT_VISIBLE and re.search(r"(^|/)(server|Server)(/|$)", source):
-                findings.append(Finding(
-                    "rojo_server_in_client", "HIGH", path, 1,
-                    f'{location} maps server source "{source}" into client-visible {service}',
-                    "Anything under a client-visible service is readable by every player. "
-                    "Move it to ServerScriptService or ServerStorage.",
-                ))
+                findings.append(
+                    Finding(
+                        "rojo_missing_path",
+                        "HIGH",
+                        path,
+                        1,
+                        f'{location} maps $path "{source}", which does not exist',
+                        "Rojo silently produces an empty container for a missing path, so the "
+                        "code simply is not in the built place. Fix the path or remove the entry.",
+                    )
+                )
+            if service in CLIENT_VISIBLE and re.search(
+                r"(^|/)(server|Server)(/|$)", source
+            ):
+                findings.append(
+                    Finding(
+                        "rojo_server_in_client",
+                        "HIGH",
+                        path,
+                        1,
+                        f'{location} maps server source "{source}" into client-visible {service}',
+                        "Anything under a client-visible service is readable by every player. "
+                        "Move it to ServerScriptService or ServerStorage.",
+                    )
+                )
         for key, value in node.items():
             if key.startswith("$"):
                 continue
@@ -432,21 +540,28 @@ def check_rojo_project(path: str, raw: str, repo_root: str) -> List[Finding]:
     if isinstance(lighting, dict):
         technology = (lighting.get("$properties") or {}).get("Technology")
     if technology is None:
-        findings.append(Finding(
-            "rojo_lighting_unset", "MEDIUM", path, 1,
-            "The project never configures Lighting.Technology",
-            "Technology cannot be set from a script — it exists only in the place file, so "
-            "leaving it out means shipping whatever the place already had. Declare it "
-            "explicitly (Future for per-light shadows) so the lighting you author is the "
-            "lighting that ships.",
-        ))
+        findings.append(
+            Finding(
+                "rojo_lighting_unset",
+                "MEDIUM",
+                path,
+                1,
+                "The project never configures Lighting.Technology",
+                "Technology cannot be set from a script — it exists only in the place file, so "
+                "leaving it out means shipping whatever the place already had. Declare it "
+                "explicitly (Future for per-light shadows) so the lighting you author is the "
+                "lighting that ships.",
+            )
+        )
     return findings
 
 
 # ── Content wiring ───────────────────────────────────────────────────
 
 
-def check_unread_definition_fields(repo_root: str, sources: Dict[str, str]) -> List[Finding]:
+def check_unread_definition_fields(
+    repo_root: str, sources: Dict[str, str]
+) -> List[Finding]:
     """Fields authored in content definitions that nothing ever reads.
 
     Found a real one: every encounter in a shipped game authored a line of
@@ -475,11 +590,15 @@ def check_unread_definition_fields(repo_root: str, sources: Dict[str, str]) -> L
 
     authored: Dict[str, int] = {}
     for text in definition_files.values():
-        for match in re.finditer(r"^\s{4,}([a-z][A-Za-z]*)\s*=", strip_noise(text), re.M):
+        for match in re.finditer(
+            r"^\s{4,}([a-z][A-Za-z]*)\s*=", strip_noise(text), re.M
+        ):
             authored[match.group(1)] = authored.get(match.group(1), 0) + 1
 
     consumers = "\n".join(
-        strip_noise(text) for path, text in sources.items() if path not in definition_files
+        strip_noise(text)
+        for path, text in sources.items()
+        if path not in definition_files
     )
     findings: List[Finding] = []
     for field, count in sorted(authored.items()):
@@ -487,14 +606,19 @@ def check_unread_definition_fields(repo_root: str, sources: Dict[str, str]) -> L
             continue
         if re.search(r"[.\[][\"']?" + re.escape(field) + r"\b", consumers):
             continue
-        findings.append(Finding(
-            "unread_definition_field", "MEDIUM", next(iter(definition_files)), 1,
-            f'Authored field "{field}" appears {count} times in content definitions '
-            f"but is never read outside them",
-            "Either surface it or delete it. Authored content that nothing consumes is "
-            "indistinguishable at runtime from content that was never written, which is "
-            "how it survives review.",
-        ))
+        findings.append(
+            Finding(
+                "unread_definition_field",
+                "MEDIUM",
+                next(iter(definition_files)),
+                1,
+                f'Authored field "{field}" appears {count} times in content definitions '
+                f"but is never read outside them",
+                "Either surface it or delete it. Authored content that nothing consumes is "
+                "indistinguishable at runtime from content that was never written, which is "
+                "how it survives review.",
+            )
+        )
     return findings
 
 
@@ -513,31 +637,48 @@ def check_strict_mode(path: str, source: str) -> List[Finding]:
         return []
     if not re.search(r"\)\s*:\s*[A-Z]\w+|:\s*(string|number|boolean)\b", source):
         return []
-    return [Finding(
-        "missing_strict_mode", "LOW", path, 1,
-        "Module carries type annotations but no --!strict header",
-        "Add `--!strict` as the first line. Without it Luau checks almost nothing, "
-        "so the annotations describe intent without enforcing it.",
-    )]
+    return [
+        Finding(
+            "missing_strict_mode",
+            "LOW",
+            path,
+            1,
+            "Module carries type annotations but no --!strict header",
+            "Add `--!strict` as the first line. Without it Luau checks almost nothing, "
+            "so the annotations describe intent without enforcing it.",
+        )
+    ]
 
 
 def check_deprecated_api(path: str, source: str) -> List[Finding]:
     text = strip_noise(source)
     findings: List[Finding] = []
     for match in re.finditer(r"[.:]Remove\s*\(\s*\)", text):
-        findings.append(Finding(
-            "deprecated_api", "MEDIUM", path, line_of(text, match.start()),
-            ":Remove() is deprecated and only reparents the instance",
-            "Use :Destroy(). Remove() sets Parent to nil but leaves the instance alive with "
-            "its connections intact, which is a memory leak that looks like deletion.",
-        ))
-    for match in re.finditer(r'Instance\.new\(\s*"[A-Za-z]+"\s*,', strip_comments(source)):
-        findings.append(Finding(
-            "deprecated_api", "LOW", path, line_of(text, match.start()),
-            "Instance.new() is passing a parent as its second argument",
-            "Set .Parent last, after the properties. Parenting first makes the instance "
-            "replicate and re-render on every subsequent property write.",
-        ))
+        findings.append(
+            Finding(
+                "deprecated_api",
+                "MEDIUM",
+                path,
+                line_of(text, match.start()),
+                ":Remove() is deprecated and only reparents the instance",
+                "Use :Destroy(). Remove() sets Parent to nil but leaves the instance alive with "
+                "its connections intact, which is a memory leak that looks like deletion.",
+            )
+        )
+    for match in re.finditer(
+        r'Instance\.new\(\s*"[A-Za-z]+"\s*,', strip_comments(source)
+    ):
+        findings.append(
+            Finding(
+                "deprecated_api",
+                "LOW",
+                path,
+                line_of(text, match.start()),
+                "Instance.new() is passing a parent as its second argument",
+                "Set .Parent last, after the properties. Parenting first makes the instance "
+                "replicate and re-render on every subsequent property write.",
+            )
+        )
     return findings
 
 
@@ -560,12 +701,17 @@ def check_unresolved_requires(path: str, source: str, known: set) -> List[Findin
         name = tail[0]
         if name in known or name in {"Parent", "script", "game"}:
             continue
-        findings.append(Finding(
-            "unresolved_require", "HIGH", path, line_of(text, match.start()),
-            f'require targets "{name}", which matches no module file in the repository',
-            "A require that resolves to nothing throws at load and takes the whole script "
-            "with it. Fix the path, or restore the module it was renamed from.",
-        ))
+        findings.append(
+            Finding(
+                "unresolved_require",
+                "HIGH",
+                path,
+                line_of(text, match.start()),
+                f'require targets "{name}", which matches no module file in the repository',
+                "A require that resolves to nothing throws at load and takes the whole script "
+                "with it. Fix the path, or restore the module it was renamed from.",
+            )
+        )
     return findings
 
 
@@ -579,13 +725,18 @@ def check_findfirstchild_nil(path: str, source: str) -> List[Finding]:
     text = strip_noise(source)
     findings: List[Finding] = []
     for match in re.finditer(r"FindFirstChild\s*\([^)]*\)\s*[.:]\s*[A-Za-z_]", text):
-        findings.append(Finding(
-            "findfirstchild_nil", "HIGH", path, line_of(text, match.start()),
-            "The result of FindFirstChild is indexed without a nil check",
-            "FindFirstChild returns nil when the child is absent, so this throws the moment "
-            "it is. Assign it, test for nil, then use it -- or use WaitForChild if the child "
-            "is guaranteed to arrive.",
-        ))
+        findings.append(
+            Finding(
+                "findfirstchild_nil",
+                "HIGH",
+                path,
+                line_of(text, match.start()),
+                "The result of FindFirstChild is indexed without a nil check",
+                "FindFirstChild returns nil when the child is absent, so this throws the moment "
+                "it is. Assign it, test for nil, then use it -- or use WaitForChild if the child "
+                "is guaranteed to arrive.",
+            )
+        )
     return findings
 
 
@@ -597,22 +748,31 @@ def check_per_frame_allocation(path: str, source: str) -> List[Finding]:
     """
     text = strip_noise(source)
     findings: List[Finding] = []
-    for connect in re.finditer(r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text):
+    for connect in re.finditer(
+        r"(RenderStepped|Heartbeat|Stepped)\s*:\s*Connect\s*\(", text
+    ):
         body = text[connect.end() : connect.end() + 1400]
         # An accumulator that returns early is the standard way to run
         # something a few times a second inside a per-frame signal. The
         # allocation is real but it is not happening every frame, and saying
         # so anyway trains people to ignore the rule.
-        if re.search(r"(?s)accumulator|elapsed|sinceLast|\bif\s+\w+\s*<\s*[\d.]+\s*then\s*return", body[:400]):
+        if re.search(
+            r"(?s)accumulator|elapsed|sinceLast|\bif\s+\w+\s*<\s*[\d.]+\s*then\s*return",
+            body[:400],
+        ):
             continue
         for call in re.finditer(r":(GetChildren|GetDescendants|GetPlayers)\s*\(", body):
-            findings.append(Finding(
-                "per_frame_allocation", "MEDIUM", path,
-                line_of(text, connect.end() + call.start()),
-                f":{call.group(1)}() is called inside a {connect.group(1)} callback",
-                "It allocates a new table every frame. Cache the list and refresh it when the "
-                "thing it describes actually changes.",
-            ))
+            findings.append(
+                Finding(
+                    "per_frame_allocation",
+                    "MEDIUM",
+                    path,
+                    line_of(text, connect.end() + call.start()),
+                    f":{call.group(1)}() is called inside a {connect.group(1)} callback",
+                    "It allocates a new table every frame. Cache the list and refresh it when the "
+                    "thing it describes actually changes.",
+                )
+            )
             break
     return findings
 
@@ -627,15 +787,22 @@ def check_gameplay_clock(path: str, source: str) -> List[Finding]:
     findings: List[Finding] = []
     for match in re.finditer(r"\b(os\.time|tick)\s*\(\s*\)", text):
         window = text[max(0, match.start() - 200) : match.start() + 200]
-        if not re.search(r"(?i)cooldown|expire|remaining|deadline|elapsed|duration|timer", window):
+        if not re.search(
+            r"(?i)cooldown|expire|remaining|deadline|elapsed|duration|timer", window
+        ):
             continue
-        findings.append(Finding(
-            "gameplay_clock", "MEDIUM", path, line_of(text, match.start()),
-            f"{match.group(1)}() is used for gameplay timing",
-            "os.time() is whole seconds and tick() is machine-local; neither agrees across "
-            "the server/client boundary. Use workspace:GetServerTimeNow() for anything a "
-            "player is timed against.",
-        ))
+        findings.append(
+            Finding(
+                "gameplay_clock",
+                "MEDIUM",
+                path,
+                line_of(text, match.start()),
+                f"{match.group(1)}() is used for gameplay timing",
+                "os.time() is whole seconds and tick() is machine-local; neither agrees across "
+                "the server/client boundary. Use workspace:GetServerTimeNow() for anything a "
+                "player is timed against.",
+            )
+        )
     return findings
 
 
@@ -645,14 +812,21 @@ def check_hardcoded_asset_ids(path: str, source: str) -> List[Finding]:
     ids = list(re.finditer(r"rbxassetid://(\d+)", source))
     if len(ids) < 4:
         return []
-    if re.search(r"(?i)registry|catalog|manifest|assets?\s*=|_IDS\b", path + text[:600]):
+    if re.search(
+        r"(?i)registry|catalog|manifest|assets?\s*=|_IDS\b", path + text[:600]
+    ):
         return []
-    return [Finding(
-        "scattered_asset_ids", "LOW", path, line_of(source, ids[0].start()),
-        f"{len(ids)} rbxassetid literals are declared inline in this module",
-        "Collect them into one registry table. Inline IDs cannot be audited, swapped for a "
-        "fallback, or checked against an upload manifest.",
-    )]
+    return [
+        Finding(
+            "scattered_asset_ids",
+            "LOW",
+            path,
+            line_of(source, ids[0].start()),
+            f"{len(ids)} rbxassetid literals are declared inline in this module",
+            "Collect them into one registry table. Inline IDs cannot be audited, swapped for a "
+            "fallback, or checked against an upload manifest.",
+        )
+    ]
 
 
 # ── Entry point ──────────────────────────────────────────────────────
@@ -694,9 +868,7 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
         except OSError:
             continue
 
-    module_names = {
-        os.path.splitext(os.path.basename(p))[0] for p in sources
-    }
+    module_names = {os.path.splitext(os.path.basename(p))[0] for p in sources}
 
     findings: List[Finding] = []
     for relative, text in sources.items():
@@ -724,7 +896,9 @@ def analyze_repository(root: str, rules: Optional[List[str]] = None) -> Dict[str
     if not rules or "unread_definition_fields" in rules:
         findings.extend(check_unread_definition_fields(root, sources))
 
-    findings.sort(key=lambda f: (SEVERITY_ORDER.get(f["severity"], 3), f["file"], f["line"]))
+    findings.sort(
+        key=lambda f: (SEVERITY_ORDER.get(f["severity"], 3), f["file"], f["line"])
+    )
 
     tally: Dict[str, int] = {}
     for finding in findings:

@@ -14,7 +14,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
@@ -43,7 +42,7 @@ def _balanced_call(text: str, open_paren: int) -> str:
         elif char == ")":
             depth -= 1
             if depth == 0:
-                return text[open_paren:index + 1]
+                return text[open_paren : index + 1]
     return text[open_paren:]
 
 
@@ -150,19 +149,19 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The Express route handler code to review"
+                            "description": "The Express route handler code to review",
                         },
                         "route_path": {
                             "type": "string",
-                            "description": "The route path (e.g., 'POST /api/users')"
+                            "description": "The route path (e.g., 'POST /api/users')",
                         },
                         "auth_required": {
                             "type": "boolean",
-                            "description": "Whether this route requires authentication"
-                        }
+                            "description": "Whether this route requires authentication",
+                        },
                     },
-                    "required": ["code", "route_path"]
-                }
+                    "required": ["code", "route_path"],
+                },
             },
             {
                 "name": "review_react_component",
@@ -172,19 +171,19 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The React component code to review"
+                            "description": "The React component code to review",
                         },
                         "component_name": {
                             "type": "string",
-                            "description": "Name of the component"
+                            "description": "Name of the component",
                         },
                         "is_native": {
                             "type": "boolean",
-                            "description": "Whether this is a React Native component"
-                        }
+                            "description": "Whether this is a React Native component",
+                        },
                     },
-                    "required": ["code", "component_name"]
-                }
+                    "required": ["code", "component_name"],
+                },
             },
             {
                 "name": "review_drizzle_schema",
@@ -194,16 +193,16 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "schema_code": {
                             "type": "string",
-                            "description": "The Drizzle schema definition code"
+                            "description": "The Drizzle schema definition code",
                         },
                         "database": {
                             "type": "string",
                             "enum": ["postgresql", "sqlite"],
-                            "description": "Target database"
-                        }
+                            "description": "Target database",
+                        },
                     },
-                    "required": ["schema_code"]
-                }
+                    "required": ["schema_code"],
+                },
             },
             {
                 "name": "review_zod_validation",
@@ -213,15 +212,15 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "schema_code": {
                             "type": "string",
-                            "description": "The Zod schema code to review"
+                            "description": "The Zod schema code to review",
                         },
                         "endpoint": {
                             "type": "string",
-                            "description": "The API endpoint this schema validates"
-                        }
+                            "description": "The API endpoint this schema validates",
+                        },
                     },
-                    "required": ["schema_code"]
-                }
+                    "required": ["schema_code"],
+                },
             },
             {
                 "name": "review_expo_integration",
@@ -231,16 +230,25 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The Expo integration code to review"
+                            "description": "The Expo integration code to review",
                         },
                         "integration_type": {
                             "type": "string",
-                            "enum": ["push_notifications", "apple_sign_in", "face_id", "revenuecat", "healthkit", "location", "camera", "deep_linking"],
-                            "description": "Type of Expo integration"
-                        }
+                            "enum": [
+                                "push_notifications",
+                                "apple_sign_in",
+                                "face_id",
+                                "revenuecat",
+                                "healthkit",
+                                "location",
+                                "camera",
+                                "deep_linking",
+                            ],
+                            "description": "Type of Expo integration",
+                        },
                     },
-                    "required": ["code", "integration_type"]
-                }
+                    "required": ["code", "integration_type"],
+                },
             },
             {
                 "name": "review_stripe_webhook",
@@ -250,16 +258,16 @@ Always provide the fix with code, not just a description of what's wrong.
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The Stripe webhook handler code"
+                            "description": "The Stripe webhook handler code",
                         },
                         "event_type": {
                             "type": "string",
-                            "description": "The Stripe event type (e.g., 'checkout.session.completed')"
-                        }
+                            "description": "The Stripe event type (e.g., 'checkout.session.completed')",
+                        },
                     },
-                    "required": ["code", "event_type"]
-                }
-            }
+                    "required": ["code", "event_type"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -272,34 +280,88 @@ Always provide the fix with code, not just a description of what's wrong.
             "review_stripe_webhook": self._review_stripe_webhook,
         }
 
-    def _review_express_route(self, code: str, route_path: str, auth_required: bool = False) -> Dict[str, Any]:
+    def _review_express_route(
+        self, code: str, route_path: str, auth_required: bool = False
+    ) -> Dict[str, Any]:
         """Review Express route handler."""
         findings = []
         code_lower = code.lower()
 
-        if auth_required and ("auth" not in code_lower and "jwt" not in code_lower and "middleware" not in code_lower):
-            findings.append({"severity": "CRITICAL", "issue": f"Route {route_path} requires auth but has no auth middleware", "fix": "Add auth middleware: router.post('/path', authenticate, handler)"})
-        if "try" not in code_lower and "catch" not in code_lower and "await" in code_lower and not re.search(r"asyncHandler|express-async-errors|next\s*\(", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Async handler without try/catch — unhandled promise rejection will crash the server", "fix": "Wrap in try/catch or use asyncHandler wrapper"})
-        if "zod" not in code_lower and "validate" not in code_lower and ("body" in code_lower or "params" in code_lower or "query" in code_lower):
-            findings.append({"severity": "HIGH", "issue": "No input validation — client can send any data structure", "fix": "Add Zod validation: const schema = z.object({...}); const validated = schema.parse(req.body);"})
+        if auth_required and (
+            "auth" not in code_lower
+            and "jwt" not in code_lower
+            and "middleware" not in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": f"Route {route_path} requires auth but has no auth middleware",
+                    "fix": "Add auth middleware: router.post('/path', authenticate, handler)",
+                }
+            )
+        if (
+            "try" not in code_lower
+            and "catch" not in code_lower
+            and "await" in code_lower
+            and not re.search(
+                r"asyncHandler|express-async-errors|next\s*\(", code, re.IGNORECASE
+            )
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Async handler without try/catch — unhandled promise rejection will crash the server",
+                    "fix": "Wrap in try/catch or use asyncHandler wrapper",
+                }
+            )
+        if (
+            "zod" not in code_lower
+            and "validate" not in code_lower
+            and (
+                "body" in code_lower or "params" in code_lower or "query" in code_lower
+            )
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "No input validation — client can send any data structure",
+                    "fix": "Add Zod validation: const schema = z.object({...}); const validated = schema.parse(req.body);",
+                }
+            )
         unbounded = False
         for match in re.finditer(r"\.findmany\s*\(", code_lower):
-            query_context = code_lower[match.start():match.start() + 800].split(";", 1)[0]
+            query_context = code_lower[match.start() : match.start() + 800].split(
+                ";", 1
+            )[0]
             if not re.search(r"\b(?:take|limit)\s*[:(]", query_context):
                 unbounded = True
                 break
         for match in re.finditer(r"select\s+\*", code_lower):
-            query_context = code_lower[match.start():match.start() + 800].split(";", 1)[0]
+            query_context = code_lower[match.start() : match.start() + 800].split(
+                ";", 1
+            )[0]
             if not re.search(r"\blimit\b", query_context):
                 unbounded = True
                 break
         if unbounded:
-            findings.append({"severity": "MEDIUM", "issue": "Unbounded query — this specific select/findMany call has no take/LIMIT", "fix": "Add capped pagination to the query itself (take/limit plus cursor or offset)"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Unbounded query — this specific select/findMany call has no take/LIMIT",
+                    "fix": "Add capped pagination to the query itself (take/limit plus cursor or offset)",
+                }
+            )
 
-        return {"route": route_path, "auth_required": auth_required, "findings": findings, "total_issues": len(findings)}
+        return {
+            "route": route_path,
+            "auth_required": auth_required,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
-    def _review_react_component(self, code: str, component_name: str, is_native: bool = False) -> Dict[str, Any]:
+    def _review_react_component(
+        self, code: str, component_name: str, is_native: bool = False
+    ) -> Dict[str, Any]:
         """Review React/React Native component."""
         findings = []
         code_lower = code.lower()
@@ -307,37 +369,90 @@ Always provide the fix with code, not just a description of what's wrong.
 
         code_without_comments = re.sub(r"/\*.*?\*/|//[^\n]*", "", code, flags=re.DOTALL)
         if re.search(r"(?<![\w]):\s*any\b|\bas\s+any\b", code_without_comments):
-            findings.append({"severity": "LOW", "issue": "TypeScript 'any' type used — loses type safety", "fix": "Replace with proper type definitions"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "TypeScript 'any' type used — loses type safety",
+                    "fix": "Replace with proper type definitions",
+                }
+            )
         for effect in effect_calls:
             effect_lower = effect.lower()
-            if "fetch(" in effect_lower or "apifetch(" in effect_lower or "axios" in effect_lower:
-                aborts_in_cleanup = bool(re.search(
-                    r"return\s*(?:\(\s*)?(?:\(\s*\)\s*=>|function\b)[\s\S]*?\.abort\s*\(",
-                    effect,
-                    re.IGNORECASE,
-                ))
-                passes_abort_signal = "abortcontroller" in effect_lower and re.search(r"\bsignal\b", effect_lower)
+            if (
+                "fetch(" in effect_lower
+                or "apifetch(" in effect_lower
+                or "axios" in effect_lower
+            ):
+                aborts_in_cleanup = bool(
+                    re.search(
+                        r"return\s*(?:\(\s*)?(?:\(\s*\)\s*=>|function\b)[\s\S]*?\.abort\s*\(",
+                        effect,
+                        re.IGNORECASE,
+                    )
+                )
+                passes_abort_signal = "abortcontroller" in effect_lower and re.search(
+                    r"\bsignal\b", effect_lower
+                )
                 if not (aborts_in_cleanup and passes_abort_signal):
-                    findings.append({"severity": "MEDIUM", "issue": "Network request in useEffect without abort-aware cleanup — state can update after unmount or route change", "fix": "Create an AbortController inside the effect, pass signal to fetch/apiFetch, and abort it in the cleanup return"})
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "issue": "Network request in useEffect without abort-aware cleanup — state can update after unmount or route change",
+                            "fix": "Create an AbortController inside the effect, pass signal to fetch/apiFetch, and abort it in the cleanup return",
+                        }
+                    )
                     break
         for effect in effect_calls:
             effect_lower = effect.lower()
             has_timer = "setinterval(" in effect_lower or "settimeout(" in effect_lower
-            clears_timer = "clearinterval(" in effect_lower or "cleartimeout(" in effect_lower
+            clears_timer = (
+                "clearinterval(" in effect_lower or "cleartimeout(" in effect_lower
+            )
             if has_timer and not clears_timer:
-                findings.append({"severity": "MEDIUM", "issue": "Timer started in useEffect without cleanup — interval/timeout can keep running after unmount", "fix": "Return a cleanup function that calls clearInterval()/clearTimeout()"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "Timer started in useEffect without cleanup — interval/timeout can keep running after unmount",
+                        "fix": "Return a cleanup function that calls clearInterval()/clearTimeout()",
+                    }
+                )
                 break
         if re.search(r"\bconsole\.log\s*\(", code_without_comments, re.IGNORECASE):
-            findings.append({"severity": "LOW", "issue": "console.log in production code", "fix": "Remove or replace with proper logger"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "console.log in production code",
+                    "fix": "Remove or replace with proper logger",
+                }
+            )
         if is_native and "onpress" not in code_lower and "onclick" in code_lower:
-            findings.append({"severity": "HIGH", "issue": "Using onClick in React Native — use onPress instead", "fix": "Replace onClick with onPress for React Native components"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Using onClick in React Native — use onPress instead",
+                    "fix": "Replace onClick with onPress for React Native components",
+                }
+            )
         state_count = len(re.findall(r"\buseState\s*\(", code))
         if state_count >= 12:
-            findings.append({"severity": "LOW", "issue": f"Component has {state_count} useState calls — consider whether related state belongs in useReducer or a focused custom hook", "fix": "Group only genuinely related transitions; avoid moving local UI state to a global store without a consumer need"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": f"Component has {state_count} useState calls — consider whether related state belongs in useReducer or a focused custom hook",
+                    "fix": "Group only genuinely related transitions; avoid moving local UI state to a global store without a consumer need",
+                }
+            )
 
-        return {"component": component_name, "is_native": is_native, "findings": findings, "total_issues": len(findings)}
+        return {
+            "component": component_name,
+            "is_native": is_native,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
-    def _review_drizzle_schema(self, schema_code: str, database: str = "postgresql") -> Dict[str, Any]:
+    def _review_drizzle_schema(
+        self, schema_code: str, database: str = "postgresql"
+    ) -> Dict[str, Any]:
         """Review Drizzle schema."""
         findings = []
         code_lower = schema_code.lower()
@@ -350,73 +465,222 @@ Always provide the fix with code, not just a description of what's wrong.
         if not re.search(r"(?:pg|sqlite)table\s*\(", code_lower):
             return {"database": database, "findings": [], "total_issues": 0}
 
-        if "index" not in code_lower and ("where" in code_lower or "find" in code_lower):
-            findings.append({"severity": "MEDIUM", "issue": "No indexes defined — queries on filtered columns will be slow", "fix": "Add .index() on frequently queried columns"})
-        if "timestamp" not in code_lower and ("created" in code_lower or "updated" in code_lower):
-            findings.append({"severity": "LOW", "issue": "No timestamp columns — consider adding createdAt/updatedAt", "fix": "Add createdAt: timestamp('created_at').defaultNow()"})
+        if "index" not in code_lower and (
+            "where" in code_lower or "find" in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No indexes defined — queries on filtered columns will be slow",
+                    "fix": "Add .index() on frequently queried columns",
+                }
+            )
+        if "timestamp" not in code_lower and (
+            "created" in code_lower or "updated" in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "No timestamp columns — consider adding createdAt/updatedAt",
+                    "fix": "Add createdAt: timestamp('created_at').defaultNow()",
+                }
+            )
         if database == "sqlite" and "json" in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "SQLite has limited JSON support — consider normalizing or using PostgreSQL", "fix": "Use text() with JSON.stringify/parse or migrate to PostgreSQL"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "SQLite has limited JSON support — consider normalizing or using PostgreSQL",
+                    "fix": "Use text() with JSON.stringify/parse or migrate to PostgreSQL",
+                }
+            )
         if "primarykey" not in code_lower.replace(" ", ""):
-            findings.append({"severity": "HIGH", "issue": "No primary key defined", "fix": "Add id: serial('id').primaryKey() or uuid('id').primaryKey().defaultRandom()"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "No primary key defined",
+                    "fix": "Add id: serial('id').primaryKey() or uuid('id').primaryKey().defaultRandom()",
+                }
+            )
 
-        return {"database": database, "findings": findings, "total_issues": len(findings)}
+        return {
+            "database": database,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
-    def _review_zod_validation(self, schema_code: str, endpoint: str = "") -> Dict[str, Any]:
+    def _review_zod_validation(
+        self, schema_code: str, endpoint: str = ""
+    ) -> Dict[str, Any]:
         """Review Zod validation schema."""
         findings = []
         code_lower = schema_code.lower()
 
-        if ".min(" not in code_lower and ("string" in code_lower or "email" in code_lower):
-            findings.append({"severity": "MEDIUM", "issue": "String fields without .min() — no length validation", "fix": "Add .min(1) for required strings, .min(8) for passwords"})
+        if ".min(" not in code_lower and (
+            "string" in code_lower or "email" in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "String fields without .min() — no length validation",
+                    "fix": "Add .min(1) for required strings, .min(8) for passwords",
+                }
+            )
         if ".max(" not in code_lower and "string" in code_lower:
-            findings.append({"severity": "LOW", "issue": "No .max() on string fields — allows arbitrarily long input", "fix": "Add .max(255) or appropriate length limits"})
-        if "email" in code_lower and "z.email" not in code_lower and ".email()" not in code_lower:
-            findings.append({"severity": "HIGH", "issue": "Email field not validated with z.string().email()", "fix": "Use z.string().email() for email validation"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "No .max() on string fields — allows arbitrarily long input",
+                    "fix": "Add .max(255) or appropriate length limits",
+                }
+            )
+        if (
+            "email" in code_lower
+            and "z.email" not in code_lower
+            and ".email()" not in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Email field not validated with z.string().email()",
+                    "fix": "Use z.string().email() for email validation",
+                }
+            )
         if ".transform" in code_lower and ".pipe" not in code_lower:
-            findings.append({"severity": "INFO", "issue": "Transform used — ensure it doesn't mask validation errors", "fix": "Consider using .pipe() for transform chains"})
+            findings.append(
+                {
+                    "severity": "INFO",
+                    "issue": "Transform used — ensure it doesn't mask validation errors",
+                    "fix": "Consider using .pipe() for transform chains",
+                }
+            )
 
-        return {"endpoint": endpoint, "findings": findings, "total_issues": len(findings)}
+        return {
+            "endpoint": endpoint,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
-    def _review_expo_integration(self, code: str, integration_type: str = "push_notifications") -> Dict[str, Any]:
+    def _review_expo_integration(
+        self, code: str, integration_type: str = "push_notifications"
+    ) -> Dict[str, Any]:
         """Review Expo integration code."""
         findings = []
         code_lower = code.lower()
 
         if integration_type == "push_notifications":
-            if "getpermissionsasync" not in code_lower and "requestpermissionsasync" not in code_lower:
-                findings.append({"severity": "HIGH", "issue": "No permission request before push notification registration", "fix": "Call Notifications.requestPermissionsAsync() before getExpoPushTokenAsync()"})
+            if (
+                "getpermissionsasync" not in code_lower
+                and "requestpermissionsasync" not in code_lower
+            ):
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No permission request before push notification registration",
+                        "fix": "Call Notifications.requestPermissionsAsync() before getExpoPushTokenAsync()",
+                    }
+                )
             if "foreground" not in code_lower:
-                findings.append({"severity": "LOW", "issue": "No foreground notification handler is visible in this integration file — verify one is registered at app startup if foreground banners are expected", "fix": "Register Notifications.setNotificationHandler() once in the app bootstrap/root layout"})
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": "No foreground notification handler is visible in this integration file — verify one is registered at app startup if foreground banners are expected",
+                        "fix": "Register Notifications.setNotificationHandler() once in the app bootstrap/root layout",
+                    }
+                )
 
         elif integration_type == "apple_sign_in":
             if "nonce" not in code_lower:
-                findings.append({"severity": "HIGH", "issue": "No nonce in Apple Sign-In — vulnerable to replay attacks", "fix": "Generate a random nonce, hash it with SHA256, pass to AppleSign In request, verify nonce server-side"})
-            if "server" not in code_lower and "verify" not in code_lower and "validate" not in code_lower:
-                findings.append({"severity": "CRITICAL", "issue": "Apple identity token not validated server-side", "fix": "Send identity token to backend, verify with Apple's public keys, extract email/sub"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No nonce in Apple Sign-In — vulnerable to replay attacks",
+                        "fix": "Generate a random nonce, hash it with SHA256, pass to AppleSign In request, verify nonce server-side",
+                    }
+                )
+            if (
+                "server" not in code_lower
+                and "verify" not in code_lower
+                and "validate" not in code_lower
+            ):
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": "Apple identity token not validated server-side",
+                        "fix": "Send identity token to backend, verify with Apple's public keys, extract email/sub",
+                    }
+                )
 
         elif integration_type == "revenuecat":
             if "customerinfo" not in code_lower and "offerings" not in code_lower:
-                findings.append({"severity": "MEDIUM", "issue": "Not checking CustomerInfo for entitlements — relying on purchase state", "fix": "Use Purchases.getCustomerInfo() and check .entitlements.active"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "Not checking CustomerInfo for entitlements — relying on purchase state",
+                        "fix": "Use Purchases.getCustomerInfo() and check .entitlements.active",
+                    }
+                )
             if "server" not in code_lower and "backend" not in code_lower:
-                findings.append({"severity": "HIGH", "issue": "No server-side receipt validation — client-trusted purchase state", "fix": "Send receipt to backend, validate via RevenueCat REST API, set entitlement server-side"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No server-side receipt validation — client-trusted purchase state",
+                        "fix": "Send receipt to backend, validate via RevenueCat REST API, set entitlement server-side",
+                    }
+                )
 
         elif integration_type == "face_id":
             if "fallback" not in code_lower:
-                findings.append({"severity": "MEDIUM", "issue": "No fallback for devices without Face ID", "fix": "Check isEnrolled && isAvailable, offer device password as fallback"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "No fallback for devices without Face ID",
+                        "fix": "Check isEnrolled && isAvailable, offer device password as fallback",
+                    }
+                )
 
         elif integration_type == "location":
             if "foreground" not in code_lower and "background" not in code_lower:
-                findings.append({"severity": "HIGH", "issue": "No foreground/background permission distinction", "fix": "Request foreground first, then background with TaskManager.defineTask()"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No foreground/background permission distinction",
+                        "fix": "Request foreground first, then background with TaskManager.defineTask()",
+                    }
+                )
             if "stopsupdating" not in code_lower and "remove" not in code_lower:
-                findings.append({"severity": "MEDIUM", "issue": "No location tracking cleanup — continues draining battery after unmount", "fix": "Call Location.stopLocationUpdatesAsync(taskName) in cleanup"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "No location tracking cleanup — continues draining battery after unmount",
+                        "fix": "Call Location.stopLocationUpdatesAsync(taskName) in cleanup",
+                    }
+                )
 
         elif integration_type == "healthkit":
             if not re.search(r"platform\.os", code, re.IGNORECASE):
-                findings.append({"severity": "HIGH", "issue": "No Platform.OS guard found — HealthKit is iOS-only and will crash or no-op unexpectedly on Android without an explicit platform check", "fix": "Guard every HealthKit call with `if (Platform.OS !== 'ios') return;` (or route to expo-health-connect/react-native-health-connect on Android)"})
-            if not re.search(r"requestauthorization|requestpermission", code, re.IGNORECASE):
-                findings.append({"severity": "HIGH", "issue": "No authorization/permission request found before HealthKit access", "fix": "Call requestAuthorization() (or the equivalent permission request) before reading/writing HealthKit data"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No Platform.OS guard found — HealthKit is iOS-only and will crash or no-op unexpectedly on Android without an explicit platform check",
+                        "fix": "Guard every HealthKit call with `if (Platform.OS !== 'ios') return;` (or route to expo-health-connect/react-native-health-connect on Android)",
+                    }
+                )
+            if not re.search(
+                r"requestauthorization|requestpermission", code, re.IGNORECASE
+            ):
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No authorization/permission request found before HealthKit access",
+                        "fix": "Call requestAuthorization() (or the equivalent permission request) before reading/writing HealthKit data",
+                    }
+                )
 
-        return {"integration_type": integration_type, "findings": findings, "total_issues": len(findings)}
+        return {
+            "integration_type": integration_type,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
     def _review_stripe_webhook(self, code: str, event_type: str = "") -> Dict[str, Any]:
         """Review Stripe webhook handler."""
@@ -424,10 +688,32 @@ Always provide the fix with code, not just a description of what's wrong.
         code_lower = code.lower()
 
         if "constructevent" not in code_lower and "verify" not in code_lower:
-            findings.append({"severity": "CRITICAL", "issue": "No webhook signature verification", "fix": "const event = stripe.webhooks.constructEvent(body, sig, WEBHOOK_SECRET)"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "No webhook signature verification",
+                    "fix": "const event = stripe.webhooks.constructEvent(body, sig, WEBHOOK_SECRET)",
+                }
+            )
         if "event.id" not in code_lower and "idempoten" not in code_lower:
-            findings.append({"severity": "HIGH", "issue": "No idempotency check — duplicate events processed twice", "fix": "Store event.id in processed_events table, check before processing"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "No idempotency check — duplicate events processed twice",
+                    "fix": "Store event.id in processed_events table, check before processing",
+                }
+            )
         if "200" not in code and "sendstatus(200)" not in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "No explicit 200 response", "fix": "Return res.status(200).send() immediately after signature verification"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No explicit 200 response",
+                    "fix": "Return res.status(200).send() immediately after signature verification",
+                }
+            )
 
-        return {"event_type": event_type, "findings": findings, "total_issues": len(findings)}
+        return {
+            "event_type": event_type,
+            "findings": findings,
+            "total_issues": len(findings),
+        }

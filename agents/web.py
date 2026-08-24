@@ -14,13 +14,11 @@ Then open http://localhost:8000 in your browser.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import queue
 import sqlite3
 import threading
-import time
 from typing import Any, Dict, Generator, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -158,6 +156,9 @@ setInterval(() => { loadSummary(); loadFindings(); }, 30000);
 # Dashboard application
 # ---------------------------------------------------------------------------
 
+_DEFAULT_DATABASE = object()
+
+
 class AgentsDashboard:
     """
     Minimal web dashboard for rushingtech-agents.
@@ -166,8 +167,8 @@ class AgentsDashboard:
     Requires Flask + flask-cors for the HTTP server path.
     """
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
-        self._db_path = db_path or _default_db_path()
+    def __init__(self, db_path: Optional[str] | object = _DEFAULT_DATABASE) -> None:
+        self._db_path = _default_db_path() if db_path is _DEFAULT_DATABASE else db_path
         self._sse_queues: List[queue.Queue] = []
         self._lock = threading.Lock()
 
@@ -264,7 +265,9 @@ class AgentsDashboard:
         try:
             from flask import Flask, Response, jsonify, request  # type: ignore
         except ImportError:
-            raise ImportError("Flask is required for the web dashboard: pip install flask")
+            raise ImportError(
+                "Flask is required for the web dashboard: pip install flask"
+            )
 
         app = Flask("agents-dashboard")
         dashboard = self
@@ -299,9 +302,12 @@ class AgentsDashboard:
 def _default_db_path() -> str:
     try:
         from agents.evolution import default_database_path
+
         return default_database_path()
     except Exception:  # noqa: BLE001
-        xdg = os.environ.get("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state"))
+        xdg = os.environ.get(
+            "XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")
+        )
         return os.path.join(xdg, "rushingtech-agents", "evolution.db")
 
 
@@ -309,18 +315,27 @@ def _default_db_path() -> str:
 # CLI entry point: python -m agents.web
 # ---------------------------------------------------------------------------
 
+
 def _main() -> None:
     import argparse
     import webbrowser
 
     parser = argparse.ArgumentParser(description="rushingtech-agents web dashboard")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    parser.add_argument(
+        "--port", type=int, default=8000, help="HTTP port (default: 8000)"
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)"
+    )
     parser.add_argument("--db", default=None, help="Path to evolution.db")
-    parser.add_argument("--no-browser", action="store_true", help="Don't open browser automatically")
+    parser.add_argument(
+        "--no-browser", action="store_true", help="Don't open browser automatically"
+    )
     args = parser.parse_args()
 
-    dashboard = AgentsDashboard(db_path=args.db)
+    dashboard = (
+        AgentsDashboard() if args.db is None else AgentsDashboard(db_path=args.db)
+    )
     flask_app = dashboard.create_flask_app()
 
     url = f"http://{args.host}:{args.port}"

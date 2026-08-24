@@ -34,43 +34,136 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 # Tool -> (theme, what this class of problem means to a business).
 # A tool absent here lands in "Code quality & robustness" with generic copy.
 THEMES: Dict[str, tuple[str, str]] = {
-    "audit_hardcoded_secrets": ("Credential exposure", "Secrets committed to source code can be read by anyone who ever gains access to the repository — including former contractors and leaked laptop backups. Rotation is urgent once exposed."),
-    "audit_env_example": ("Credential exposure", "Configuration templates and environment handling that leak or under-document credentials cause both breaches and failed deployments."),
-    "check_jwt_implementation": ("Authentication weaknesses", "Flaws in how logins and sessions are verified can let attackers impersonate users without ever stealing a password."),
-    "review_refresh_token_rotation": ("Authentication weaknesses", "Long-lived tokens that are never rotated stay valid after a device is lost or a session is stolen."),
-    "audit_shared_secret_auth": ("Authentication weaknesses", "A single shared key protecting internal endpoints means one leak opens every door at once."),
-    "review_apple_sign_in": ("Authentication weaknesses", "Social sign-in that skips server-side verification accepts forged identities."),
-    "review_oauth_flow": ("Authentication weaknesses", "OAuth mistakes let attackers link their identity to someone else's account."),
-    "review_biometric_auth": ("Authentication weaknesses", "Biometric checks done only on the client can be bypassed entirely."),
-    "audit_sql_injection": ("Injection & data exposure", "Untrusted input reaching a database query is the classic route to a full data breach."),
-    "audit_xss_patterns": ("Injection & data exposure", "Script injection lets an attacker run code in your users' browsers — stealing sessions or defacing pages."),
-    "audit_input_validation": ("Injection & data exposure", "Unvalidated input reaching shell commands or eval is remote code execution waiting for a payload."),
-    "audit_csrf_protection": ("Injection & data exposure", "Without CSRF protection, a malicious page can make logged-in users perform actions they never chose."),
-    "audit_file_upload": ("Injection & data exposure", "Unrestricted uploads let attackers store and execute their own files on your infrastructure."),
-    "audit_cors_config": ("Perimeter configuration", "An over-permissive CORS policy lets any website read your API responses on behalf of logged-in users."),
-    "analyze_helmet_config": ("Perimeter configuration", "Missing security headers leave the browser's built-in defences switched off."),
-    "audit_websocket_auth": ("Perimeter configuration", "Real-time channels that skip authentication accept messages from anyone."),
-    "audit_rate_limiting": ("Perimeter configuration", "Without rate limits, credential-stuffing and scraping run at full speed."),
-    "audit_workflow": ("Build & supply chain", "CI workflows with excess permissions or unpinned third-party steps are how attackers ship code as you."),
-    "audit_dockerfile": ("Build & supply chain", "Container images running as root or built from unpinned bases widen every later compromise."),
-    "audit_compose": ("Build & supply chain", "Development stacks that expose databases or bake in credentials tend to follow the project to production."),
-    "scan_dependencies": ("Build & supply chain", "Known-vulnerable dependencies are the single most common initial foothold."),
-    "audit_wrangler": ("Build & supply chain", "Secrets committed to platform config are plaintext in version control."),
-    "audit_android_manifest": ("Mobile app hardening", "Manifest misconfigurations expose app data to other apps on the device or send traffic unencrypted."),
-    "audit_ios_plist": ("Mobile app hardening", "Transport-security exceptions let a coffee-shop network read your users' traffic."),
-    "audit_railway_config": ("Reliability & operations", "Health checks that point nowhere make outages invisible and deployments unreliable."),
-    "audit_error_handling": ("Reliability & operations", "Raw errors returned to users leak internals and make debugging attacks easier."),
-    "audit_logging_security": ("Reliability & operations", "Logging secrets or personal data turns every log archive into a breach in waiting."),
-    "review_error_boundary_coverage": ("Reliability & operations", "A single component error should not blank the whole screen."),
-    "review_sentry_setup": ("Reliability & operations", "Without error tracking, production failures surface as one-star reviews instead of alerts."),
-    "validate_accessibility": ("Accessibility", "Accessibility gaps exclude users and, for many client industries, carry legal exposure (ADA/EAA)."),
+    "audit_hardcoded_secrets": (
+        "Credential exposure",
+        "Secrets committed to source code can be read by anyone who ever gains access to the repository — including former contractors and leaked laptop backups. Rotation is urgent once exposed.",
+    ),
+    "audit_env_example": (
+        "Credential exposure",
+        "Configuration templates and environment handling that leak or under-document credentials cause both breaches and failed deployments.",
+    ),
+    "check_jwt_implementation": (
+        "Authentication weaknesses",
+        "Flaws in how logins and sessions are verified can let attackers impersonate users without ever stealing a password.",
+    ),
+    "review_refresh_token_rotation": (
+        "Authentication weaknesses",
+        "Long-lived tokens that are never rotated stay valid after a device is lost or a session is stolen.",
+    ),
+    "audit_shared_secret_auth": (
+        "Authentication weaknesses",
+        "A single shared key protecting internal endpoints means one leak opens every door at once.",
+    ),
+    "review_apple_sign_in": (
+        "Authentication weaknesses",
+        "Social sign-in that skips server-side verification accepts forged identities.",
+    ),
+    "review_oauth_flow": (
+        "Authentication weaknesses",
+        "OAuth mistakes let attackers link their identity to someone else's account.",
+    ),
+    "review_biometric_auth": (
+        "Authentication weaknesses",
+        "Biometric checks done only on the client can be bypassed entirely.",
+    ),
+    "audit_sql_injection": (
+        "Injection & data exposure",
+        "Untrusted input reaching a database query is the classic route to a full data breach.",
+    ),
+    "audit_xss_patterns": (
+        "Injection & data exposure",
+        "Script injection lets an attacker run code in your users' browsers — stealing sessions or defacing pages.",
+    ),
+    "audit_input_validation": (
+        "Injection & data exposure",
+        "Unvalidated input reaching shell commands or eval is remote code execution waiting for a payload.",
+    ),
+    "audit_csrf_protection": (
+        "Injection & data exposure",
+        "Without CSRF protection, a malicious page can make logged-in users perform actions they never chose.",
+    ),
+    "audit_file_upload": (
+        "Injection & data exposure",
+        "Unrestricted uploads let attackers store and execute their own files on your infrastructure.",
+    ),
+    "audit_cors_config": (
+        "Perimeter configuration",
+        "An over-permissive CORS policy lets any website read your API responses on behalf of logged-in users.",
+    ),
+    "analyze_helmet_config": (
+        "Perimeter configuration",
+        "Missing security headers leave the browser's built-in defences switched off.",
+    ),
+    "audit_websocket_auth": (
+        "Perimeter configuration",
+        "Real-time channels that skip authentication accept messages from anyone.",
+    ),
+    "audit_rate_limiting": (
+        "Perimeter configuration",
+        "Without rate limits, credential-stuffing and scraping run at full speed.",
+    ),
+    "audit_workflow": (
+        "Build & supply chain",
+        "CI workflows with excess permissions or unpinned third-party steps are how attackers ship code as you.",
+    ),
+    "audit_dockerfile": (
+        "Build & supply chain",
+        "Container images running as root or built from unpinned bases widen every later compromise.",
+    ),
+    "audit_compose": (
+        "Build & supply chain",
+        "Development stacks that expose databases or bake in credentials tend to follow the project to production.",
+    ),
+    "scan_dependencies": (
+        "Build & supply chain",
+        "Known-vulnerable dependencies are the single most common initial foothold.",
+    ),
+    "audit_wrangler": (
+        "Build & supply chain",
+        "Secrets committed to platform config are plaintext in version control.",
+    ),
+    "audit_android_manifest": (
+        "Mobile app hardening",
+        "Manifest misconfigurations expose app data to other apps on the device or send traffic unencrypted.",
+    ),
+    "audit_ios_plist": (
+        "Mobile app hardening",
+        "Transport-security exceptions let a coffee-shop network read your users' traffic.",
+    ),
+    "audit_railway_config": (
+        "Reliability & operations",
+        "Health checks that point nowhere make outages invisible and deployments unreliable.",
+    ),
+    "audit_error_handling": (
+        "Reliability & operations",
+        "Raw errors returned to users leak internals and make debugging attacks easier.",
+    ),
+    "audit_logging_security": (
+        "Reliability & operations",
+        "Logging secrets or personal data turns every log archive into a breach in waiting.",
+    ),
+    "review_error_boundary_coverage": (
+        "Reliability & operations",
+        "A single component error should not blank the whole screen.",
+    ),
+    "review_sentry_setup": (
+        "Reliability & operations",
+        "Without error tracking, production failures surface as one-star reviews instead of alerts.",
+    ),
+    "validate_accessibility": (
+        "Accessibility",
+        "Accessibility gaps exclude users and, for many client industries, carry legal exposure (ADA/EAA).",
+    ),
 }
-DEFAULT_THEME = ("Code quality & robustness", "Issues that make the codebase harder to change safely and more likely to break under real-world input.")
+DEFAULT_THEME = (
+    "Code quality & robustness",
+    "Issues that make the codebase harder to change safely and more likely to break under real-world input.",
+)
 
 SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 SEVERITY_MEANING = {
@@ -95,7 +188,10 @@ def summarize(report: Dict[str, Any]) -> Dict[str, Any]:
             continue
         files_with_findings.add(entry.get("file", "?"))
         theme, meaning = THEMES.get(tool, DEFAULT_THEME)
-        bucket = themes.setdefault(theme, {"meaning": meaning, "count": 0, "severities": Counter(), "files": set()})
+        bucket = themes.setdefault(
+            theme,
+            {"meaning": meaning, "count": 0, "severities": Counter(), "files": set()},
+        )
         for f in findings:
             sev = f.get("severity", "INFO")
             bucket["count"] += 1
@@ -113,7 +209,9 @@ def summarize(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def render_html(summary: Dict[str, Any], *, company: str, prepared_by: str = "Rushing Technologies") -> str:
+def render_html(
+    summary: Dict[str, Any], *, company: str, prepared_by: str = "Rushing Technologies"
+) -> str:
     e = html.escape
     sev = summary["severities"]
     now = datetime.now(timezone.utc)
@@ -121,7 +219,8 @@ def render_html(summary: Dict[str, Any], *, company: str, prepared_by: str = "Ru
     sev_row = "".join(
         f'<div class="sev"><span class="n">{sev.get(s, 0)}</span><span class="l">{s.title()}</span>'
         f'<span class="m">{e(SEVERITY_MEANING[s])}</span></div>'
-        for s in SEVERITY_ORDER if sev.get(s)
+        for s in SEVERITY_ORDER
+        if sev.get(s)
     )
 
     theme_blocks = []
@@ -133,7 +232,9 @@ def render_html(summary: Dict[str, Any], *, company: str, prepared_by: str = "Ru
     )
     for theme, data in ordered:
         counts = ", ".join(
-            f"{data['severities'][s]} {s.lower()}" for s in SEVERITY_ORDER if data["severities"].get(s)
+            f"{data['severities'][s]} {s.lower()}"
+            for s in SEVERITY_ORDER
+            if data["severities"].get(s)
         )
         places = len(data["files"])
         theme_blocks.append(
@@ -142,10 +243,16 @@ def render_html(summary: Dict[str, Any], *, company: str, prepared_by: str = "Ru
             f"<p>{e(data['meaning'])}</p></section>"
         )
     if not theme_blocks:
-        theme_blocks.append("<section><h2>No findings</h2><p>The automated pass found nothing to flag. That speaks well of the codebase — though automated coverage is a floor, not a ceiling.</p></section>")
+        theme_blocks.append(
+            "<section><h2>No findings</h2><p>The automated pass found nothing to flag. That speaks well of the codebase — though automated coverage is a floor, not a ceiling.</p></section>"
+        )
 
     scanned = summary.get("files_scanned")
-    scope = f"{scanned} files analysed, findings in {summary['files_with_findings']}." if scanned else f"Findings in {summary['files_with_findings']} file(s)."
+    scope = (
+        f"{scanned} files analysed, findings in {summary['files_with_findings']}."
+        if scanned
+        else f"Findings in {summary['files_with_findings']} file(s)."
+    )
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -178,8 +285,12 @@ def render_html(summary: Dict[str, Any], *, company: str, prepared_by: str = "Ru
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Render a scan JSON as a prospect-facing HTML snapshot.")
-    parser.add_argument("report", help="Path to the JSON written by `agents scan --out`")
+    parser = argparse.ArgumentParser(
+        description="Render a scan JSON as a prospect-facing HTML snapshot."
+    )
+    parser.add_argument(
+        "report", help="Path to the JSON written by `agents scan --out`"
+    )
     parser.add_argument("--company", required=True, help="Name to put on the document")
     parser.add_argument("--out", help="Output HTML path (default: <report>.html)")
     args = parser.parse_args()

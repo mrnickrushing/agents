@@ -16,7 +16,7 @@ Usage:
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
@@ -62,8 +62,14 @@ When reviewing, cite the exact config field that's missing or risky and give the
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The Sentry initialization code"},
-                        "handles_sensitive_data": {"type": "boolean", "description": "Whether this app handles health/financial/security-sensitive data"},
+                        "code": {
+                            "type": "string",
+                            "description": "The Sentry initialization code",
+                        },
+                        "handles_sensitive_data": {
+                            "type": "boolean",
+                            "description": "Whether this app handles health/financial/security-sensitive data",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -74,7 +80,10 @@ When reviewing, cite the exact config field that's missing or risky and give the
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The health-check route handler code"},
+                        "code": {
+                            "type": "string",
+                            "description": "The health-check route handler code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -85,7 +94,10 @@ When reviewing, cite the exact config field that's missing or risky and give the
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The root layout/App component code"},
+                        "code": {
+                            "type": "string",
+                            "description": "The root layout/App component code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -96,9 +108,15 @@ When reviewing, cite the exact config field that's missing or risky and give the
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "service_type": {"type": "string", "enum": ["web_api", "mobile_backend", "saas_platform"]},
+                        "service_type": {
+                            "type": "string",
+                            "enum": ["web_api", "mobile_backend", "saas_platform"],
+                        },
                         "has_stripe": {"type": "boolean"},
-                        "has_ai": {"type": "boolean", "description": "Whether the service makes LLM/AI API calls"},
+                        "has_ai": {
+                            "type": "boolean",
+                            "description": "Whether the service makes LLM/AI API calls",
+                        },
                     },
                     "required": ["service_type"],
                 },
@@ -113,36 +131,78 @@ When reviewing, cite the exact config field that's missing or risky and give the
             "generate_alert_rules": self._generate_alert_rules,
         }
 
-    def _review_sentry_setup(self, code: str, handles_sensitive_data: bool = True) -> Dict[str, Any]:
+    def _review_sentry_setup(
+        self, code: str, handles_sensitive_data: bool = True
+    ) -> Dict[str, Any]:
         """Review Sentry initialization config."""
         findings = []
 
         if not re.search(r"sentry_sdk\.init\(|Sentry\.init\(", code):
-            return {"findings": [], "total_issues": 0, "note": "No Sentry.init() call found in this snippet"}
+            return {
+                "findings": [],
+                "total_issues": 0,
+                "note": "No Sentry.init() call found in this snippet",
+            }
 
         if not re.search(r"\bdsn\s*[:=]|SENTRY_DSN|sentry_dsn", code, re.IGNORECASE):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Sentry initialization has no visible DSN source — event delivery may be disabled",
-                "fix": "Pass dsn from SENTRY_DSN/settings explicitly, or document and verify the SDK's environment-based configuration in this runtime",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Sentry initialization has no visible DSN source — event delivery may be disabled",
+                    "fix": "Pass dsn from SENTRY_DSN/settings explicitly, or document and verify the SDK's environment-based configuration in this runtime",
+                }
+            )
 
         if re.search(r"dsn\s*[:=]\s*[\"']https://[a-f0-9]+@", code, re.IGNORECASE):
-            findings.append({"severity": "LOW", "issue": "DSN appears hardcoded as a literal string rather than loaded from env/settings — not secret, but makes per-environment routing (dev vs prod projects) harder to manage", "fix": "Load the DSN from an environment variable / settings object instead of a literal string"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "DSN appears hardcoded as a literal string rather than loaded from env/settings — not secret, but makes per-environment routing (dev vs prod projects) harder to manage",
+                    "fix": "Load the DSN from an environment variable / settings object instead of a literal string",
+                }
+            )
 
         if not re.search(r"environment\s*[:=]", code):
-            findings.append({"severity": "LOW", "issue": "No environment tag set — events from dev/staging/production will be mixed together in Sentry", "fix": "Set environment: process.env.NODE_ENV (Node) or environment=settings.ENVIRONMENT (Python)"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "No environment tag set — events from dev/staging/production will be mixed together in Sentry",
+                    "fix": "Set environment: process.env.NODE_ENV (Node) or environment=settings.ENVIRONMENT (Python)",
+                }
+            )
 
         if not re.search(r"traces?_?sample_?rate\s*[:=]", code, re.IGNORECASE):
-            findings.append({"severity": "MEDIUM", "issue": "No tracesSampleRate set — performance tracing is likely off entirely (or defaulting in a way that's not explicit)", "fix": "Set tracesSampleRate explicitly (e.g. 0.1 for production, 1.0 is fine for low-traffic apps)"})
-        elif re.search(r"traces?_?sample_?rate\s*[:=]\s*1(\.0)?\b", code, re.IGNORECASE):
-            findings.append({"severity": "INFO", "issue": "tracesSampleRate is 1.0 (sampling every transaction) — fine for low traffic, but will get expensive/noisy as traffic grows", "fix": "Consider lowering to 0.1-0.2 once traffic increases"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No tracesSampleRate set — performance tracing is likely off entirely (or defaulting in a way that's not explicit)",
+                    "fix": "Set tracesSampleRate explicitly (e.g. 0.1 for production, 1.0 is fine for low-traffic apps)",
+                }
+            )
+        elif re.search(
+            r"traces?_?sample_?rate\s*[:=]\s*1(\.0)?\b", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "INFO",
+                    "issue": "tracesSampleRate is 1.0 (sampling every transaction) — fine for low traffic, but will get expensive/noisy as traffic grows",
+                    "fix": "Consider lowering to 0.1-0.2 once traffic increases",
+                }
+            )
 
         if handles_sensitive_data:
-            pii_off = re.search(r"send_?default_?pii\s*[:=]\s*false", code, re.IGNORECASE)
+            pii_off = re.search(
+                r"send_?default_?pii\s*[:=]\s*false", code, re.IGNORECASE
+            )
             has_before_send = bool(re.search(r"before_?send", code, re.IGNORECASE))
             if not pii_off and not has_before_send:
-                findings.append({"severity": "HIGH", "issue": "This app handles sensitive data but Sentry has no explicit sendDefaultPii=false or beforeSend scrubbing — request bodies/user data could end up in Sentry events", "fix": "Set sendDefaultPii: false, and/or add a beforeSend hook to strip sensitive fields before events are sent"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "This app handles sensitive data but Sentry has no explicit sendDefaultPii=false or beforeSend scrubbing — request bodies/user data could end up in Sentry events",
+                        "fix": "Set sendDefaultPii: false, and/or add a beforeSend hook to strip sensitive fields before events are sent",
+                    }
+                )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -151,16 +211,42 @@ When reviewing, cite the exact config field that's missing or risky and give the
         findings = []
 
         if not re.search(r"/health|/healthz|/ping|/status", code):
-            return {"findings": [], "total_issues": 0, "note": "No health-check route found in this snippet"}
+            return {
+                "findings": [],
+                "total_issues": 0,
+                "note": "No health-check route found in this snippet",
+            }
 
-        checks_db = bool(re.search(r"\bdb\.(query|execute|ping|select)|pool\.query|session\.execute|prisma\.\$queryRaw|SELECT 1|readyState|isInitialized", code, re.IGNORECASE))
-        checks_redis = bool(re.search(r"redis\.ping|redis\.get|redisClient\.", code, re.IGNORECASE))
-        uses_redis_elsewhere = bool(re.search(r"createClient\(|redis://|REDIS_URL", code, re.IGNORECASE))
+        checks_db = bool(
+            re.search(
+                r"\bdb\.(query|execute|ping|select)|pool\.query|session\.execute|prisma\.\$queryRaw|SELECT 1|readyState|isInitialized",
+                code,
+                re.IGNORECASE,
+            )
+        )
+        checks_redis = bool(
+            re.search(r"redis\.ping|redis\.get|redisClient\.", code, re.IGNORECASE)
+        )
+        uses_redis_elsewhere = bool(
+            re.search(r"createClient\(|redis://|REDIS_URL", code, re.IGNORECASE)
+        )
 
         if not checks_db:
-            findings.append({"severity": "MEDIUM", "issue": "Health check doesn't appear to verify the database connection — it can return 200 while the DB is unreachable", "fix": "Run a trivial query (SELECT 1) against the DB in the health check and return 503 if it fails/times out"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Health check doesn't appear to verify the database connection — it can return 200 while the DB is unreachable",
+                    "fix": "Run a trivial query (SELECT 1) against the DB in the health check and return 503 if it fails/times out",
+                }
+            )
         if uses_redis_elsewhere and not checks_redis:
-            findings.append({"severity": "LOW", "issue": "Redis is used elsewhere in this service but the health check doesn't verify it", "fix": "Add a redis.ping() check if Redis is required for the service to function"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "Redis is used elsewhere in this service but the health check doesn't verify it",
+                    "fix": "Add a redis.ping() check if Redis is required for the service to function",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -168,24 +254,73 @@ When reviewing, cite the exact config field that's missing or risky and give the
         """Review error boundary coverage in a React root layout."""
         findings = []
 
-        if not re.search(r"ErrorBoundary|componentDidCatch|error\.tsx|error\.jsx", code):
-            findings.append({"severity": "MEDIUM", "issue": "No ErrorBoundary found — an uncaught render error will blank the whole screen instead of showing a fallback UI", "fix": "Wrap the app (or key sections) in an ErrorBoundary (Sentry.ErrorBoundary if using Sentry, or a custom one) with a fallback UI"})
+        if not re.search(
+            r"ErrorBoundary|componentDidCatch|error\.tsx|error\.jsx", code
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No ErrorBoundary found — an uncaught render error will blank the whole screen instead of showing a fallback UI",
+                    "fix": "Wrap the app (or key sections) in an ErrorBoundary (Sentry.ErrorBoundary if using Sentry, or a custom one) with a fallback UI",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
-    def _generate_alert_rules(self, service_type: str = "web_api", has_stripe: bool = False, has_ai: bool = False) -> Dict[str, Any]:
+    def _generate_alert_rules(
+        self,
+        service_type: str = "web_api",
+        has_stripe: bool = False,
+        has_ai: bool = False,
+    ) -> Dict[str, Any]:
         """Generate suggested alert rules."""
         rules = [
-            {"name": "Error rate spike", "condition": "Error rate > 5% of requests over 5 minutes", "severity": "HIGH"},
-            {"name": "p95 latency", "condition": "p95 response time > 2s over 5 minutes on any critical route", "severity": "MEDIUM"},
-            {"name": "Health check failing", "condition": "Health check endpoint returns non-200 for > 2 consecutive checks", "severity": "CRITICAL"},
+            {
+                "name": "Error rate spike",
+                "condition": "Error rate > 5% of requests over 5 minutes",
+                "severity": "HIGH",
+            },
+            {
+                "name": "p95 latency",
+                "condition": "p95 response time > 2s over 5 minutes on any critical route",
+                "severity": "MEDIUM",
+            },
+            {
+                "name": "Health check failing",
+                "condition": "Health check endpoint returns non-200 for > 2 consecutive checks",
+                "severity": "CRITICAL",
+            },
         ]
         if has_stripe:
-            rules.append({"name": "Payment failure rate", "condition": "Stripe webhook processing failures > 3 in 10 minutes (payment outages often don't surface as generic 500 errors)", "severity": "CRITICAL"})
+            rules.append(
+                {
+                    "name": "Payment failure rate",
+                    "condition": "Stripe webhook processing failures > 3 in 10 minutes (payment outages often don't surface as generic 500 errors)",
+                    "severity": "CRITICAL",
+                }
+            )
         if has_ai:
-            rules.append({"name": "AI call failure/latency", "condition": "LLM API error rate > 10% or p95 latency > 10s (silent degradation is common with third-party AI APIs)", "severity": "HIGH"})
-            rules.append({"name": "AI spend anomaly", "condition": "Daily AI API spend exceeds 2x the trailing 7-day average", "severity": "MEDIUM"})
+            rules.append(
+                {
+                    "name": "AI call failure/latency",
+                    "condition": "LLM API error rate > 10% or p95 latency > 10s (silent degradation is common with third-party AI APIs)",
+                    "severity": "HIGH",
+                }
+            )
+            rules.append(
+                {
+                    "name": "AI spend anomaly",
+                    "condition": "Daily AI API spend exceeds 2x the trailing 7-day average",
+                    "severity": "MEDIUM",
+                }
+            )
         if service_type == "mobile_backend":
-            rules.append({"name": "Push notification delivery failure rate", "condition": "Expo push delivery failures > 10% over 1 hour", "severity": "MEDIUM"})
+            rules.append(
+                {
+                    "name": "Push notification delivery failure rate",
+                    "condition": "Expo push delivery failures > 10% over 1 hour",
+                    "severity": "MEDIUM",
+                }
+            )
 
         return {"service_type": service_type, "rules": rules, "total_rules": len(rules)}

@@ -28,7 +28,7 @@ def test_inline_local_imports_follows_alias_import_via_tsconfig(tmp_path):
     )
     caller_path = os.path.join(root, "app", "paywall.tsx")
     caller_content = (
-        "import { hasPremium, purchasePackage } from \"@/lib/revenuecat\";\n"
+        'import { hasPremium, purchasePackage } from "@/lib/revenuecat";\n'
         "async function buy(pkg) {\n"
         "  const info = await purchasePackage(pkg);\n"
         "  if (hasPremium(info)) { /* ... */ }\n"

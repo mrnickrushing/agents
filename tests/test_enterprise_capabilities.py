@@ -9,13 +9,11 @@ Tests for the 4 new enterprise capabilities:
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
+import json
+import subprocess
+import sys
 import textwrap
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 # ── 1. Durable Workflow Steps ─────────────────────────────────────────────────
 
@@ -55,8 +53,11 @@ class TestDurabilityDB:
         db = DurabilityDB(path=str(tmp_path / "dur.db"))
         for i in range(3):
             db.upsert_step(
-                step_id=f"s{i}", workflow_id="wf1", status="completed",
-                started_at=float(i), attempt=1,
+                step_id=f"s{i}",
+                workflow_id="wf1",
+                status="completed",
+                started_at=float(i),
+                attempt=1,
             )
         steps = db.list_steps("wf1")
         assert len(steps) == 3
@@ -156,9 +157,7 @@ class TestDurableWorkflow:
             r = await step_a(x)
             return await step_b(r)
 
-        result = asyncio.run(
-            my_workflow(5, workflow_id="test_wf_1", _db=db)
-        )
+        result = asyncio.run(my_workflow(5, workflow_id="test_wf_1", _db=db))
         assert result == 20  # (5*2)+10
 
     def test_checkpoint_resume_skips_completed_step(self, tmp_path):
@@ -206,15 +205,15 @@ class TestDurableWorkflow:
         async def retry_wf(x):
             return await flaky(x)
 
-        result = asyncio.run(
-            retry_wf(4, workflow_id="retry_1", _db=db)
-        )
+        result = asyncio.run(retry_wf(4, workflow_id="retry_1", _db=db))
         assert result == 5
         assert attempt_count["n"] == 3  # failed twice, succeeded on third
 
     def test_reset_workflow(self, tmp_path):
         db = DurabilityDB(path=str(tmp_path / "dur.db"))
-        db.upsert_step(step_id="s1", workflow_id="to_reset", status="completed", attempt=1)
+        db.upsert_step(
+            step_id="s1", workflow_id="to_reset", status="completed", attempt=1
+        )
         reset_workflow("to_reset", db=db)
         assert list_workflow_steps("to_reset", db=db) == []
 
@@ -357,11 +356,9 @@ class TestCodebaseGraph:
 
 from agents.streaming import (
     StreamingEventBus,
-    emit,
     error_occurred_event,
     file_scanned_event,
     finding_found_event,
-    get_default_bus,
     scan_completed_event,
     scan_started_event,
     step_completed_event,
@@ -448,6 +445,7 @@ class TestStreamingEventBus:
 
             # Late subscriber with replay
             replayed = []
+
             async def late_collect():
                 async for event in bus.subscribe("s4", replay_from_db=True):
                     replayed.append(event)
@@ -485,6 +483,59 @@ class TestStreamingEventBus:
         assert any(e["type"] == "sync_event" for e in events)
         bus.close()
 
+    def test_publish_sync_delivers_to_current_subscriber(self):
+        async def run():
+            bus = StreamingEventBus()
+            received = []
+
+            async def collect():
+                async for event in bus.subscribe("sync-live"):
+                    received.append(event)
+
+            task = asyncio.create_task(collect())
+            await asyncio.sleep(0)
+            bus.publish_sync("sync-live", {"type": "sync_event"})
+            await bus.close_channel("sync-live")
+            await task
+            assert [event["type"] for event in received] == ["sync_event"]
+            bus.close()
+
+        asyncio.run(run())
+
+    def test_cli_scan_resumes_completed_checkpoint(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "app.py").write_text("print('safe')\n")
+        durable_db = tmp_path / "durable.db"
+        report = tmp_path / "report.json"
+        command = [
+            sys.executable,
+            "-m",
+            "agents.cli",
+            "scan",
+            "--path",
+            str(project),
+            "--agents",
+            "security_audit",
+            "--no-triage",
+            "--no-record",
+            "--durable-db",
+            str(durable_db),
+            "--workflow-id",
+            "resume-test",
+            "--out",
+            str(report),
+        ]
+        first = subprocess.run(command, check=True, capture_output=True, text=True)
+        assert "Full JSON report written" in first.stdout
+        assert (
+            json.loads(report.read_text())["coverage"]["durability"] == "checkpointed"
+        )
+
+        second = subprocess.run(command, check=True, capture_output=True, text=True)
+        assert "Full JSON report written" in second.stdout
+        assert json.loads(report.read_text())["coverage"]["durability"] == "resumed"
+
     def test_event_constructors(self):
         e = scan_started_event("s1", "/path", 100)
         assert e["type"] == "scan_started"
@@ -493,7 +544,9 @@ class TestStreamingEventBus:
         e = file_scanned_event("s1", "file.py", 3, 10)
         assert e["progress"]["current"] == 3
 
-        e = finding_found_event("s1", "security_audit", "HIGH", "auth.py", 42, "JWT not validated", 1, 10)
+        e = finding_found_event(
+            "s1", "security_audit", "HIGH", "auth.py", 42, "JWT not validated", 1, 10
+        )
         assert e["finding"]["severity"] == "HIGH"
 
         e = step_completed_event("s1", "scan_files", 1)
@@ -532,11 +585,21 @@ from agents.triage import TriageRAG, _finding_fingerprint, _simple_embed, _cosin
 
 class TestTriageRAGHelpers:
     def test_fingerprint_is_stable(self):
-        f = {"agent": "security_audit", "rule": "jwt", "file": "auth.py", "issue": "missing exp"}
+        f = {
+            "agent": "security_audit",
+            "rule": "jwt",
+            "file": "auth.py",
+            "issue": "missing exp",
+        }
         assert _finding_fingerprint(f) == _finding_fingerprint(f)
 
     def test_fingerprint_differs_by_field(self):
-        f1 = {"agent": "security_audit", "rule": "jwt", "file": "auth.py", "issue": "missing exp"}
+        f1 = {
+            "agent": "security_audit",
+            "rule": "jwt",
+            "file": "auth.py",
+            "issue": "missing exp",
+        }
         f2 = {**f1, "file": "other.py"}
         assert _finding_fingerprint(f1) != _finding_fingerprint(f2)
 
@@ -546,6 +609,7 @@ class TestTriageRAGHelpers:
 
     def test_simple_embed_normalised(self):
         import math
+
         v = _simple_embed("hello world")
         norm = math.sqrt(sum(x * x for x in v))
         assert abs(norm - 1.0) < 1e-6
@@ -572,8 +636,15 @@ class TestTriageRAG:
 
     def test_record_and_retrieve(self, tmp_path):
         rag = self._make_rag(tmp_path)
-        finding = {"agent": "security_audit", "rule": "eval_call", "file": "utils.py", "issue": "eval() used"}
-        rag.record_verdict(finding, verdict="CONFIRMED", reason="Unsafe eval in production code")
+        finding = {
+            "agent": "security_audit",
+            "rule": "eval_call",
+            "file": "utils.py",
+            "issue": "eval() used",
+        }
+        rag.record_verdict(
+            finding, verdict="CONFIRMED", reason="Unsafe eval in production code"
+        )
         ctx = rag.retrieve_context(finding)
         assert ctx["total_similar"] >= 1
         assert ctx["confirmed_count"] >= 1
@@ -582,7 +653,12 @@ class TestTriageRAG:
 
     def test_confidence_calculation(self, tmp_path):
         rag = self._make_rag(tmp_path)
-        base = {"agent": "security_audit", "rule": "eval_call", "file": "a.py", "issue": "eval() call"}
+        base = {
+            "agent": "security_audit",
+            "rule": "eval_call",
+            "file": "a.py",
+            "issue": "eval() call",
+        }
         for i in range(8):
             f = {**base, "file": f"file_{i}.py"}
             rag.record_verdict(f, verdict="CONFIRMED")
@@ -598,8 +674,15 @@ class TestTriageRAG:
 
     def test_context_text_present(self, tmp_path):
         rag = self._make_rag(tmp_path)
-        finding = {"agent": "security_audit", "rule": "jwt", "file": "auth.py", "issue": "no exp"}
-        rag.record_verdict(finding, verdict="FALSE_POSITIVE", reason="handled elsewhere")
+        finding = {
+            "agent": "security_audit",
+            "rule": "jwt",
+            "file": "auth.py",
+            "issue": "no exp",
+        }
+        rag.record_verdict(
+            finding, verdict="FALSE_POSITIVE", reason="handled elsewhere"
+        )
         ctx = rag.retrieve_context(finding)
         assert isinstance(ctx["context_text"], str)
         rag.close()
@@ -642,7 +725,10 @@ class TestTriageRAG:
                             {
                                 "severity": "LOW",
                                 "issue": "eval in tests",
-                                "triage": {"verdict": "FALSE_POSITIVE", "reason": "test fixture"},
+                                "triage": {
+                                    "verdict": "FALSE_POSITIVE",
+                                    "reason": "test fixture",
+                                },
                             },
                         ]
                     },
@@ -656,10 +742,17 @@ class TestTriageRAG:
     def test_triage_with_rag_high_confidence_fast_path(self, tmp_path):
         """High-confidence RAG returns cached verdict without LLM call."""
         rag = self._make_rag(tmp_path)
-        base = {"agent": "security_audit", "rule": "eval_call", "file": "a.py", "issue": "eval() call"}
+        base = {
+            "agent": "security_audit",
+            "rule": "eval_call",
+            "file": "a.py",
+            "issue": "eval() call",
+        }
         # Seed with 5 confirmed findings
         for i in range(5):
-            rag.record_verdict({**base, "file": f"f{i}.py"}, verdict="CONFIRMED", reason="real")
+            rag.record_verdict(
+                {**base, "file": f"f{i}.py"}, verdict="CONFIRMED", reason="real"
+            )
 
         finding = {**base, "file": "new.py"}
         # Mock TriageAgent — should not be called
@@ -677,13 +770,42 @@ class TestTriageRAG:
         mock_agent.run_async.assert_not_called()
         rag.close()
 
+    def test_triage_with_rag_false_positive_fast_path(self, tmp_path):
+        rag = self._make_rag(tmp_path)
+        base = {
+            "agent": "security_audit",
+            "rule": "eval_call",
+            "file": "a.py",
+            "issue": "eval fixture",
+        }
+        for i in range(5):
+            rag.record_verdict(
+                {**base, "file": f"f{i}.py"}, verdict="FALSE_POSITIVE", reason="fixture"
+            )
+        mock_agent = MagicMock()
+        mock_agent.run_async = AsyncMock()
+        result = asyncio.run(
+            rag.triage_with_rag(mock_agent, {**base, "file": "new.py"})
+        )
+        assert result["verdict"] == "FALSE_POSITIVE"
+        assert result["source"] == "rag_cache"
+        mock_agent.run_async.assert_not_called()
+        rag.close()
+
     def test_triage_with_rag_low_confidence_calls_llm(self, tmp_path):
         """Low-confidence RAG falls through to LLM."""
         rag = self._make_rag(tmp_path)
-        finding = {"agent": "a", "rule": "r", "file": "new.py", "issue": "something new"}
+        finding = {
+            "agent": "a",
+            "rule": "r",
+            "file": "new.py",
+            "issue": "something new",
+        }
 
         mock_response = MagicMock()
-        mock_response.content = '{"verdict": "FALSE_POSITIVE", "reason": "test fixture"}'
+        mock_response.content = (
+            '{"verdict": "FALSE_POSITIVE", "reason": "test fixture"}'
+        )
 
         mock_agent = MagicMock()
         mock_agent.run_async = AsyncMock(return_value=mock_response)

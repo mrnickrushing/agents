@@ -6,16 +6,16 @@ Supports multi-turn conversations, accessibility validation, and design tokens.
 
 Usage:
     from agents import UIGenerationAgent
-    
+
     agent = UIGenerationAgent(api_key="sk-ant-...", provider="anthropic")
-    
+
     # Single turn
     result = agent.run("Create a responsive dashboard card with a sparkline chart")
     print(result.content)  # Complete React component code
-    
+
     # Multi-turn conversation
     result = agent.run("Now make the card clickable", conversation_id="dashboard-123")
-    
+
     # With wireframe reference
     result = agent.run(
         "Create this component from the wireframe",
@@ -25,16 +25,15 @@ Usage:
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable, Dict, List, Optional
 
-from agents.base import BaseAgent
+from agents.base import AgentResponse, BaseAgent
 
 
 class UIGenerationAgent(BaseAgent):
     """
     UI component generation specialist powered by Claude by default.
-     
+
     Transforms natural language descriptions into production-ready
     React/TypeScript components with Tailwind CSS styling.
 
@@ -42,7 +41,7 @@ class UIGenerationAgent(BaseAgent):
     provider="openai", pass an OpenAI model explicitly or let the agent fall
     back to gpt-5 instead of sending a Claude-only model name to OpenAI.
     """
-    
+
     name = "ui_generation"
     description = "Claude-powered UI design specialist. Establishes design systems (color theory, type scales, motion, elevation) and builds beautiful, production-ready, accessible React/TypeScript components with Tailwind CSS from natural language descriptions."
     model = "claude-sonnet-4-6"  # Default Claude model for UI
@@ -199,12 +198,16 @@ TOOL USAGE:
 You're not decorating screens — you're crafting the thing the user feels every time they open the app. Make it the kind of UI that makes people want to screenshot it.
 """
 
-    def __init__(self, provider: str = "anthropic", model: Optional[str] = None, **kwargs: Any):
+    def __init__(
+        self, provider: str = "anthropic", model: Optional[str] = None, **kwargs: Any
+    ):
         normalized_provider = provider.lower()
         resolved_model = model
         if normalized_provider == "openai":
             if resolved_model and resolved_model.startswith("claude-"):
-                raise ValueError("UIGenerationAgent cannot use a Claude model with provider='openai'. Pass an OpenAI model or omit model to use gpt-5.")
+                raise ValueError(
+                    "UIGenerationAgent cannot use a Claude model with provider='openai'. Pass an OpenAI model or omit model to use gpt-5."
+                )
             resolved_model = resolved_model or "gpt-5"
         super().__init__(provider=provider, model=resolved_model, **kwargs)
 
@@ -218,36 +221,41 @@ You're not decorating screens — you're crafting the thing the user feels every
                     "properties": {
                         "component_name": {
                             "type": "string",
-                            "description": "Name of the component (PascalCase)"
+                            "description": "Name of the component (PascalCase)",
                         },
                         "description": {
                             "type": "string",
-                            "description": "Natural language description of what the component does"
+                            "description": "Natural language description of what the component does",
                         },
                         "features": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "List of features (e.g., ['responsive', 'dark_mode', 'clickable', 'animated'])"
+                            "description": "List of features (e.g., ['responsive', 'dark_mode', 'clickable', 'animated'])",
                         },
                         "content": {
                             "type": "string",
-                            "description": "The complete TypeScript/React component code"
+                            "description": "The complete TypeScript/React component code",
                         },
                         "props_interface": {
                             "type": "string",
-                            "description": "TypeScript interface defining all props"
+                            "description": "TypeScript interface defining all props",
                         },
                         "usage_example": {
                             "type": "string",
-                            "description": "Example of how to use the component"
+                            "description": "Example of how to use the component",
                         },
                         "design_rationale": {
                             "type": "string",
-                            "description": "Brief explanation of key design decisions"
-                        }
+                            "description": "Brief explanation of key design decisions",
+                        },
                     },
-                    "required": ["component_name", "description", "content", "props_interface"]
-                }
+                    "required": [
+                        "component_name",
+                        "description",
+                        "content",
+                        "props_interface",
+                    ],
+                },
             },
             {
                 "name": "validate_accessibility",
@@ -257,12 +265,12 @@ You're not decorating screens — you're crafting the thing the user feels every
                     "properties": {
                         "component_code": {
                             "type": "string",
-                            "description": "The component TypeScript/React code to validate"
+                            "description": "The component TypeScript/React code to validate",
                         },
                         "severity": {
                             "type": "string",
                             "enum": ["critical", "serious", "moderate", "minor"],
-                            "description": "Minimum severity level to report"
+                            "description": "Minimum severity level to report",
                         },
                         "issues": {
                             "type": "array",
@@ -272,23 +280,23 @@ You're not decorating screens — you're crafting the thing the user feels every
                                     "severity": {"type": "string"},
                                     "issue": {"type": "string"},
                                     "wcag_criterion": {"type": "string"},
-                                    "fix": {"type": "string"}
-                                }
+                                    "fix": {"type": "string"},
+                                },
                             },
-                            "description": "List of accessibility issues found"
+                            "description": "List of accessibility issues found",
                         },
                         "overall_score": {
                             "type": "number",
-                            "description": "Accessibility score 0-100"
+                            "description": "Accessibility score 0-100",
                         },
                         "recommendations": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Recommendations for improvement"
-                        }
+                            "description": "Recommendations for improvement",
+                        },
                     },
-                    "required": ["component_code"]
-                }
+                    "required": ["component_code"],
+                },
             },
             {
                 "name": "apply_design_token",
@@ -298,24 +306,24 @@ You're not decorating screens — you're crafting the thing the user feels every
                     "properties": {
                         "component_code": {
                             "type": "string",
-                            "description": "Original component code"
+                            "description": "Original component code",
                         },
                         "design_tokens": {
                             "type": "object",
-                            "description": "Design token key-value pairs"
+                            "description": "Design token key-value pairs",
                         },
                         "updated_code": {
                             "type": "string",
-                            "description": "Component code with tokens applied"
+                            "description": "Component code with tokens applied",
                         },
                         "changes_made": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "List of changes applied"
-                        }
+                            "description": "List of changes applied",
+                        },
                     },
-                    "required": ["component_code", "design_tokens"]
-                }
+                    "required": ["component_code", "design_tokens"],
+                },
             },
             {
                 "name": "generate_design_system",
@@ -325,32 +333,32 @@ You're not decorating screens — you're crafting the thing the user feels every
                     "properties": {
                         "app_name": {
                             "type": "string",
-                            "description": "Name of the application this theme is for"
+                            "description": "Name of the application this theme is for",
                         },
                         "emotional_register": {
                             "type": "string",
-                            "description": "The feeling the product should evoke (e.g. 'trust and intelligence', 'energy and achievement', 'calm and focus')"
+                            "description": "The feeling the product should evoke (e.g. 'trust and intelligence', 'energy and achievement', 'calm and focus')",
                         },
                         "primary_hue": {
                             "type": "string",
-                            "description": "Base hue family for the primary brand color (e.g. 'violet', 'teal', 'indigo')"
+                            "description": "Base hue family for the primary brand color (e.g. 'violet', 'teal', 'indigo')",
                         },
                         "accent_hue": {
                             "type": "string",
-                            "description": "Base hue family for the complementary accent color (e.g. 'amber', 'coral', 'rose')"
+                            "description": "Base hue family for the complementary accent color (e.g. 'amber', 'coral', 'rose')",
                         },
                         "rationale": {
                             "type": "string",
-                            "description": "One to two sentences justifying the color/type choices against the app's purpose and audience"
+                            "description": "One to two sentences justifying the color/type choices against the app's purpose and audience",
                         },
                         "supports_dark_mode": {
                             "type": "boolean",
-                            "description": "Whether to generate dark-mode token variants"
-                        }
+                            "description": "Whether to generate dark-mode token variants",
+                        },
                     },
-                    "required": ["app_name", "primary_hue", "accent_hue"]
-                }
-            }
+                    "required": ["app_name", "primary_hue", "accent_hue"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -371,10 +379,10 @@ You're not decorating screens — you're crafting the thing the user feels every
         props_interface: str,
         features: Optional[List[str]] = None,
         usage_example: str = "",
-        design_rationale: str = ""
+        design_rationale: str = "",
     ) -> Dict[str, Any]:
         """Generate a React component — returns validated component details."""
-        
+
         return {
             "component_name": component_name,
             "description": description,
@@ -382,7 +390,8 @@ You're not decorating screens — you're crafting the thing the user feels every
             "props_interface": props_interface,
             "features": features or [],
             "usage_example": usage_example or f"<{component_name} />",
-            "design_rationale": design_rationale or "Standard responsive component with accessibility features",
+            "design_rationale": design_rationale
+            or "Standard responsive component with accessibility features",
             "file_path": f"src/components/{component_name}.tsx",
             "typescript": True,
             "tailwind": True,
@@ -391,12 +400,10 @@ You're not decorating screens — you're crafting the thing the user feels every
         }
 
     def _validate_accessibility(
-        self,
-        component_code: str,
-        severity: str = "serious"
+        self, component_code: str, severity: str = "serious"
     ) -> Dict[str, Any]:
         """Validate component accessibility — returns WCAG compliance analysis."""
-        
+
         issues: List[Dict[str, str]] = []
         score = 100
         recommendations: List[str] = []
@@ -408,7 +415,14 @@ You're not decorating screens — you're crafting the thing the user feels every
 
         def add_issue(sev: str, issue: str, wcag: str, fix: str) -> None:
             if severity_order.index(sev) <= max_severity_idx:
-                issues.append({"severity": sev, "issue": issue, "wcag_criterion": wcag, "fix": fix})
+                issues.append(
+                    {
+                        "severity": sev,
+                        "issue": issue,
+                        "wcag_criterion": wcag,
+                        "fix": fix,
+                    }
+                )
 
         # ── Tag-aware checks ──────────────────────────────────────────
         # These parse individual tags rather than scanning raw substrings —
@@ -418,10 +432,16 @@ You're not decorating screens — you're crafting the thing the user feels every
         # name misfire whenever attributes aren't in that exact order (the
         # common case for anything formatted by prettier).
         img_tags = re.findall(r"<img\b[^>]*/?>", component_code, re.IGNORECASE)
-        missing_alt = [t for t in img_tags if not re.search(r"\balt\s*=", t, re.IGNORECASE)]
+        missing_alt = [
+            t for t in img_tags if not re.search(r"\balt\s*=", t, re.IGNORECASE)
+        ]
         if missing_alt:
-            add_issue("critical", f"{len(missing_alt)} <img> element(s) missing alt text",
-                       "1.1.1 Non-text Content", "Add alt attribute with descriptive text to all img elements")
+            add_issue(
+                "critical",
+                f"{len(missing_alt)} <img> element(s) missing alt text",
+                "1.1.1 Non-text Content",
+                "Add alt attribute with descriptive text to all img elements",
+            )
 
         # Attrs can contain "{() => fn()}" — the "=>" arrow has a literal ">" in it,
         # so a plain [^>]* stops there. Treat up to two levels of {..} nesting as
@@ -435,16 +455,28 @@ You're not decorating screens — you're crafting the thing the user feels every
                 continue
             if not re.search(r"\bonClick\s*=", attrs):
                 continue
-            if re.search(r"\btabIndex\b", attrs) or re.search(r"\bonKeyDown\b", attrs) or re.search(r"\brole\s*=", attrs):
+            if (
+                re.search(r"\btabIndex\b", attrs)
+                or re.search(r"\bonKeyDown\b", attrs)
+                or re.search(r"\brole\s*=", attrs)
+            ):
                 continue
             clickable_no_keyboard.append(tag_name)
         if clickable_no_keyboard:
-            add_issue("critical", f"Clickable <{clickable_no_keyboard[0]}> lacks keyboard support (no tabIndex/onKeyDown/role)",
-                       "2.1.1 Keyboard", "Add tabIndex={0} and an onKeyDown handler, or use a button/anchor element")
+            add_issue(
+                "critical",
+                f"Clickable <{clickable_no_keyboard[0]}> lacks keyboard support (no tabIndex/onKeyDown/role)",
+                "2.1.1 Keyboard",
+                "Add tabIndex={0} and an onKeyDown handler, or use a button/anchor element",
+            )
 
         for tag in re.findall(r"<h\d>\s*</h\d>", component_code):
-            add_issue("serious", "Empty heading", "2.4.6 Headings and Labels",
-                       "Add descriptive text to heading or remove if not needed")
+            add_issue(
+                "serious",
+                "Empty heading",
+                "2.4.6 Headings and Labels",
+                "Add descriptive text to heading or remove if not needed",
+            )
             break
 
         role_button = re.search(
@@ -454,34 +486,62 @@ You're not decorating screens — you're crafting the thing the user feels every
         )
         if role_button:
             attrs = role_button.group(2) + role_button.group(3)
-            visible_text = re.sub(r"<[^>]+>|\{[^}]*\}", "", role_button.group(4)).strip()
-            if not visible_text and not re.search(r"aria-label|aria-labelledby", attrs, re.IGNORECASE):
-                add_issue("serious", f"<{role_button.group(1)} role=\"button\"> has no accessible name",
-                           "4.1.2 Name, Role, Value", "Use a real <button> with visible text, or add aria-label plus keyboard handlers")
+            visible_text = re.sub(
+                r"<[^>]+>|\{[^}]*\}", "", role_button.group(4)
+            ).strip()
+            if not visible_text and not re.search(
+                r"aria-label|aria-labelledby", attrs, re.IGNORECASE
+            ):
+                add_issue(
+                    "serious",
+                    f'<{role_button.group(1)} role="button"> has no accessible name',
+                    "4.1.2 Name, Role, Value",
+                    "Use a real <button> with visible text, or add aria-label plus keyboard handlers",
+                )
 
-        input_tags = re.findall(r"<(?:input|textarea|select)\b[^>]*>", component_code, re.IGNORECASE)
+        input_tags = re.findall(
+            r"<(?:input|textarea|select)\b[^>]*>", component_code, re.IGNORECASE
+        )
         unlabeled = 0
         for tag in input_tags:
             if re.search(r"aria-label\s*=|aria-labelledby\s*=", tag, re.IGNORECASE):
                 continue
             id_match = re.search(r"\bid\s*=\s*[\"']([^\"']+)[\"']", tag, re.IGNORECASE)
-            if id_match and re.search(rf"<label\b[^>]*\b(?:for|htmlFor)\s*=\s*[\"']{re.escape(id_match.group(1))}[\"']", component_code, re.IGNORECASE):
+            if id_match and re.search(
+                rf"<label\b[^>]*\b(?:for|htmlFor)\s*=\s*[\"']{re.escape(id_match.group(1))}[\"']",
+                component_code,
+                re.IGNORECASE,
+            ):
                 continue
             unlabeled += 1
         if unlabeled:
-            add_issue("serious", f"{unlabeled} form control(s) have no associated label", "1.3.1 Info and Relationships",
-                       "Associate a <label htmlFor=...> with each control, or add an accurate aria-label/aria-labelledby")
+            add_issue(
+                "serious",
+                f"{unlabeled} form control(s) have no associated label",
+                "1.3.1 Info and Relationships",
+                "Associate a <label htmlFor=...> with each control, or add an accurate aria-label/aria-labelledby",
+            )
 
         for match in re.finditer(r"<a\b([^>]*)>", component_code, re.IGNORECASE):
             attrs = match.group(1)
-            if not re.search(r"\bhref\s*=", attrs, re.IGNORECASE) and re.search(r"\bonClick\s*=", attrs):
-                add_issue("serious", "Clickable <a> has no href and is not a real keyboard-operable link", "2.1.1 Keyboard",
-                           "Use <button> for an action or provide a real href for navigation")
+            if not re.search(r"\bhref\s*=", attrs, re.IGNORECASE) and re.search(
+                r"\bonClick\s*=", attrs
+            ):
+                add_issue(
+                    "serious",
+                    "Clickable <a> has no href and is not a real keyboard-operable link",
+                    "2.1.1 Keyboard",
+                    "Use <button> for an action or provide a real href for navigation",
+                )
                 break
 
         if re.search(r"\btabIndex\s*=\s*\{?[1-9]\d*\}?", component_code):
-            add_issue("moderate", "Positive tabIndex overrides the natural focus order", "2.4.3 Focus Order",
-                       "Use tabIndex={0} or native interactive elements and preserve DOM focus order")
+            add_issue(
+                "moderate",
+                "Positive tabIndex overrides the natural focus order",
+                "2.4.3 Focus Order",
+                "Use tabIndex={0} or native interactive elements and preserve DOM focus order",
+            )
 
         for sev in [i["severity"] for i in issues]:
             if sev == "critical":
@@ -490,88 +550,214 @@ You're not decorating screens — you're crafting the thing the user feels every
                 score -= 10
             elif sev == "moderate":
                 score -= 5
-        
+
         # Generate recommendations
         if score < 100:
-            recommendations.append("Run component through axe DevTools for comprehensive audit")
+            recommendations.append(
+                "Run component through axe DevTools for comprehensive audit"
+            )
             recommendations.append("Test with screen reader (NVDA, JAWS, VoiceOver)")
-            recommendations.append("Keyboard navigation test on all interactive elements")
+            recommendations.append(
+                "Keyboard navigation test on all interactive elements"
+            )
             recommendations.append("Color contrast check with WCAG contrast checker")
-        
+
         if img_tags and not any("alt" in code.lower() for code in [component_code]):
             recommendations.append("Ensure all images have descriptive alt text")
-        
+
         return {
             "overall_score": max(score, 0),
             "issues": issues,
             "recommendations": recommendations,
-            "wcag_21_aa_compliant": not any(i["severity"] in {"critical", "serious"} for i in issues),
-            "tested_against": ["WCAG 2.1 AA Success Criteria", "ARIA Authoring Practices"],
+            "wcag_21_aa_compliant": not any(
+                i["severity"] in {"critical", "serious"} for i in issues
+            ),
+            "tested_against": [
+                "WCAG 2.1 AA Success Criteria",
+                "ARIA Authoring Practices",
+            ],
         }
 
     def _apply_design_token(
-        self,
-        component_code: str,
-        design_tokens: Dict[str, Any]
+        self, component_code: str, design_tokens: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Apply design tokens to component — returns updated code with changes tracked."""
-        
+
         updated_code = component_code
         changes_made: List[str] = []
-        
-        # Token replacement patterns
-        token_map = {
-            # Colors
-            "colors.primary": design_tokens.get("colors", {}).get("primary", "blue-500"),
-            "colors.secondary": design_tokens.get("colors", {}).get("secondary", "gray-500"),
-            "colors.background": design_tokens.get("colors", {}).get("background", "white"),
-            "colors.text": design_tokens.get("colors", {}).get("text", "gray-900"),
-            # Spacing
-            "spacing.sm": design_tokens.get("spacing", {}).get("sm", "4"),
-            "spacing.md": design_tokens.get("spacing", {}).get("md", "8"),
-            "spacing.lg": design_tokens.get("spacing", {}).get("lg", "16"),
-            "spacing.xl": design_tokens.get("spacing", {}).get("xl", "24"),
-            # Border radius
-            "radius.sm": design_tokens.get("radius", {}).get("sm", "rounded-sm"),
-            "radius.md": design_tokens.get("radius", {}).get("md", "rounded-md"),
-            "radius.lg": design_tokens.get("radius", {}).get("lg", "rounded-lg"),
-        }
-        
-        # Simple placeholder replacement (in production, would use AST)
-        for token_name, token_value in design_tokens.items():
+
+        def flatten_tokens(values: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+            flattened: Dict[str, Any] = {}
+            for key, value in values.items():
+                name = f"{prefix}.{key}" if prefix else str(key)
+                if isinstance(value, dict):
+                    flattened.update(flatten_tokens(value, name))
+                else:
+                    flattened[name] = value
+            return flattened
+
+        for token_name, token_value in flatten_tokens(design_tokens).items():
             placeholder = f"{{{token_name}}}"
             if placeholder in updated_code:
                 updated_code = updated_code.replace(placeholder, str(token_value))
                 changes_made.append(f"Applied token '{token_name}' = '{token_value}'")
-        
+
         # Apply color tokens to Tailwind classes
         if "colors" in design_tokens:
             for color_key, color_value in design_tokens["colors"].items():
-                old_pattern = f'bg-{color_key}'
+                old_pattern = f"bg-{color_key}"
                 if old_pattern in updated_code:
-                    updated_code = updated_code.replace(old_pattern, f'bg-{color_value}')
-                    changes_made.append(f"Updated background color {color_key} → {color_value}")
-        
+                    updated_code = updated_code.replace(
+                        old_pattern, f"bg-{color_value}"
+                    )
+                    changes_made.append(
+                        f"Updated background color {color_key} → {color_value}"
+                    )
+
         return {
             "updated_code": updated_code,
             "changes_made": changes_made,
             "tokens_applied": list(design_tokens.keys()),
-            "unchanged_reason": "No recognizable placeholder patterns found" if not changes_made else None,
+            "unchanged_reason": (
+                "No recognizable placeholder patterns found"
+                if not changes_made
+                else None
+            ),
         }
 
     # ── Design System Tokens ──────────────────────────────────────
 
     _HUE_SCALES: Dict[str, Dict[str, str]] = {
-        "violet": {"50": "#f5f3ff", "100": "#ede9fe", "200": "#ddd6fe", "300": "#c4b5fd", "400": "#a78bfa", "500": "#8b5cf6", "600": "#7c3aed", "700": "#6d28d9", "800": "#5b21b6", "900": "#4c1d95", "950": "#2e1065"},
-        "indigo": {"50": "#eef2ff", "100": "#e0e7ff", "200": "#c7d2fe", "300": "#a5b4fc", "400": "#818cf8", "500": "#6366f1", "600": "#4f46e5", "700": "#4338ca", "800": "#3730a3", "900": "#312e81", "950": "#1e1b4b"},
-        "blue": {"50": "#eff6ff", "100": "#dbeafe", "200": "#bfdbfe", "300": "#93c5fd", "400": "#60a5fa", "500": "#3b82f6", "600": "#2563eb", "700": "#1d4ed8", "800": "#1e40af", "900": "#1e3a8a", "950": "#172554"},
-        "teal": {"50": "#f0fdfa", "100": "#ccfbf1", "200": "#99f6e4", "300": "#5eead4", "400": "#2dd4bf", "500": "#14b8a6", "600": "#0d9488", "700": "#0f766e", "800": "#115e59", "900": "#134e4a", "950": "#042f2e"},
-        "emerald": {"50": "#ecfdf5", "100": "#d1fae5", "200": "#a7f3d0", "300": "#6ee7b7", "400": "#34d399", "500": "#10b981", "600": "#059669", "700": "#047857", "800": "#065f46", "900": "#064e3b", "950": "#022c22"},
-        "amber": {"50": "#fffbeb", "100": "#fef3c7", "200": "#fde68a", "300": "#fcd34d", "400": "#fbbf24", "500": "#f59e0b", "600": "#d97706", "700": "#b45309", "800": "#92400e", "900": "#78350f", "950": "#451a03"},
-        "orange": {"50": "#fff7ed", "100": "#ffedd5", "200": "#fed7aa", "300": "#fdba74", "400": "#fb923c", "500": "#f97316", "600": "#ea580c", "700": "#c2410c", "800": "#9a3412", "900": "#7c2d12", "950": "#431407"},
-        "coral": {"50": "#fff5f3", "100": "#ffe4de", "200": "#ffc7ba", "300": "#ffa28a", "400": "#fd7a58", "500": "#f9572e", "600": "#e23f17", "700": "#bc2f10", "800": "#962812", "900": "#7a2513", "950": "#421106"},
-        "rose": {"50": "#fff1f2", "100": "#ffe4e6", "200": "#fecdd3", "300": "#fda4af", "400": "#fb7185", "500": "#f43f5e", "600": "#e11d48", "700": "#be123c", "800": "#9f1239", "900": "#881337", "950": "#4c0519"},
-        "slate": {"50": "#f8fafc", "100": "#f1f5f9", "200": "#e2e8f0", "300": "#cbd5e1", "400": "#94a3b8", "500": "#64748b", "600": "#475569", "700": "#334155", "800": "#1e293b", "900": "#0f172a", "950": "#020617"},
+        "violet": {
+            "50": "#f5f3ff",
+            "100": "#ede9fe",
+            "200": "#ddd6fe",
+            "300": "#c4b5fd",
+            "400": "#a78bfa",
+            "500": "#8b5cf6",
+            "600": "#7c3aed",
+            "700": "#6d28d9",
+            "800": "#5b21b6",
+            "900": "#4c1d95",
+            "950": "#2e1065",
+        },
+        "indigo": {
+            "50": "#eef2ff",
+            "100": "#e0e7ff",
+            "200": "#c7d2fe",
+            "300": "#a5b4fc",
+            "400": "#818cf8",
+            "500": "#6366f1",
+            "600": "#4f46e5",
+            "700": "#4338ca",
+            "800": "#3730a3",
+            "900": "#312e81",
+            "950": "#1e1b4b",
+        },
+        "blue": {
+            "50": "#eff6ff",
+            "100": "#dbeafe",
+            "200": "#bfdbfe",
+            "300": "#93c5fd",
+            "400": "#60a5fa",
+            "500": "#3b82f6",
+            "600": "#2563eb",
+            "700": "#1d4ed8",
+            "800": "#1e40af",
+            "900": "#1e3a8a",
+            "950": "#172554",
+        },
+        "teal": {
+            "50": "#f0fdfa",
+            "100": "#ccfbf1",
+            "200": "#99f6e4",
+            "300": "#5eead4",
+            "400": "#2dd4bf",
+            "500": "#14b8a6",
+            "600": "#0d9488",
+            "700": "#0f766e",
+            "800": "#115e59",
+            "900": "#134e4a",
+            "950": "#042f2e",
+        },
+        "emerald": {
+            "50": "#ecfdf5",
+            "100": "#d1fae5",
+            "200": "#a7f3d0",
+            "300": "#6ee7b7",
+            "400": "#34d399",
+            "500": "#10b981",
+            "600": "#059669",
+            "700": "#047857",
+            "800": "#065f46",
+            "900": "#064e3b",
+            "950": "#022c22",
+        },
+        "amber": {
+            "50": "#fffbeb",
+            "100": "#fef3c7",
+            "200": "#fde68a",
+            "300": "#fcd34d",
+            "400": "#fbbf24",
+            "500": "#f59e0b",
+            "600": "#d97706",
+            "700": "#b45309",
+            "800": "#92400e",
+            "900": "#78350f",
+            "950": "#451a03",
+        },
+        "orange": {
+            "50": "#fff7ed",
+            "100": "#ffedd5",
+            "200": "#fed7aa",
+            "300": "#fdba74",
+            "400": "#fb923c",
+            "500": "#f97316",
+            "600": "#ea580c",
+            "700": "#c2410c",
+            "800": "#9a3412",
+            "900": "#7c2d12",
+            "950": "#431407",
+        },
+        "coral": {
+            "50": "#fff5f3",
+            "100": "#ffe4de",
+            "200": "#ffc7ba",
+            "300": "#ffa28a",
+            "400": "#fd7a58",
+            "500": "#f9572e",
+            "600": "#e23f17",
+            "700": "#bc2f10",
+            "800": "#962812",
+            "900": "#7a2513",
+            "950": "#421106",
+        },
+        "rose": {
+            "50": "#fff1f2",
+            "100": "#ffe4e6",
+            "200": "#fecdd3",
+            "300": "#fda4af",
+            "400": "#fb7185",
+            "500": "#f43f5e",
+            "600": "#e11d48",
+            "700": "#be123c",
+            "800": "#9f1239",
+            "900": "#881337",
+            "950": "#4c0519",
+        },
+        "slate": {
+            "50": "#f8fafc",
+            "100": "#f1f5f9",
+            "200": "#e2e8f0",
+            "300": "#cbd5e1",
+            "400": "#94a3b8",
+            "500": "#64748b",
+            "600": "#475569",
+            "700": "#334155",
+            "800": "#1e293b",
+            "900": "#0f172a",
+            "950": "#020617",
+        },
     }
 
     def _generate_design_system(
@@ -603,8 +789,23 @@ You're not decorating screens — you're crafting the thing the user feels every
             "5xl": {"size": "3rem", "line_height": "1.1"},
         }
 
-        spacing_scale = {"xs": "0.5rem", "sm": "0.75rem", "md": "1rem", "lg": "1.5rem", "xl": "2rem", "2xl": "3rem", "3xl": "4rem"}
-        radius_scale = {"sm": "0.375rem", "md": "0.5rem", "lg": "0.75rem", "xl": "1rem", "card": "1.25rem", "pill": "9999px"}
+        spacing_scale = {
+            "xs": "0.5rem",
+            "sm": "0.75rem",
+            "md": "1rem",
+            "lg": "1.5rem",
+            "xl": "2rem",
+            "2xl": "3rem",
+            "3xl": "4rem",
+        }
+        radius_scale = {
+            "sm": "0.375rem",
+            "md": "0.5rem",
+            "lg": "0.75rem",
+            "xl": "1rem",
+            "card": "1.25rem",
+            "pill": "9999px",
+        }
 
         elevation_scale = {
             "sm": "0 1px 2px 0 rgb(15 23 42 / 0.04)",
@@ -615,7 +816,10 @@ You're not decorating screens — you're crafting the thing the user feels every
 
         motion_tokens = {
             "duration": {"quick": "120ms", "standard": "200ms", "slow": "350ms"},
-            "easing": {"out": "cubic-bezier(0.16, 1, 0.3, 1)", "in_out": "cubic-bezier(0.65, 0, 0.35, 1)"},
+            "easing": {
+                "out": "cubic-bezier(0.16, 1, 0.3, 1)",
+                "in_out": "cubic-bezier(0.65, 0, 0.35, 1)",
+            },
         }
 
         semantic_light = {
@@ -647,13 +851,19 @@ You're not decorating screens — you're crafting the thing the user feels every
 
         return {
             "app_name": app_name,
-            "emotional_register": emotional_register or "Not specified — chosen to fit the product's purpose and audience",
-            "rationale": rationale or f"{primary_hue.title()} as primary conveys the chosen register; {accent_hue.title()} provides a complementary, energetic accent for calls to action.",
+            "emotional_register": emotional_register
+            or "Not specified — chosen to fit the product's purpose and audience",
+            "rationale": rationale
+            or f"{primary_hue.title()} as primary conveys the chosen register; {accent_hue.title()} provides a complementary, energetic accent for calls to action.",
             "colors": {
                 "primary": primary_scale,
                 "accent": accent_scale,
                 "neutral": neutral_scale,
-                "semantic": {"light": semantic_light, "dark": semantic_dark} if supports_dark_mode else {"light": semantic_light},
+                "semantic": (
+                    {"light": semantic_light, "dark": semantic_dark}
+                    if supports_dark_mode
+                    else {"light": semantic_light}
+                ),
             },
             "typography": type_scale,
             "spacing": spacing_scale,
@@ -672,11 +882,11 @@ You're not decorating screens — you're crafting the thing the user feels every
         description: str,
         image_base64: str,
         media_type: str = "image/png",
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
     ) -> AgentResponse:
         """
         Process a wireframe/screenshot image to generate components.
-        
+
         Args:
             description: User intent for the component
             image_base64: Base64-encoded image data
@@ -686,16 +896,18 @@ You're not decorating screens — you're crafting the thing the user feels every
         # Remove data URL prefix if present
         if image_base64.startswith("data:"):
             image_base64 = image_base64.split(",", 1)[1]
-        
-        images = [{
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": image_base64
+
+        images = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": image_base64,
+                },
             }
-        }]
-        
+        ]
+
         prompt = f"""I've attached a wireframe or screenshot. Please analyze it and create the component(s) shown.
 
 Description of what I need: {description}
@@ -713,21 +925,19 @@ Start by describing your observations."""
 
 # ── Convenience Export ─────────────────────────────────────────────
 
+
 def create_ui_agent(
     api_key: Optional[str] = None,
     model: str = "claude-sonnet-4-6",
-    temperature: float = 0.7
+    temperature: float = 0.7,
 ) -> UIGenerationAgent:
     """
     Factory function to create a UI Generation Agent with sensible defaults.
-    
+
     Usage:
         agent = create_ui_agent(api_key="sk-ant-...")
         result = agent.run("Create a dashboard card")
     """
     return UIGenerationAgent(
-        api_key=api_key,
-        provider="anthropic",
-        model=model,
-        temperature=temperature
+        api_key=api_key, provider="anthropic", model=model, temperature=temperature
     )

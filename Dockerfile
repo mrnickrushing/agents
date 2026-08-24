@@ -9,15 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml README.md /build/
 COPY agents /build/agents
-RUN pip install --user --no-cache-dir .
+RUN pip install --prefix=/install --no-cache-dir .
 
 FROM python:3.11-slim
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /root/.local /root/.local
-ENV PATH="/root/.local/bin:${PATH}"
+RUN useradd --create-home --uid 10001 agents
+
+COPY --from=builder /install /usr/local
+USER agents
 
 ENTRYPOINT ["agents"]
 CMD ["--help"]

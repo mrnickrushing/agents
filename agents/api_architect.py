@@ -15,7 +15,7 @@ Usage:
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
@@ -71,8 +71,14 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The list endpoint handler code"},
-                        "endpoint": {"type": "string", "description": "The endpoint path, e.g. 'GET /api/v1/logs'"},
+                        "code": {
+                            "type": "string",
+                            "description": "The list endpoint handler code",
+                        },
+                        "endpoint": {
+                            "type": "string",
+                            "description": "The endpoint path, e.g. 'GET /api/v1/logs'",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -83,7 +89,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The route/error-handler code to review"},
+                        "code": {
+                            "type": "string",
+                            "description": "The route/error-handler code to review",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -94,7 +103,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The route handler code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The route handler code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -106,7 +118,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "API title"},
-                        "endpoints": {"type": "string", "description": "Comma-separated 'METHOD /path' entries, e.g. 'GET /users, POST /users'"},
+                        "endpoints": {
+                            "type": "string",
+                            "description": "Comma-separated 'METHOD /path' entries, e.g. 'GET /users, POST /users'",
+                        },
                     },
                     "required": ["title", "endpoints"],
                 },
@@ -117,7 +132,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The route handler/middleware code"},
+                        "code": {
+                            "type": "string",
+                            "description": "The route handler/middleware code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -128,7 +146,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "GraphQL resolver/server code"},
+                        "code": {
+                            "type": "string",
+                            "description": "GraphQL resolver/server code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -139,7 +160,10 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "Webhook handling code"},
+                        "code": {
+                            "type": "string",
+                            "description": "Webhook handling code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -162,27 +186,33 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         findings = []
         code_lower = code.lower()
 
-        has_limit_param = bool(re.search(r"\blimit\b|\bpage\b|\bcursor\b|\boffset\b", code_lower))
+        has_limit_param = bool(
+            re.search(r"\blimit\b|\bpage\b|\bcursor\b|\boffset\b", code_lower)
+        )
 
         # Pagination only applies when there is positive evidence that a GET
         # handler returns a growing collection. Reviewing every GET file made
         # /health, /config, /me, and get-by-id routes look like unbounded
         # whole-table reads even when they returned one fixed-shape object.
-        list_query_evidence = bool(re.search(
-            r"\bfindmany\s*\(|\.fetchall\s*\(|\.all\s*\(|"
-            r"\b(?:list|getall|fetchall|loadall)[a-z0-9_]*\s*\(|"
-            r"\bdb\.select\s*\(.*?\)\s*\.from\s*\(",
-            code_lower,
-            re.DOTALL,
-        ))
-        collection_response_evidence = bool(re.search(
-            r"res\.json\(\s*\[|"
-            r"res\.json\(\s*\{[^}]{0,160}\b(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\s*:|"
-            r"res\.json\(\s*(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\b|"
-            r"res\.json\([^)]*\.map\s*\(",
-            code_lower,
-            re.DOTALL,
-        ))
+        list_query_evidence = bool(
+            re.search(
+                r"\bfindmany\s*\(|\.fetchall\s*\(|\.all\s*\(|"
+                r"\b(?:list|getall|fetchall|loadall)[a-z0-9_]*\s*\(|"
+                r"\bdb\.select\s*\(.*?\)\s*\.from\s*\(",
+                code_lower,
+                re.DOTALL,
+            )
+        )
+        collection_response_evidence = bool(
+            re.search(
+                r"res\.json\(\s*\[|"
+                r"res\.json\(\s*\{[^}]{0,160}\b(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\s*:|"
+                r"res\.json\(\s*(?:items|rows|results|records|users|events|notifications|documents|links|transactions|credits)\b|"
+                r"res\.json\([^)]*\.map\s*\(",
+                code_lower,
+                re.DOTALL,
+            )
+        )
         if not (list_query_evidence or collection_response_evidence):
             return {
                 "endpoint": endpoint,
@@ -198,10 +228,19 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         # list like any other, not a single scalar response.
         # Exclude Math.min/Math.max — pagination-adjacent arithmetic like
         # Math.max(0, offset), not a SQL aggregate.
-        aggregate_calls = len(re.findall(r"(?<!math\.)\b(count|sum|avg|min|max)\s*\(", code_lower))
-        has_row_select = bool(re.search(r"\.all\(\)|\.fetchall\(\)|select\s+\*|res\.json\(\s*\{?\s*(rows|results|items)\b", code_lower))
+        aggregate_calls = len(
+            re.findall(r"(?<!math\.)\b(count|sum|avg|min|max)\s*\(", code_lower)
+        )
+        has_row_select = bool(
+            re.search(
+                r"\.all\(\)|\.fetchall\(\)|select\s+\*|res\.json\(\s*\{?\s*(rows|results|items)\b",
+                code_lower,
+            )
+        )
         has_group_by = bool(re.search(r"\.groupby\(|group\s+by\b", code_lower))
-        is_aggregate_only = aggregate_calls > 0 and not has_row_select and not has_group_by
+        is_aggregate_only = (
+            aggregate_calls > 0 and not has_row_select and not has_group_by
+        )
 
         # A query scoped to the requesting user's own id/session returns at
         # most that one user's rows — bounded by their own usage, not "the
@@ -219,15 +258,21 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         # also match an unrelated grouped column (e.g. .groupBy(items.userId)
         # grouping by *someone else's* id, not scoping to the requester).
         query_construct_re = r"(?:\.filter\(|\.where\(|\beq\(|db\.query\(|db\.select\(|\.query\.\w+\.find)"
-        requester_id_re = r"(?:req\.user\.id|current_user\.id|user\.id|res\.locals\.user_?id)"
-        is_user_scoped = bool(re.search(
-            rf"{query_construct_re}[^\n]{{0,80}}{requester_id_re}"
-            rf"|{requester_id_re}[^\n]{{0,80}}{query_construct_re}",
-            code_lower,
-        ))
+        requester_id_re = (
+            r"(?:req\.user\.id|current_user\.id|user\.id|res\.locals\.user_?id)"
+        )
+        is_user_scoped = bool(
+            re.search(
+                rf"{query_construct_re}[^\n]{{0,80}}{requester_id_re}"
+                rf"|{requester_id_re}[^\n]{{0,80}}{query_construct_re}",
+                code_lower,
+            )
+        )
         route_code = code_lower.split("// --- imported from", 1)[0]
         delegates_requester_id = bool(
-            re.search(rf"\b(?:const|let|var)\s+user_?id\s*=\s*{requester_id_re}", route_code)
+            re.search(
+                rf"\b(?:const|let|var)\s+user_?id\s*=\s*{requester_id_re}", route_code
+            )
             and re.search(r"\b\w+\s*\([^)]*\buser_?id\b[^)]*\)", route_code)
         )
         is_user_scoped = is_user_scoped or delegates_requester_id
@@ -236,29 +281,96 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
             if is_aggregate_only:
                 pass  # not a row-list endpoint; pagination doesn't apply
             elif is_user_scoped:
-                findings.append({"severity": "LOW", "issue": "No limit/page/cursor/offset parameter found, but the query appears scoped to the requesting user's own rows — bounded by that user's usage, not the whole table. Still worth capping defensively if this list could grow large for a single user.", "fix": "Accept an optional limit (capped, e.g. max 100) and cursor/offset param for defense-in-depth"})
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": "No limit/page/cursor/offset parameter found, but the query appears scoped to the requesting user's own rows — bounded by that user's usage, not the whole table. Still worth capping defensively if this list could grow large for a single user.",
+                        "fix": "Accept an optional limit (capped, e.g. max 100) and cursor/offset param for defense-in-depth",
+                    }
+                )
             else:
-                findings.append({"severity": "HIGH", "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table", "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query"})
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "No limit/page/cursor/offset parameter found — this endpoint likely returns the entire table",
+                        "fix": "Accept a limit (capped, e.g. max 100) and cursor or page param, and apply it to the query",
+                    }
+                )
 
-        returns_array = bool(re.search(r"res\.json\(\s*\[|\.json\(\s*rows\)|\.json\(\s*results\)|\.json\(\s*items\)", code))
-        has_meta = bool(re.search(r"hasMore|nextCursor|next_cursor|totalCount|total_count|has_next", code, re.IGNORECASE))
+        returns_array = bool(
+            re.search(
+                r"res\.json\(\s*\[|\.json\(\s*rows\)|\.json\(\s*results\)|\.json\(\s*items\)",
+                code,
+            )
+        )
+        has_meta = bool(
+            re.search(
+                r"hasMore|nextCursor|next_cursor|totalCount|total_count|has_next",
+                code,
+                re.IGNORECASE,
+            )
+        )
         if has_limit_param and returns_array and not has_meta:
-            findings.append({"severity": "MEDIUM", "issue": "Paginated results returned with no pagination metadata (hasMore/nextCursor/totalCount) — the client can't tell if there's another page", "fix": "Include { data, hasMore, nextCursor } (or { data, page, totalCount }) in the response envelope"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Paginated results returned with no pagination metadata (hasMore/nextCursor/totalCount) — the client can't tell if there's another page",
+                    "fix": "Include { data, hasMore, nextCursor } (or { data, page, totalCount }) in the response envelope",
+                }
+            )
 
-        return {"endpoint": endpoint, "findings": findings, "total_issues": len(findings)}
+        return {
+            "endpoint": endpoint,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
     def _review_error_response_shape(self, code: str) -> Dict[str, Any]:
         """Review error handling for a consistent envelope and no leaked internals."""
         findings = []
 
-        if re.search(r"res\.(status\(\d+\)\.)?send\(\s*err(or)?\.(message|stack)\s*\)", code):
-            findings.append({"severity": "HIGH", "issue": "Raw error message/stack sent directly to the client — can leak internal details (file paths, query structure, library versions)", "fix": "Log the full error server-side; send a generic, consistent error shape to the client"})
+        if re.search(
+            r"res\.(status\(\d+\)\.)?send\(\s*err(or)?\.(message|stack)\s*\)", code
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Raw error message/stack sent directly to the client — can leak internal details (file paths, query structure, library versions)",
+                    "fix": "Log the full error server-side; send a generic, consistent error shape to the client",
+                }
+            )
         if re.search(r"res\.json\(\s*err\s*\)|res\.send\(\s*err\s*\)", code):
-            findings.append({"severity": "HIGH", "issue": "Raw error object sent directly to the client — likely includes a stack trace", "fix": "Send { error: { code, message } } built explicitly, never the raw error object"})
-        if re.search(r"HTTPException\s*\([^)]*detail\s*=\s*(?:str\s*\(\s*(?:exc|err|error)|(?:exc|err|error)\.args|repr\s*\()", code, re.IGNORECASE | re.DOTALL):
-            findings.append({"severity": "HIGH", "issue": "FastAPI HTTPException exposes the caught exception text to the client", "fix": "Log the exception server-side and return a stable public error code/message"})
-        if re.search(r"return\s+\{[^}]*[\"']error[\"']\s*:\s*str\s*\(\s*(?:exc|err|error)", code, re.IGNORECASE | re.DOTALL):
-            findings.append({"severity": "HIGH", "issue": "API response returns str(exception), which can leak provider/database details", "fix": "Return a generic public error and capture the detailed exception only in server logs/monitoring"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Raw error object sent directly to the client — likely includes a stack trace",
+                    "fix": "Send { error: { code, message } } built explicitly, never the raw error object",
+                }
+            )
+        if re.search(
+            r"HTTPException\s*\([^)]*detail\s*=\s*(?:str\s*\(\s*(?:exc|err|error)|(?:exc|err|error)\.args|repr\s*\()",
+            code,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "FastAPI HTTPException exposes the caught exception text to the client",
+                    "fix": "Log the exception server-side and return a stable public error code/message",
+                }
+            )
+        if re.search(
+            r"return\s+\{[^}]*[\"']error[\"']\s*:\s*str\s*\(\s*(?:exc|err|error)",
+            code,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "API response returns str(exception), which can leak provider/database details",
+                    "fix": "Return a generic public error and capture the detailed exception only in server logs/monitoring",
+                }
+            )
 
         # Comparing *all* res.json() call shapes (business responses included)
         # against a low distinctness threshold flagged nearly every route
@@ -270,7 +382,13 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         has_string_error = bool(re.search(r"error\s*:\s*[\"'`]", code))
         has_object_error = bool(re.search(r"error\s*:\s*\{", code))
         if has_string_error and has_object_error:
-            findings.append({"severity": "LOW", "issue": "Error responses in this file use both a plain string (error: \"msg\") and a nested object (error: {...}) shape — inconsistent contract for whatever's parsing the response client-side", "fix": "Pick one error shape (e.g. { error: { code, message } }) and use it for every error response in this file"})
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": 'Error responses in this file use both a plain string (error: "msg") and a nested object (error: {...}) shape — inconsistent contract for whatever\'s parsing the response client-side',
+                    "fix": "Pick one error shape (e.g. { error: { code, message } }) and use it for every error response in this file",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -278,21 +396,59 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         """Audit HTTP status code usage."""
         findings = []
 
-        if re.search(r"router\.post\(|app\.post\(", code) and re.search(r"res\.status\(200\)\.json\(\s*\{[^}]*id", code):
-            findings.append({"severity": "LOW", "issue": "POST that creates a resource returns 200 instead of 201", "fix": "Return res.status(201).json({...}) for successful resource creation"})
+        if re.search(r"router\.post\(|app\.post\(", code) and re.search(
+            r"res\.status\(200\)\.json\(\s*\{[^}]*id", code
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "POST that creates a resource returns 200 instead of 201",
+                    "fix": "Return res.status(201).json({...}) for successful resource creation",
+                }
+            )
 
-        if re.search(r"router\.delete\(|app\.delete\(", code) and re.search(r"res\.status\(200\)\.json\(\s*\{\}\s*\)|res\.status\(200\)\.send\(\)", code):
-            findings.append({"severity": "LOW", "issue": "DELETE returns 200 with an empty body instead of 204", "fix": "Return res.status(204).send() for a successful delete with no body"})
+        if re.search(r"router\.delete\(|app\.delete\(", code) and re.search(
+            r"res\.status\(200\)\.json\(\s*\{\}\s*\)|res\.status\(200\)\.send\(\)", code
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "DELETE returns 200 with an empty body instead of 204",
+                    "fix": "Return res.status(204).send() for a successful delete with no body",
+                }
+            )
 
         if re.search(r"res\.status\(200\)\.json\(\s*\{\s*error", code, re.IGNORECASE):
-            findings.append({"severity": "MEDIUM", "issue": "Error response returned with status 200 — clients checking response.ok or status code will treat this as success", "fix": "Use an appropriate 4xx/5xx status code alongside the error body"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Error response returned with status 200 — clients checking response.ok or status code will treat this as success",
+                    "fix": "Use an appropriate 4xx/5xx status code alongside the error body",
+                }
+            )
 
-        for match in re.finditer(r"@(?:router|app)\.post\s*\(([^)]*)\)", code, re.IGNORECASE | re.DOTALL):
+        for match in re.finditer(
+            r"@(?:router|app)\.post\s*\(([^)]*)\)", code, re.IGNORECASE | re.DOTALL
+        ):
             decorator = match.group(1)
-            following = code[match.end():match.end() + 500]
-            looks_like_create = bool(re.search(r"\b(create|insert|add|register)\w*\b", following, re.IGNORECASE))
-            if looks_like_create and not re.search(r"status_code\s*=\s*(?:status\.)?HTTP_201_CREATED|status_code\s*=\s*201", decorator, re.IGNORECASE):
-                findings.append({"severity": "LOW", "issue": "FastAPI create-style POST endpoint does not declare status_code=201", "fix": "Declare status_code=status.HTTP_201_CREATED when this endpoint creates a resource"})
+            following = code[match.end() : match.end() + 500]
+            looks_like_create = bool(
+                re.search(
+                    r"\b(create|insert|add|register)\w*\b", following, re.IGNORECASE
+                )
+            )
+            if looks_like_create and not re.search(
+                r"status_code\s*=\s*(?:status\.)?HTTP_201_CREATED|status_code\s*=\s*201",
+                decorator,
+                re.IGNORECASE,
+            ):
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": "FastAPI create-style POST endpoint does not declare status_code=201",
+                        "fix": "Declare status_code=status.HTTP_201_CREATED when this endpoint creates a resource",
+                    }
+                )
                 break
 
         return {"findings": findings, "total_issues": len(findings)}
@@ -320,40 +476,62 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
 
     def _review_rate_limit_contract(self, code: str) -> Dict[str, Any]:
         findings = []
-        if re.search(r"status\(\s*429\s*\)|HTTP_429|Too Many Requests", code, re.IGNORECASE):
-            if not re.search(r"Retry-After|X-RateLimit-(Limit|Remaining|Reset)", code, re.IGNORECASE):
-                findings.append({
-                    "severity": "MEDIUM",
-                    "issue": "429 handling appears without Retry-After / X-RateLimit-* headers",
-                    "fix": "Include Retry-After and X-RateLimit-Limit/Remaining/Reset headers for client backoff.",
-                })
+        if re.search(
+            r"status\(\s*429\s*\)|HTTP_429|Too Many Requests", code, re.IGNORECASE
+        ):
+            if not re.search(
+                r"Retry-After|X-RateLimit-(Limit|Remaining|Reset)", code, re.IGNORECASE
+            ):
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "429 handling appears without Retry-After / X-RateLimit-* headers",
+                        "fix": "Include Retry-After and X-RateLimit-Limit/Remaining/Reset headers for client backoff.",
+                    }
+                )
         return {"findings": findings, "total_issues": len(findings)}
 
     def _review_graphql_error_contract(self, code: str) -> Dict[str, Any]:
         findings = []
         returns_errors = bool(re.search(r"(?:[\"']errors[\"']|\berrors)\s*:", code))
-        has_extensions_code = bool(re.search(r"extensions\s*:\s*\{[\s\S]{0,160}\bcode\s*:", code, re.IGNORECASE))
+        has_extensions_code = bool(
+            re.search(
+                r"extensions\s*:\s*\{[\s\S]{0,160}\bcode\s*:", code, re.IGNORECASE
+            )
+        )
         if returns_errors and not has_extensions_code:
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "GraphQL error payload includes errors[] with no extensions.code",
-                "fix": "Include extensions.code for machine-readable error classification.",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "GraphQL error payload includes errors[] with no extensions.code",
+                    "fix": "Include extensions.code for machine-readable error classification.",
+                }
+            )
         return {"findings": findings, "total_issues": len(findings)}
 
     def _review_webhook_reliability(self, code: str) -> Dict[str, Any]:
         findings = []
         if re.search(r"webhook|constructEvent|svix|signature", code, re.IGNORECASE):
-            if not re.search(r"idempotenc|dedup|event\.id|delivery[_-]?id|redis\.setnx", code, re.IGNORECASE):
-                findings.append({
-                    "severity": "HIGH",
-                    "issue": "Webhook handler has no visible idempotency guard",
-                    "fix": "Persist processed event IDs and ignore duplicates.",
-                })
-            if re.search(r"retry|backoff|attempt", code, re.IGNORECASE) and not re.search(r"exponential|2\s*\*\*|Math\.pow", code, re.IGNORECASE):
-                findings.append({
-                    "severity": "LOW",
-                    "issue": "Webhook retry logic has no visible exponential backoff",
-                    "fix": "Use bounded exponential backoff with jitter for retryable failures.",
-                })
+            if not re.search(
+                r"idempotenc|dedup|event\.id|delivery[_-]?id|redis\.setnx",
+                code,
+                re.IGNORECASE,
+            ):
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": "Webhook handler has no visible idempotency guard",
+                        "fix": "Persist processed event IDs and ignore duplicates.",
+                    }
+                )
+            if re.search(
+                r"retry|backoff|attempt", code, re.IGNORECASE
+            ) and not re.search(r"exponential|2\s*\*\*|Math\.pow", code, re.IGNORECASE):
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": "Webhook retry logic has no visible exponential backoff",
+                        "fix": "Use bounded exponential backoff with jitter for retryable failures.",
+                    }
+                )
         return {"findings": findings, "total_issues": len(findings)}

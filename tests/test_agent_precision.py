@@ -100,8 +100,10 @@ def test_private_eas_token_literal_is_detected():
 
 
 def test_docker_review_catches_reproducibility_and_root_runtime():
-    dockerfile = "FROM node:latest\nRUN npm install\nCMD [\"node\", \"server.js\"]\n"
-    issues = _issues(RailwayDeployAgent()._review_deployment_config(dockerfile, "Dockerfile"))
+    dockerfile = 'FROM node:latest\nRUN npm install\nCMD ["node", "server.js"]\n'
+    issues = _issues(
+        RailwayDeployAgent()._review_deployment_config(dockerfile, "Dockerfile")
+    )
     assert any(":latest" in issue for issue in issues)
     assert any("npm install" in issue for issue in issues)
     assert any("root user" in issue for issue in issues)
@@ -109,7 +111,9 @@ def test_docker_review_catches_reproducibility_and_root_runtime():
 
 def test_railway_config_hardcoded_port_is_detected():
     config = '[deploy]\nstartCommand = "uvicorn app:app --port 8080"\nhealthcheckPath = "/ready"\nrestartPolicyType = "on_failure"\n'
-    issues = _issues(RailwayDeployAgent()._review_deployment_config(config, "railway.toml"))
+    issues = _issues(
+        RailwayDeployAgent()._review_deployment_config(config, "railway.toml")
+    )
     assert any("hardcodes a port" in issue for issue in issues)
 
 
@@ -130,6 +134,17 @@ def test_visible_role_button_text_does_not_require_aria_label():
     code = '<div role="button" tabIndex={0} onKeyDown={onKey}>Save</div>'
     result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
     assert not any("accessible name" in issue["issue"] for issue in result["issues"])
+
+
+def test_apply_design_tokens_replaces_nested_placeholders():
+    result = UIGenerationAgent()._apply_design_token(
+        'className="bg-primary text-{colors.text} p-{spacing.md}"',
+        {
+            "colors": {"primary": "indigo-600", "text": "slate-100"},
+            "spacing": {"md": "8"},
+        },
+    )
+    assert result["updated_code"] == 'className="bg-indigo-600 text-slate-100 p-8"'
 
 
 def test_scaffolder_no_longer_generates_auth_bypass_stub():

@@ -6,7 +6,6 @@ fires on the correct case is worse than no rule (session 12 lesson), so
 each check has both.
 """
 
-import os
 import textwrap
 
 import pytest
@@ -29,8 +28,9 @@ def _severities(result):
 
 # --- Dockerfile ---------------------------------------------------------------------
 
+
 def test_dockerfile_without_user_in_final_stage_runs_as_root(agent):
-    df = "FROM python:3.13-slim\nCOPY . .\nRUN pip install --no-cache-dir -r requirements.txt\nCMD [\"python\", \"app.py\"]\n"
+    df = 'FROM python:3.13-slim\nCOPY . .\nRUN pip install --no-cache-dir -r requirements.txt\nCMD ["python", "app.py"]\n'
     issues = _issues(agent._audit_dockerfile(df))
     assert any("runs as root" in i for i in issues)
 
@@ -48,20 +48,23 @@ def test_dockerfile_builder_stage_as_root_is_fine_if_runner_drops_privileges(age
 
 
 def test_dockerfile_user_root_explicitly_still_counts_as_root(agent):
-    df = "FROM node:20-alpine\nUSER root\nCMD [\"node\"]\n"
+    df = 'FROM node:20-alpine\nUSER root\nCMD ["node"]\n'
     assert any("runs as root" in i for i in _issues(agent._audit_dockerfile(df)))
 
 
-@pytest.mark.parametrize("base,flagged", [
-    ("node:20.19.4-alpine", False),
-    ("python:3.12-slim", False),
-    ("node", True),
-    ("node:latest", True),
-    ("ghcr.io/org/img", True),
-    ("ghcr.io/org/img:1.2", False),
-    ("node@sha256:" + "a" * 64, False),
-    ("scratch", False),
-])
+@pytest.mark.parametrize(
+    "base,flagged",
+    [
+        ("node:20.19.4-alpine", False),
+        ("python:3.12-slim", False),
+        ("node", True),
+        ("node:latest", True),
+        ("ghcr.io/org/img", True),
+        ("ghcr.io/org/img:1.2", False),
+        ("node@sha256:" + "a" * 64, False),
+        ("scratch", False),
+    ],
+)
 def test_dockerfile_unpinned_base_detection(agent, base, flagged):
     df = f"FROM {base}\nUSER app\n"
     hits = [i for i in _issues(agent._audit_dockerfile(df)) if "unpinned" in i]
@@ -80,10 +83,13 @@ def test_dockerfile_secret_in_env_is_critical_but_placeholders_are_not(agent):
 
 def test_dockerfile_curl_pipe_sh(agent):
     df = "FROM debian:12\nRUN curl -fsSL https://get.example.com | sh\nUSER app\n"
-    assert any("straight into a shell" in i for i in _issues(agent._audit_dockerfile(df)))
+    assert any(
+        "straight into a shell" in i for i in _issues(agent._audit_dockerfile(df))
+    )
 
 
 # --- docker-compose ------------------------------------------------------------------
+
 
 def test_compose_dev_password_and_published_db_port_are_low(agent):
     yml = textwrap.dedent("""
@@ -122,8 +128,16 @@ WF = ".github/workflows/ci.yml"
 
 
 def test_workflow_outside_workflows_dir_is_ignored(agent):
-    assert agent._audit_workflow("on: push\njobs: {}\n", path="docker-compose.yml")["findings"] == []
-    assert agent._audit_workflow("on: push\njobs: {}\n", path="codemagic.yaml")["findings"] == []
+    assert (
+        agent._audit_workflow("on: push\njobs: {}\n", path="docker-compose.yml")[
+            "findings"
+        ]
+        == []
+    )
+    assert (
+        agent._audit_workflow("on: push\njobs: {}\n", path="codemagic.yaml")["findings"]
+        == []
+    )
 
 
 def test_workflow_unpinned_actions_graded_by_party(agent):
@@ -139,16 +153,29 @@ def test_workflow_unpinned_actions_graded_by_party(agent):
     """)
     r = agent._audit_workflow(wf, path=WF)
     by = {f["issue"]: f["severity"] for f in r["findings"]}
-    assert by["`actions/checkout@v4` is pinned to a mutable tag, not a commit SHA"] == "LOW"
-    assert by["`aquasecurity/trivy-action@v0.36.0` is pinned to a mutable tag, not a commit SHA"] == "MEDIUM"
-    assert len(r["findings"]) == 2          # the SHA-pinned and local ones are fine
+    assert (
+        by["`actions/checkout@v4` is pinned to a mutable tag, not a commit SHA"]
+        == "LOW"
+    )
+    assert (
+        by[
+            "`aquasecurity/trivy-action@v0.36.0` is pinned to a mutable tag, not a commit SHA"
+        ]
+        == "MEDIUM"
+    )
+    assert len(r["findings"]) == 2  # the SHA-pinned and local ones are fine
 
 
 def test_workflow_missing_permissions_block(agent):
     wf = "on: push\njobs:\n  t:\n    steps:\n      - run: echo hi\n"
-    assert any("No `permissions:` block" in i for i in _issues(agent._audit_workflow(wf, path=WF)))
+    assert any(
+        "No `permissions:` block" in i
+        for i in _issues(agent._audit_workflow(wf, path=WF))
+    )
     wf_ok = "on: push\npermissions:\n  contents: read\njobs: {}\n"
-    assert not any("permissions" in i for i in _issues(agent._audit_workflow(wf_ok, path=WF)))
+    assert not any(
+        "permissions" in i for i in _issues(agent._audit_workflow(wf_ok, path=WF))
+    )
 
 
 def test_workflow_pull_request_target_with_checkout_is_critical(agent):
@@ -166,7 +193,9 @@ def test_workflow_expression_injection(agent):
             steps:
               - run: echo "${{ github.event.pull_request.title }}"
     """)
-    assert any("crafted PR title" in i for i in _issues(agent._audit_workflow(wf, path=WF)))
+    assert any(
+        "crafted PR title" in i for i in _issues(agent._audit_workflow(wf, path=WF))
+    )
 
     safe = textwrap.dedent("""
         permissions: { contents: read }
@@ -177,13 +206,18 @@ def test_workflow_expression_injection(agent):
                   TITLE: ${{ github.event.pull_request.title }}
                 run: echo "$TITLE"
     """)
-    assert not any("crafted" in i for i in _issues(agent._audit_workflow(safe, path=WF)))
+    assert not any(
+        "crafted" in i for i in _issues(agent._audit_workflow(safe, path=WF))
+    )
 
 
 # --- Android ------------------------------------------------------------------------------
 
+
 def test_android_cleartext_and_backup(agent):
-    manifest = '<application android:usesCleartextTraffic="true" android:allowBackup="true">'
+    manifest = (
+        '<application android:usesCleartextTraffic="true" android:allowBackup="true">'
+    )
     r = agent._audit_android_manifest(manifest, path="app/src/main/AndroidManifest.xml")
     assert any("plain HTTP" in i for i in _issues(r))
     assert any("adb backup" in i for i in _issues(r))
@@ -193,8 +227,14 @@ def test_android_debug_variant_cleartext_is_expected_not_flagged(agent):
     """Debug manifests allow cleartext so Metro can reach the dev server;
     they never ship. All three fleet hits were debug variants."""
     manifest = '<application android:usesCleartextTraffic="true">'
-    for path in ("app/src/debug/AndroidManifest.xml", "app/src/debugOptimized/AndroidManifest.xml"):
-        assert not any("plain HTTP" in i for i in _issues(agent._audit_android_manifest(manifest, path=path)))
+    for path in (
+        "app/src/debug/AndroidManifest.xml",
+        "app/src/debugOptimized/AndroidManifest.xml",
+    ):
+        assert not any(
+            "plain HTTP" in i
+            for i in _issues(agent._audit_android_manifest(manifest, path=path))
+        )
 
 
 def test_android_exported_service_without_permission(agent):
@@ -208,8 +248,10 @@ def test_android_exported_service_without_permission(agent):
     """)
     issues = _issues(agent._audit_android_manifest(manifest))
     assert any("Exported service `.SyncService`" in i for i in issues)
-    assert not any("MainActivity" in i for i in issues)    # activities are exported on purpose
-    assert not any(".Boot" in i for i in issues)           # gated by a permission
+    assert not any(
+        "MainActivity" in i for i in issues
+    )  # activities are exported on purpose
+    assert not any(".Boot" in i for i in issues)  # gated by a permission
 
 
 def test_android_debuggable_is_critical(agent):
@@ -219,15 +261,20 @@ def test_android_debuggable_is_critical(agent):
 
 # --- iOS --------------------------------------------------------------------------------------
 
+
 def test_ios_arbitrary_loads_true_flagged_false_not(agent):
     bad = "<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>"
-    assert any("Transport Security is disabled" in i for i in _issues(agent._audit_ios_plist(bad)))
+    assert any(
+        "Transport Security is disabled" in i
+        for i in _issues(agent._audit_ios_plist(bad))
+    )
     # The real shield-ai plist: ArbitraryLoads false, LocalNetworking true.
     ok = "<key>NSAllowsArbitraryLoads</key>\n<false/>\n<key>NSAllowsLocalNetworking</key>\n<true/>"
     assert agent._audit_ios_plist(ok)["findings"] == []
 
 
 # --- wrangler -----------------------------------------------------------------------------------
+
 
 def test_wrangler_secret_in_vars_is_critical(agent):
     toml = 'name = "w"\n[vars]\nAPI_TOKEN = "abcdefghijklmnopqrstuvwxyz1234"\nPUBLIC_URL = "https://x"\n\n[[kv_namespaces]]\nbinding = "KV"\n'
@@ -243,34 +290,48 @@ def test_wrangler_real_fleet_file_is_clean(agent):
 
 # --- Railway --------------------------------------------------------------------------------------
 
+
 def test_railway_healthcheck_path_with_no_route_is_high(agent, tmp_path):
     (tmp_path / "railway.toml").write_text('[deploy]\nhealthcheckPath = "/health"\n')
     (tmp_path / "app").mkdir()
-    (tmp_path / "app" / "main.py").write_text('@app.get("/api/v1/scans")\ndef scans(): ...\n')
-    r = agent._audit_railway_config((tmp_path / "railway.toml").read_text(), path=str(tmp_path / "railway.toml"))
+    (tmp_path / "app" / "main.py").write_text(
+        '@app.get("/api/v1/scans")\ndef scans(): ...\n'
+    )
+    r = agent._audit_railway_config(
+        (tmp_path / "railway.toml").read_text(), path=str(tmp_path / "railway.toml")
+    )
     assert "HIGH" in _severities(r)
     assert any("`/health`" in i for i in _issues(r))
 
 
 def test_railway_healthcheck_path_that_a_route_serves_is_fine(agent, tmp_path):
     (tmp_path / "railway.json").write_text('{"deploy": {"healthcheckPath": "/health"}}')
-    (tmp_path / "server.ts").write_text("app.get('/health', (_, res) => res.json({ ok: true }));")
-    r = agent._audit_railway_config((tmp_path / "railway.json").read_text(), path=str(tmp_path / "railway.json"))
+    (tmp_path / "server.ts").write_text(
+        "app.get('/health', (_, res) => res.json({ ok: true }));"
+    )
+    r = agent._audit_railway_config(
+        (tmp_path / "railway.json").read_text(), path=str(tmp_path / "railway.json")
+    )
     assert r["findings"] == []
 
 
 def test_railway_root_healthcheck_is_not_checked(agent, tmp_path):
     (tmp_path / "railway.toml").write_text('healthcheckPath = "/"\n')
-    r = agent._audit_railway_config('healthcheckPath = "/"\n', path=str(tmp_path / "railway.toml"))
+    r = agent._audit_railway_config(
+        'healthcheckPath = "/"\n', path=str(tmp_path / "railway.toml")
+    )
     assert r["findings"] == []
 
 
 # --- .env.example -------------------------------------------------------------------------------------
 
+
 def test_env_example_real_looking_secret_is_high(agent):
     r = agent._audit_env_example("JWT_SECRET=f8a3b9c2d4e5f6a7b8c9d0e1f2a3b4c5\n")
     assert "HIGH" in _severities(r)
-    ok = agent._audit_env_example("JWT_SECRET=your-secret-here\nDATABASE_URL=postgres://user:pass@localhost/db\n")
+    ok = agent._audit_env_example(
+        "JWT_SECRET=your-secret-here\nDATABASE_URL=postgres://user:pass@localhost/db\n"
+    )
     assert ok["findings"] == []
 
 
@@ -300,7 +361,9 @@ def test_env_example_undocumented_usage_is_found_across_the_tree(agent, tmp_path
     (tmp_path / "src" / "config.ts").write_text(
         "const db = process.env.DATABASE_URL;\nconst key = process.env.STRIPE_SECRET_KEY;\nconst port = process.env.PORT;\n"
     )
-    (tmp_path / "worker.py").write_text('import os\nos.environ["REDIS_URL"]\nos.getenv("SENTRY_DSN")\n')
+    (tmp_path / "worker.py").write_text(
+        'import os\nos.environ["REDIS_URL"]\nos.getenv("SENTRY_DSN")\n'
+    )
     (tmp_path / "src" / "config.test.ts").write_text("process.env.ONLY_IN_TESTS")
     (tmp_path / "node_modules").mkdir()
     (tmp_path / "node_modules" / "x.js").write_text("process.env.SHOULD_BE_IGNORED")
@@ -310,7 +373,10 @@ def test_env_example_undocumented_usage_is_found_across_the_tree(agent, tmp_path
     )
     assert len(r["findings"]) == 1
     f = r["findings"][0]
-    assert f["undocumented"] == ["REDIS_URL", "STRIPE_SECRET_KEY"]   # PORT ignored, node_modules skipped
+    assert f["undocumented"] == [
+        "REDIS_URL",
+        "STRIPE_SECRET_KEY",
+    ]  # PORT ignored, node_modules skipped
     assert "config.ts" in f["fix"] or "worker.py" in f["fix"]
 
 
@@ -323,8 +389,17 @@ def test_env_example_fully_documented_is_clean(agent, tmp_path):
 
 # --- registration -----------------------------------------------------------------------------------------
 
+
 def test_config_audit_is_wired_into_the_scan_rules():
     from agents.cli import AGENTS, RULES
+
     assert "config_audit" in AGENTS
     globs = {r[0] for r in RULES if r[2] == "config_audit"}
-    assert {"Dockerfile*", "AndroidManifest.xml", "Info.plist", "wrangler.toml", ".env.example", "railway.toml"} <= globs
+    assert {
+        "Dockerfile*",
+        "AndroidManifest.xml",
+        "Info.plist",
+        "wrangler.toml",
+        ".env.example",
+        "railway.toml",
+    } <= globs

@@ -15,7 +15,10 @@ GiveReward.OnServerEvent:Connect(function(player, targetUserId, amount)
 end)
 """
     issues = _issues(RobloxAuditAgent()._audit_remote_validation(code))
-    assert any("client-supplied data instead of relying on the trusted" in issue for issue in issues)
+    assert any(
+        "client-supplied data instead of relying on the trusted" in issue
+        for issue in issues
+    )
 
 
 def test_remote_handler_acting_on_trusted_player_argument_is_not_flagged_for_identity():
@@ -30,24 +33,28 @@ end)
 
 
 def test_rojo_project_mapping_server_source_into_replicated_storage_is_critical():
-    project_json = json.dumps({
-        "tree": {
-            "$className": "DataModel",
-            "ReplicatedStorage": {"Server": {"$path": "src/server"}},
+    project_json = json.dumps(
+        {
+            "tree": {
+                "$className": "DataModel",
+                "ReplicatedStorage": {"Server": {"$path": "src/server"}},
+            }
         }
-    })
+    )
     result = RobloxAuditAgent()._review_rojo_project_structure(project_json)
     assert any(f["severity"] == "CRITICAL" for f in result["findings"])
 
 
 def test_rojo_project_with_server_source_under_serverscriptservice_is_clean():
-    project_json = json.dumps({
-        "tree": {
-            "$className": "DataModel",
-            "ServerScriptService": {"Server": {"$path": "src/server"}},
-            "ReplicatedStorage": {"Shared": {"$path": "src/shared"}},
+    project_json = json.dumps(
+        {
+            "tree": {
+                "$className": "DataModel",
+                "ServerScriptService": {"Server": {"$path": "src/server"}},
+                "ReplicatedStorage": {"Shared": {"$path": "src/shared"}},
+            }
         }
-    })
+    )
     result = RobloxAuditAgent()._review_rojo_project_structure(project_json)
     assert result["findings"] == []
 
@@ -211,7 +218,10 @@ local player = Players.LocalPlayer
 player.leaderstats.Coins.Value += 100
 """
     issues = _issues(RobloxAuditAgent()._audit_server_authority(code))
-    assert any("leaderstats value is written directly from client-side code" in issue for issue in issues)
+    assert any(
+        "leaderstats value is written directly from client-side code" in issue
+        for issue in issues
+    )
 
 
 def test_server_only_code_without_localplayer_is_not_flagged():
@@ -257,7 +267,9 @@ local data = store:GetAsync(key)
 def test_bare_pcall_without_anonymous_function_still_protects_its_call():
     code = "local ok, data = pcall(store.GetAsync, store, key)"
     result = RobloxAuditAgent()._audit_datastore_usage(code)
-    assert not any("not wrapped in an enclosing pcall" in f["issue"] for f in result["findings"])
+    assert not any(
+        "not wrapped in an enclosing pcall" in f["issue"] for f in result["findings"]
+    )
 
 
 def test_unvalidated_handler_is_flagged_even_when_a_sibling_handler_validates():
@@ -272,7 +284,9 @@ Untrusted.OnServerEvent:Connect(function(player, amount)
 end)
 """
     result = RobloxAuditAgent()._audit_remote_validation(code)
-    validation_findings = [f for f in result["findings"] if "type/shape validation" in f["issue"]]
+    validation_findings = [
+        f for f in result["findings"] if "type/shape validation" in f["issue"]
+    ]
     assert len(validation_findings) == 1
 
 
@@ -297,7 +311,9 @@ SendMessage.OnServerEvent:Connect(function(player, chatText)
 end)
 """
     issues = _issues(RobloxAuditAgent()._audit_text_filtering(code))
-    assert any("no visible TextService/TextChatService filtering" in issue for issue in issues)
+    assert any(
+        "no visible TextService/TextChatService filtering" in issue for issue in issues
+    )
 
 
 def test_filtered_chat_text_broadcast_is_clean():
@@ -331,7 +347,9 @@ if player.Name == "TheOwner" then
 end
 """
     issues = _issues(RobloxAuditAgent()._audit_admin_backdoor(code))
-    assert any("player.Name" in issue and "hardcoded string" in issue for issue in issues)
+    assert any(
+        "player.Name" in issue and "hardcoded string" in issue for issue in issues
+    )
 
 
 def test_displayname_based_admin_check_is_flagged_critical():
@@ -362,7 +380,10 @@ end
 """
     result = RobloxAuditAgent()._audit_admin_backdoor(code)
     assert result["findings"] == []
-    assert result["note"] == "No player.Name/DisplayName string comparison found in this snippet"
+    assert (
+        result["note"]
+        == "No player.Name/DisplayName string comparison found in this snippet"
+    )
 
 
 # ── DataStore request budget ────────────────────────────────────────────
@@ -421,7 +442,9 @@ MarketplaceService.PromptProductPurchaseFinished:Connect(function(player, produc
 end)
 """
     result = RobloxAuditAgent()._review_receipt_processing(code)
-    assert any("appears to grant the reward directly" in f["issue"] for f in result["findings"])
+    assert any(
+        "appears to grant the reward directly" in f["issue"] for f in result["findings"]
+    )
 
 
 def test_prompt_purchase_finished_used_only_for_ui_feedback_is_clean():

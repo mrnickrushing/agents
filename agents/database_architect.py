@@ -48,7 +48,7 @@ def _balanced_call(text: str, open_paren: int) -> str:
         elif char == ")":
             depth -= 1
             if depth == 0:
-                return text[open_paren:index + 1]
+                return text[open_paren : index + 1]
     return text[open_paren:]
 
 
@@ -103,8 +103,15 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "schema_code": {"type": "string", "description": "The schema definition code (Drizzle or SQLAlchemy model)"},
-                        "database": {"type": "string", "enum": ["postgresql", "sqlite"], "description": "Database type"},
+                        "schema_code": {
+                            "type": "string",
+                            "description": "The schema definition code (Drizzle or SQLAlchemy model)",
+                        },
+                        "database": {
+                            "type": "string",
+                            "enum": ["postgresql", "sqlite"],
+                            "description": "Database type",
+                        },
                     },
                     "required": ["schema_code"],
                 },
@@ -115,7 +122,10 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "migration_code": {"type": "string", "description": "The migration code"},
+                        "migration_code": {
+                            "type": "string",
+                            "description": "The migration code",
+                        },
                     },
                     "required": ["migration_code"],
                 },
@@ -126,7 +136,10 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The code to scan for N+1 patterns"},
+                        "code": {
+                            "type": "string",
+                            "description": "The code to scan for N+1 patterns",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -137,7 +150,10 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "schema_code": {"type": "string", "description": "The schema definition code"},
+                        "schema_code": {
+                            "type": "string",
+                            "description": "The schema definition code",
+                        },
                     },
                     "required": ["schema_code"],
                 },
@@ -148,7 +164,10 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "Application data-access code"},
+                        "code": {
+                            "type": "string",
+                            "description": "Application data-access code",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -164,7 +183,9 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
             "review_escape_hatches": self._review_escape_hatches,
         }
 
-    def _review_index_coverage(self, schema_code: str, database: str = "postgresql") -> Dict[str, Any]:
+    def _review_index_coverage(
+        self, schema_code: str, database: str = "postgresql"
+    ) -> Dict[str, Any]:
         """Review index coverage on foreign-key-like columns and other hot paths."""
         findings = []
 
@@ -183,12 +204,14 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 schema_code,
                 re.IGNORECASE,
             ):
-                findings.append({
-                    "severity": "MEDIUM",
-                    "column": column_name,
-                    "issue": f"Foreign key column '{column_name}' has no visible index — joins/filters on it will full-scan as the table grows",
-                    "fix": f"Add: .index() to the column definition, or index('{column_name}_idx').on(table.{field_name})"
-                })
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "column": column_name,
+                        "issue": f"Foreign key column '{column_name}' has no visible index — joins/filters on it will full-scan as the table grows",
+                        "fix": f"Add: .index() to the column definition, or index('{column_name}_idx').on(table.{field_name})",
+                    }
+                )
                 if self.verbose:
                     logger.debug(f"[database_architect] Missing FK index: {field_name}")
 
@@ -199,16 +222,24 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 continue
             # unique=True also creates an implicit index in SQLAlchemy
             if not re.search(r"index\s*=\s*True|unique\s*=\s*True", col_def):
-                findings.append({
-                    "severity": "MEDIUM",
-                    "column": column_name,
-                    "issue": f"Foreign key column '{column_name}' has no index=True — joins/filters will full-scan",
-                    "fix": f"Add index=True to the Column/mapped_column, or create a separate Index()"
-                })
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "column": column_name,
+                        "issue": f"Foreign key column '{column_name}' has no index=True — joins/filters will full-scan",
+                        "fix": "Add index=True to the Column/mapped_column, or create a separate Index()",
+                    }
+                )
                 if self.verbose:
-                    logger.debug(f"[database_architect] SQLAlchemy FK without index: {column_name}")
+                    logger.debug(
+                        f"[database_architect] SQLAlchemy FK without index: {column_name}"
+                    )
 
-        return {"database": database, "findings": findings, "total_issues": len(findings)}
+        return {
+            "database": database,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
     def _review_migration_safety(self, migration_code: str) -> Dict[str, Any]:
         """Review a migration for safety against a populated table."""
@@ -219,48 +250,70 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         # only in upgrade/forward SQL, while still checking whether downgrade
         # itself is missing.
         downgrade_match = re.search(r"(?m)^\s*def\s+downgrade\s*\(", migration_code)
-        forward_code = migration_code[:downgrade_match.start()] if downgrade_match else migration_code
-        code_lines = forward_code.split('\n')
+        forward_code = (
+            migration_code[: downgrade_match.start()]
+            if downgrade_match
+            else migration_code
+        )
+        code_lines = forward_code.split("\n")
         for i, line in enumerate(code_lines, 1):
             stripped = line.lstrip()
-            if stripped.startswith('#') or stripped.startswith('--'):
+            if stripped.startswith("#") or stripped.startswith("--"):
                 continue
             if re.search(r"\b(DROP\s+COLUMN|op\.drop_column)\b", line, re.IGNORECASE):
-                findings.append({
-                    "severity": "CRITICAL",
-                    "issue": f"Line {i}: forward migration drops a column and its data",
-                    "fix": "Use an expand/migrate/contract rollout: stop reads, back up or migrate data, then drop in a later deploy"
-                })
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": f"Line {i}: forward migration drops a column and its data",
+                        "fix": "Use an expand/migrate/contract rollout: stop reads, back up or migrate data, then drop in a later deploy",
+                    }
+                )
                 if self.verbose:
                     logger.debug(f"[database_architect] DROP detected at line {i}")
 
         # Check for NOT NULL without default on ADD COLUMN
         for statement in re.findall(r"(?is)ADD\s+COLUMN\b.*?(?:;|$)", forward_code):
-            if re.search(r"NOT\s+NULL", statement, re.IGNORECASE) and not re.search(r"\bDEFAULT\b", statement, re.IGNORECASE):
-                findings.append({
-                    "severity": "CRITICAL",
-                    "issue": "Adding a NOT NULL column without a default/backfill will fail when rows already exist",
-                    "fix": "Add it nullable, backfill in batches, then add the NOT NULL constraint (or use a safe server default)",
-                })
+            if re.search(r"NOT\s+NULL", statement, re.IGNORECASE) and not re.search(
+                r"\bDEFAULT\b", statement, re.IGNORECASE
+            ):
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": "Adding a NOT NULL column without a default/backfill will fail when rows already exist",
+                        "fix": "Add it nullable, backfill in batches, then add the NOT NULL constraint (or use a safe server default)",
+                    }
+                )
 
         for match in re.finditer(r"op\.add_column\s*(\()", forward_code):
             call = _balanced_call(forward_code, match.start(1))
-            if re.search(r"nullable\s*=\s*False", call) and not re.search(r"server_default\s*=", call):
-                findings.append({
-                    "severity": "CRITICAL",
-                    "issue": "Alembic adds a nullable=False column without server_default/backfill",
-                    "fix": "Use a phased migration: add nullable, backfill, then alter to nullable=False",
-                })
+            if re.search(r"nullable\s*=\s*False", call) and not re.search(
+                r"server_default\s*=", call
+            ):
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": "Alembic adds a nullable=False column without server_default/backfill",
+                        "fix": "Use a phased migration: add nullable, backfill, then alter to nullable=False",
+                    }
+                )
 
         # Alembic revisions are tracked and should run once; demanding IF NOT
         # EXISTS on every ADD COLUMN hides drift and was a noisy false positive.
 
-        if re.search(r"ALTER\s+COLUMN|op\.alter_column\s*\([^)]*type_\s*=", forward_code, re.IGNORECASE | re.DOTALL) and not re.search(r"CAST|USING|::|postgresql_using", forward_code, re.IGNORECASE):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Column type change has no explicit cast/USING expression",
-                "fix": "Provide USING/postgresql_using and verify the conversion against production-like data",
-            })
+        if re.search(
+            r"ALTER\s+COLUMN|op\.alter_column\s*\([^)]*type_\s*=",
+            forward_code,
+            re.IGNORECASE | re.DOTALL,
+        ) and not re.search(
+            r"CAST|USING|::|postgresql_using", forward_code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Column type change has no explicit cast/USING expression",
+                    "fix": "Provide USING/postgresql_using and verify the conversion against production-like data",
+                }
+            )
 
         # NEW: Check downgrade safety
         if "def downgrade" in migration_code or "downgrade" in migration_code.lower():
@@ -269,11 +322,13 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 downgrade_content = migration_code.split("def downgrade", 1)[1]
                 body = downgrade_content.split("def ", 1)[0]
                 if not body.strip() or re.search(r"(?m)^\s*pass\s*(?:#.*)?$", body):
-                    findings.append({
-                        "severity": "MEDIUM",
-                        "issue": "Downgrade function is empty (pass) — this migration cannot be safely rolled back",
-                        "fix": "Implement downgrade() to reverse any schema changes made in upgrade()"
-                    })
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "issue": "Downgrade function is empty (pass) — this migration cannot be safely rolled back",
+                            "fix": "Implement downgrade() to reverse any schema changes made in upgrade()",
+                        }
+                    )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -296,7 +351,9 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
             r"\.(?:map|forEach)\s*\(\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*\{(.*?)\}\s*\)",
             r"for\s*\([^)]*\bof\b[^)]*\)\s*\{(.*?)\}",
         ):
-            loop_bodies.extend(m.group(1) for m in re.finditer(pattern, code, re.DOTALL))
+            loop_bodies.extend(
+                m.group(1) for m in re.finditer(pattern, code, re.DOTALL)
+            )
 
         # Python indentation-aware for loops.
         lines = code.splitlines()
@@ -306,18 +363,23 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 continue
             indent = len(match.group(1))
             body = []
-            for following in lines[index + 1:]:
-                if following.strip() and len(following) - len(following.lstrip()) <= indent:
+            for following in lines[index + 1 :]:
+                if (
+                    following.strip()
+                    and len(following) - len(following.lstrip()) <= indent
+                ):
                     break
                 body.append(following)
             loop_bodies.append("\n".join(body))
 
         if any(query_re.search(body) for body in loop_bodies):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Database query executes inside a loop (N+1 query pattern)",
-                "fix": "Collect the keys first, fetch them in one IN/JOIN/preload query, then map the results in memory",
-            })
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Database query executes inside a loop (N+1 query pattern)",
+                    "fix": "Collect the keys first, fetch them in one IN/JOIN/preload query, then map the results in memory",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -328,39 +390,80 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         # Review the actual email declaration, not the first `*email*` token
         # anywhere in the file (sender_email and email_enabled are commonly
         # non-unique and should not influence this check).
-        drizzle_email = re.search(r"(?m)^\s*email\s*:\s*([^\n]+)", schema_code, re.IGNORECASE)
-        sqlalchemy_email = next((call for name, call in _assignment_calls(schema_code, "mapped_column|Column") if name.lower() == "email"), None)
+        drizzle_email = re.search(
+            r"(?m)^\s*email\s*:\s*([^\n]+)", schema_code, re.IGNORECASE
+        )
+        sqlalchemy_email = next(
+            (
+                call
+                for name, call in _assignment_calls(schema_code, "mapped_column|Column")
+                if name.lower() == "email"
+            ),
+            None,
+        )
         email_decl = drizzle_email.group(1) if drizzle_email else sqlalchemy_email
-        has_table_unique = bool(re.search(r"unique(?:Index|_constraint|Constraint)?\s*\([^\n]*email", schema_code, re.IGNORECASE))
-        if email_decl and not re.search(r"\.unique\s*\(|unique\s*=\s*True", email_decl, re.IGNORECASE) and not has_table_unique:
-            findings.append({
-                "severity": "MEDIUM",
-                "column": "email",
-                "issue": "Email column has no visible database unique constraint — application-only checks race",
-                "fix": "Add a database UNIQUE constraint/index when email identifies an account; suppress this finding if duplicate emails are intentional",
-            })
+        has_table_unique = bool(
+            re.search(
+                r"unique(?:Index|_constraint|Constraint)?\s*\([^\n]*email",
+                schema_code,
+                re.IGNORECASE,
+            )
+        )
+        if (
+            email_decl
+            and not re.search(
+                r"\.unique\s*\(|unique\s*=\s*True", email_decl, re.IGNORECASE
+            )
+            and not has_table_unique
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "column": "email",
+                    "issue": "Email column has no visible database unique constraint — application-only checks race",
+                    "fix": "Add a database UNIQUE constraint/index when email identifies an account; suppress this finding if duplicate emails are intentional",
+                }
+            )
 
         # A name ending in _id/Id is only suggestive, so keep this lower
         # confidence and skip IDs that are commonly external identifiers.
-        external_ids = {"id", "event_id", "request_id", "provider_id", "external_id", "stripe_id", "plaid_id"}
+        external_ids = {
+            "id",
+            "event_id",
+            "request_id",
+            "provider_id",
+            "external_id",
+            "stripe_id",
+            "plaid_id",
+        }
         candidates = []
-        for match in re.finditer(r"(?m)^\s*(\w+(?:_id|Id))\s*[:=]([^\n]+)", schema_code):
+        for match in re.finditer(
+            r"(?m)^\s*(\w+(?:_id|Id))\s*[:=]([^\n]+)", schema_code
+        ):
             name, declaration = match.group(1), match.group(2)
-            if name.lower() in external_ids or re.search(r"\.references\s*\(|ForeignKey\s*\(", declaration):
+            if name.lower() in external_ids or re.search(
+                r"\.references\s*\(|ForeignKey\s*\(", declaration
+            ):
                 continue
             candidates.append(name)
         for name, call in _assignment_calls(schema_code, "mapped_column|Column"):
-            if not (name.endswith("_id") or name.endswith("Id")) or name.lower() in external_ids or "ForeignKey" in call:
+            if (
+                not (name.endswith("_id") or name.endswith("Id"))
+                or name.lower() in external_ids
+                or "ForeignKey" in call
+            ):
                 continue
             candidates.append(name)
         for col_name in sorted(set(candidates)):
-            findings.append({
-                "severity": "LOW",
-                "confidence": "medium",
-                "column": col_name,
-                "issue": f"Column '{col_name}' looks relational but has no visible foreign-key constraint",
-                "fix": "Add .references(...)/ForeignKey(...) if this points to an internal table; otherwise document or rename the external identifier",
-            })
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "confidence": "medium",
+                    "column": col_name,
+                    "issue": f"Column '{col_name}' looks relational but has no visible foreign-key constraint",
+                    "fix": "Add .references(...)/ForeignKey(...) if this points to an internal table; otherwise document or rename the external identifier",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -369,30 +472,57 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         findings = []
         patterns = [
             (r"\.sql\s*`[^`]*\$\{", "Drizzle sql`` query interpolates runtime values"),
-            (r"prisma\.\$(?:queryRaw|executeRaw)\s*\(\s*`[^`]*\$\{", "Prisma $queryRaw/$executeRaw template interpolation can inject SQL"),
-            (r"\.query\s*\(\s*[\"'`][^\"'`]*\+\s*\w", "TypeORM/raw query built via string concatenation"),
+            (
+                r"prisma\.\$(?:queryRaw|executeRaw)\s*\(\s*`[^`]*\$\{",
+                "Prisma $queryRaw/$executeRaw template interpolation can inject SQL",
+            ),
+            (
+                r"\.query\s*\(\s*[\"'`][^\"'`]*\+\s*\w",
+                "TypeORM/raw query built via string concatenation",
+            ),
             (r"\btext\s*\(\s*f[\"'][^\"']*\{", "SQLAlchemy text() built from f-string"),
-            (r"\bliteral_column\s*\(\s*f?[\"'][^\"']*\{", "SQLAlchemy literal_column() receives interpolated expression"),
-            (r"\.(?:findRaw|aggregate)\s*\(\s*\{[\s\S]{0,300}\$(?:where|match)\s*:\s*(?:req|request|ctx)\.", "Mongoose raw query pipeline uses request-controlled object directly"),
-            (r"\.raw\s*\(\s*`[^`]*\$\{", "Knex raw() query uses template interpolation"),
+            (
+                r"\bliteral_column\s*\(\s*f?[\"'][^\"']*\{",
+                "SQLAlchemy literal_column() receives interpolated expression",
+            ),
+            (
+                r"\.(?:findRaw|aggregate)\s*\(\s*\{[\s\S]{0,300}\$(?:where|match)\s*:\s*(?:req|request|ctx)\.",
+                "Mongoose raw query pipeline uses request-controlled object directly",
+            ),
+            (
+                r"\.raw\s*\(\s*`[^`]*\$\{",
+                "Knex raw() query uses template interpolation",
+            ),
         ]
         for pattern, issue in patterns:
             if re.search(pattern, code, re.IGNORECASE | re.DOTALL):
-                findings.append({
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": issue,
+                        "fix": "Use bound parameters/placeholders and pass user values separately from SQL text.",
+                    }
+                )
+        if re.search(
+            r"rename_column|ALTER\s+TABLE\s+\S+\s+RENAME\s+COLUMN", code, re.IGNORECASE
+        ) and re.search(r"BEGIN|transaction", code, re.IGNORECASE):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Column rename appears inside a transaction block; mixed app versions can fail during rollout",
+                    "fix": "Use expand/contract migrations with backward-compatible reads before renaming/dropping columns.",
+                }
+            )
+        if (
+            re.search(r"add_column|ADD\s+COLUMN", code, re.IGNORECASE)
+            and re.search(r"NOT\s+NULL", code, re.IGNORECASE)
+            and not re.search(r"default|server_default", code, re.IGNORECASE)
+        ):
+            findings.append(
+                {
                     "severity": "HIGH",
-                    "issue": issue,
-                    "fix": "Use bound parameters/placeholders and pass user values separately from SQL text.",
-                })
-        if re.search(r"rename_column|ALTER\s+TABLE\s+\S+\s+RENAME\s+COLUMN", code, re.IGNORECASE) and re.search(r"BEGIN|transaction", code, re.IGNORECASE):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Column rename appears inside a transaction block; mixed app versions can fail during rollout",
-                "fix": "Use expand/contract migrations with backward-compatible reads before renaming/dropping columns.",
-            })
-        if re.search(r"add_column|ADD\s+COLUMN", code, re.IGNORECASE) and re.search(r"NOT\s+NULL", code, re.IGNORECASE) and not re.search(r"default|server_default", code, re.IGNORECASE):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Adds NOT NULL column without default/backfill",
-                "fix": "Add nullable column first, backfill existing rows, then enforce NOT NULL.",
-            })
+                    "issue": "Adds NOT NULL column without default/backfill",
+                    "fix": "Add nullable column first, backfill existing rows, then enforce NOT NULL.",
+                }
+            )
         return {"findings": findings, "total_issues": len(findings)}

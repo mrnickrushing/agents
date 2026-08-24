@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
@@ -101,15 +101,15 @@ When reviewing billing code or answering billing questions:
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The webhook handler code to review"
+                            "description": "The webhook handler code to review",
                         },
                         "events_handled": {
                             "type": "string",
-                            "description": "Comma-separated list of Stripe events this handler processes"
-                        }
+                            "description": "Comma-separated list of Stripe events this handler processes",
+                        },
                     },
-                    "required": ["code"]
-                }
+                    "required": ["code"],
+                },
             },
             {
                 "name": "generate_webhook_handlers",
@@ -119,21 +119,21 @@ When reviewing billing code or answering billing questions:
                     "properties": {
                         "events": {
                             "type": "string",
-                            "description": "Comma-separated list of Stripe events to handle"
+                            "description": "Comma-separated list of Stripe events to handle",
                         },
                         "database": {
                             "type": "string",
                             "enum": ["sqlite", "postgresql"],
-                            "description": "Database type for subscription storage"
+                            "description": "Database type for subscription storage",
                         },
                         "orm": {
                             "type": "string",
                             "enum": ["drizzle", "prisma", "raw", "better-sqlite3"],
-                            "description": "ORM or query method in use"
-                        }
+                            "description": "ORM or query method in use",
+                        },
                     },
-                    "required": ["events"]
-                }
+                    "required": ["events"],
+                },
             },
             {
                 "name": "setup_revenuecat_sync",
@@ -144,21 +144,21 @@ When reviewing billing code or answering billing questions:
                         "backend": {
                             "type": "string",
                             "enum": ["node_express", "fastapi"],
-                            "description": "Backend framework"
+                            "description": "Backend framework",
                         },
                         "auth_method": {
                             "type": "string",
                             "enum": ["jwt", "apple_sign_in", "firebase"],
-                            "description": "Mobile auth method in use"
+                            "description": "Mobile auth method in use",
                         },
                         "database": {
                             "type": "string",
                             "enum": ["sqlite", "postgresql"],
-                            "description": "Database for entitlement storage"
-                        }
+                            "description": "Database for entitlement storage",
+                        },
                     },
-                    "required": ["backend"]
-                }
+                    "required": ["backend"],
+                },
             },
             {
                 "name": "design_subscription_model",
@@ -168,19 +168,19 @@ When reviewing billing code or answering billing questions:
                     "properties": {
                         "product_name": {
                             "type": "string",
-                            "description": "Name of the product/SaaS"
+                            "description": "Name of the product/SaaS",
                         },
                         "tiers": {
                             "type": "string",
-                            "description": "JSON array of tier objects: {name, price_monthly, price_yearly, features[], trial_days}"
+                            "description": "JSON array of tier objects: {name, price_monthly, price_yearly, features[], trial_days}",
                         },
                         "mobile_iap": {
                             "type": "boolean",
-                            "description": "Whether in-app purchases are also offered via RevenueCat"
-                        }
+                            "description": "Whether in-app purchases are also offered via RevenueCat",
+                        },
                     },
-                    "required": ["product_name", "tiers"]
-                }
+                    "required": ["product_name", "tiers"],
+                },
             },
             {
                 "name": "audit_billing_security",
@@ -190,16 +190,16 @@ When reviewing billing code or answering billing questions:
                     "properties": {
                         "integration_code": {
                             "type": "string",
-                            "description": "The billing integration code to audit"
+                            "description": "The billing integration code to audit",
                         },
                         "concerns": {
                             "type": "string",
-                            "description": "Specific billing security concerns to check"
-                        }
+                            "description": "Specific billing security concerns to check",
+                        },
                     },
-                    "required": ["integration_code"]
-                }
-            }
+                    "required": ["integration_code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -211,27 +211,73 @@ When reviewing billing code or answering billing questions:
             "audit_billing_security": self._audit_billing_security,
         }
 
-    def _review_webhook_handler(self, code: str, events_handled: str = "") -> Dict[str, Any]:
+    def _review_webhook_handler(
+        self, code: str, events_handled: str = ""
+    ) -> Dict[str, Any]:
         """Review webhook handler code."""
         findings = []
         code_lower = code.lower()
 
-        if "sig" not in code_lower and "signature" not in code_lower and "verif" not in code_lower:
-            findings.append({"severity": "CRITICAL", "issue": "No webhook signature verification — anyone can send fake events"})
+        if (
+            "sig" not in code_lower
+            and "signature" not in code_lower
+            and "verif" not in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "No webhook signature verification — anyone can send fake events",
+                }
+            )
         if "idempoten" not in code_lower:
-            findings.append({"severity": "HIGH", "issue": "No idempotency check — duplicate webhooks will be processed twice"})
-        if "200" not in code and "sendstatus" not in code_lower and "status(200)" not in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "No explicit 200 response — Stripe will retry, increasing duplicates"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "No idempotency check — duplicate webhooks will be processed twice",
+                }
+            )
+        if (
+            "200" not in code
+            and "sendstatus" not in code_lower
+            and "status(200)" not in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No explicit 200 response — Stripe will retry, increasing duplicates",
+                }
+            )
         if "try" not in code_lower and "catch" not in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "No error handling — exceptions will cause 500s and Stripe retries"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No error handling — exceptions will cause 500s and Stripe retries",
+                }
+            )
 
-        events = [e.strip() for e in events_handled.split(",")] if events_handled else []
-        critical_events = ["customer.subscription.deleted", "invoice.payment_failed", "checkout.session.completed"]
+        events = (
+            [e.strip() for e in events_handled.split(",")] if events_handled else []
+        )
+        critical_events = [
+            "customer.subscription.deleted",
+            "invoice.payment_failed",
+            "checkout.session.completed",
+        ]
         missing = [e for e in critical_events if e not in events] if events else []
 
-        return {"findings": findings, "events_reviewed": events, "missing_critical_events": missing, "total_issues": len(findings)}
+        return {
+            "findings": findings,
+            "events_reviewed": events,
+            "missing_critical_events": missing,
+            "total_issues": len(findings),
+        }
 
-    def _generate_webhook_handlers(self, events: str = "customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed", database: str = "postgresql", orm: str = "drizzle") -> Dict[str, Any]:
+    def _generate_webhook_handlers(
+        self,
+        events: str = "customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.paid,invoice.payment_failed",
+        database: str = "postgresql",
+        orm: str = "drizzle",
+    ) -> Dict[str, Any]:
         """Return event list and handler structure."""
         event_list = [e.strip() for e in events.split(",")]
         return {
@@ -243,10 +289,15 @@ When reviewing billing code or answering billing questions:
                 "idempotency_check": "const processed = await db.select().from(webhookEvents).where(eq(webhookEvents.stripeEventId, event.id)); if (processed.length) return res.status(200).send();",
                 "event_dispatch": event_list,
                 "response": "res.status(200).send(); // Always return 200 immediately after verification",
-            }
+            },
         }
 
-    def _setup_revenuecat_sync(self, backend: str = "node_express", auth_method: str = "jwt", database: str = "postgresql") -> Dict[str, Any]:
+    def _setup_revenuecat_sync(
+        self,
+        backend: str = "node_express",
+        auth_method: str = "jwt",
+        database: str = "postgresql",
+    ) -> Dict[str, Any]:
         """Return RevenueCat sync structure."""
         return {
             "backend": backend,
@@ -259,13 +310,21 @@ When reviewing billing code or answering billing questions:
             ],
             "receipt_validation": {
                 "method": "POST https://api.revenuecat.com/v1/receipts",
-                "headers": {"Authorization": "Bearer {REVENUECAT_API_KEY}", "Content-Type": "application/json"},
+                "headers": {
+                    "Authorization": "Bearer {REVENUECAT_API_KEY}",
+                    "Content-Type": "application/json",
+                },
                 "body": {"app_user_id": "{user_id}", "fetch_token": "{receipt_data}"},
             },
             "entitlement_sync_pattern": "Stripe webhook → update DB → RevenueCat webhook → update DB → user polls /entitlements on app resume",
         }
 
-    def _design_subscription_model(self, product_name: str, tiers: str = '[{"name":"Free","price_monthly":0,"price_yearly":0,"features":["basic access"],"trial_days":0}]', mobile_iap: bool = False) -> Dict[str, Any]:
+    def _design_subscription_model(
+        self,
+        product_name: str,
+        tiers: str = '[{"name":"Free","price_monthly":0,"price_yearly":0,"features":["basic access"],"trial_days":0}]',
+        mobile_iap: bool = False,
+    ) -> Dict[str, Any]:
         """Parse and return subscription model structure."""
         try:
             tier_data = json.loads(tiers)
@@ -277,33 +336,58 @@ When reviewing billing code or answering billing questions:
             "tiers": tier_data,
             "mobile_iap": mobile_iap,
             "stripe_products": [
-                {"tier": t.get("name", "Unknown"), "monthly_price_id": f"price_monthly_{t.get('name', 'unknown').lower()}", "yearly_price_id": f"price_yearly_{t.get('name', 'unknown').lower()}"}
-                for t in tier_data if t.get("price_monthly", 0) > 0
+                {
+                    "tier": t.get("name", "Unknown"),
+                    "monthly_price_id": f"price_monthly_{t.get('name', 'unknown').lower()}",
+                    "yearly_price_id": f"price_yearly_{t.get('name', 'unknown').lower()}",
+                }
+                for t in tier_data
+                if t.get("price_monthly", 0) > 0
             ],
-            "revenuecat_entitlements": ["premium", "pro", "enterprise"] if mobile_iap else [],
+            "revenuecat_entitlements": (
+                ["premium", "pro", "enterprise"] if mobile_iap else []
+            ),
         }
 
-    def _audit_billing_security(self, integration_code: str, concerns: str = "") -> Dict[str, Any]:
+    def _audit_billing_security(
+        self, integration_code: str, concerns: str = ""
+    ) -> Dict[str, Any]:
         """Audit billing code for security issues."""
         findings = []
         code_lower = integration_code.lower()
 
         if re.search(r"\bsk_(?:live|test)_[A-Za-z0-9]{12,}", integration_code):
-            findings.append({"severity": "CRITICAL", "issue": "Stripe secret key hardcoded in source code — move to environment variable immediately"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Stripe secret key hardcoded in source code — move to environment variable immediately",
+                }
+            )
         # Only report a client-trusted receipt when the code actually reads a
         # receipt field from request data. Broad proximity matching made types
         # such as `PushReceipt` and unrelated `request` calls look like billing
         # validation paths.
-        handles_client_receipt = bool(re.search(
-            r"(?:req\.body|request\.(?:json|data|body))\s*"
-            r"(?:\.\s*receipt\w*|\[\s*[\"']receipt\w*[\"']\s*\]|\.get\(\s*[\"']receipt\w*[\"']\s*\))|"
-            r"\{[^}\n]*\breceipt\w*\b[^}\n]*\}\s*=\s*(?:req\.body|request\.(?:json|data|body))|"
-            r"\breceipt\w*\s*[:=]\s*(?:req\.body|request\.(?:json|data|body))",
-            integration_code,
-            re.IGNORECASE,
-        ))
-        if handles_client_receipt and "verify" not in code_lower and "validate" not in code_lower:
-            findings.append({"severity": "CRITICAL", "issue": "Receipt data handled without server-side validation — client-trusted purchase state is exploitable"})
+        handles_client_receipt = bool(
+            re.search(
+                r"(?:req\.body|request\.(?:json|data|body))\s*"
+                r"(?:\.\s*receipt\w*|\[\s*[\"']receipt\w*[\"']\s*\]|\.get\(\s*[\"']receipt\w*[\"']\s*\))|"
+                r"\{[^}\n]*\breceipt\w*\b[^}\n]*\}\s*=\s*(?:req\.body|request\.(?:json|data|body))|"
+                r"\breceipt\w*\s*[:=]\s*(?:req\.body|request\.(?:json|data|body))",
+                integration_code,
+                re.IGNORECASE,
+            )
+        )
+        if (
+            handles_client_receipt
+            and "verify" not in code_lower
+            and "validate" not in code_lower
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Receipt data handled without server-side validation — client-trusted purchase state is exploitable",
+                }
+            )
         # Look for an actual auth marker, not just the substring "auth" — that also
         # matches "author", unrelated "Authorization" header echoing, etc., which made
         # this check nearly impossible to trigger even when auth really was missing.
@@ -312,22 +396,49 @@ When reviewing billing code or answering billing questions:
             integration_code,
             re.IGNORECASE,
         )
-        updates_customer = bool(re.search(r'(?:stripe\.)?customers?\.update\s*\(|updateCustomer\s*\(|/customers?/\S*.*(?:put|patch)', integration_code, re.IGNORECASE))
+        updates_customer = bool(
+            re.search(
+                r"(?:stripe\.)?customers?\.update\s*\(|updateCustomer\s*\(|/customers?/\S*.*(?:put|patch)",
+                integration_code,
+                re.IGNORECASE,
+            )
+        )
         if updates_customer and not has_auth_marker:
-            findings.append({"severity": "HIGH", "issue": "Customer update without auth check — any user could modify another's billing info"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Customer update without auth check — any user could modify another's billing info",
+                }
+            )
 
-        if re.search(r"(?:amount|price|price_id|product_id)\s*:\s*(?:req|request)\.(?:body|json|data)", integration_code, re.IGNORECASE):
-            findings.append({
-                "severity": "CRITICAL",
-                "issue": "Checkout amount/product identifier is accepted directly from client input",
-                "fix": "Resolve allowed product/price IDs server-side from a fixed catalog; never trust a client-supplied amount",
-            })
+        if re.search(
+            r"(?:amount|price|price_id|product_id)\s*:\s*(?:req|request)\.(?:body|json|data)",
+            integration_code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Checkout amount/product identifier is accepted directly from client input",
+                    "fix": "Resolve allowed product/price IDs server-side from a fixed catalog; never trust a client-supplied amount",
+                }
+            )
 
-        if re.search(r"(?:premium|entitled|subscription_active)\s*=\s*(?:req|request)\.(?:body|json|data)", integration_code, re.IGNORECASE):
-            findings.append({
-                "severity": "CRITICAL",
-                "issue": "Entitlement state is assigned directly from client input",
-                "fix": "Derive entitlements from a verified Stripe/RevenueCat webhook or server-side provider lookup",
-            })
+        if re.search(
+            r"(?:premium|entitled|subscription_active)\s*=\s*(?:req|request)\.(?:body|json|data)",
+            integration_code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Entitlement state is assigned directly from client input",
+                    "fix": "Derive entitlements from a verified Stripe/RevenueCat webhook or server-side provider lookup",
+                }
+            )
 
-        return {"findings": findings, "concerns": concerns, "total_issues": len(findings)}
+        return {
+            "findings": findings,
+            "concerns": concerns,
+            "total_issues": len(findings),
+        }

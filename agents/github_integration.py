@@ -20,7 +20,8 @@ import hashlib
 import hmac
 import json
 import logging
-import re
+import os
+import urllib.request
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -58,14 +59,17 @@ class GitHubIntegration:
     def verify_signature(self, payload_bytes: bytes, signature_header: str) -> bool:
         """Verify GitHub's X-Hub-Signature-256 webhook signature."""
         if not self.webhook_secret:
-            return True  # No secret configured — skip verification
+            return False
         if not signature_header.startswith("sha256="):
             return False
-        expected = "sha256=" + hmac.new(
-            self.webhook_secret.encode("utf-8"),
-            payload_bytes,
-            hashlib.sha256,
-        ).hexdigest()
+        expected = (
+            "sha256="
+            + hmac.new(
+                self.webhook_secret.encode("utf-8"),
+                payload_bytes,
+                hashlib.sha256,
+            ).hexdigest()
+        )
         return hmac.compare_digest(expected, signature_header)
 
     # ── Event dispatch ────────────────────────────────────────────────
@@ -90,7 +94,10 @@ class GitHubIntegration:
             finding dicts.  If None, returns a no-op result.
         """
         if event_type != "pull_request":
-            return {"action": "ignored", "reason": f"Unsupported event type: {event_type}"}
+            return {
+                "action": "ignored",
+                "reason": f"Unsupported event type: {event_type}",
+            }
 
         action = payload.get("action", "")
         if action not in {"opened", "synchronize", "labeled"}:
@@ -99,10 +106,13 @@ class GitHubIntegration:
         if action == "labeled":
             label = payload.get("label", {}).get("name", "")
             if label not in {"agents-scan", "security-review"}:
-                return {"action": "ignored", "reason": f"Label '{label}' not an opt-in label"}
+                return {
+                    "action": "ignored",
+                    "reason": f"Label '{label}' not an opt-in label",
+                }
 
         pr = payload.get("pull_request", {})
-        diff = pr.get("body", "") or ""  # PR description as fallback; real usage fetches diff via API
+        diff = _fetch_pr_diff(pr) or pr.get("body", "") or ""
         repo = payload.get("repository", {}).get("full_name", "unknown/unknown")
         pr_number = pr.get("number", 0)
 
@@ -143,12 +153,14 @@ class GitHubIntegration:
         """
         try:
             import yaml  # type: ignore
+
             return yaml.safe_load(agents_yaml_content) or {}
         except Exception:  # noqa: BLE001
             return {}
 
 
 # ── Comment formatting ─────────────────────────────────────────────────────
+
 
 def format_pr_comment(
     finding: Dict[str, Any],
@@ -187,7 +199,9 @@ def format_pr_comment(
     return "\n".join(lines)
 
 
-def format_scan_summary(findings: List[Dict[str, Any]], repo: str = "", pr_number: int = 0) -> str:
+def format_scan_summary(
+    findings: List[Dict[str, Any]], repo: str = "", pr_number: int = 0
+) -> str:
     """Return a top-level PR summary comment."""
     if not findings:
         return (
@@ -214,3 +228,111 @@ def format_scan_summary(findings: List[Dict[str, Any]], repo: str = "", pr_numbe
         "> Review each inline comment for details and suggested fixes.",
     ]
     return "\n".join(summary_lines)
+
+
+def _fetch_pr_diff(pr: Dict[str, Any]) -> str:
+    url = pr.get("diff_url")
+    token = os.getenv("GITHUB_TOKEN")
+    if not url or not token:
+        return ""
+    headers = {
+        "Accept": "application/vnd.github.v3.diff",
+        "User-Agent": "rushingtech-agents",
+        "Authorization": f"Bearer {token}",
+    }
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.read(2_000_000).decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return ""
+
+
+def _post_pr_summary(payload: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    token = os.getenv("GITHUB_TOKEN")
+    comments_url = (payload.get("pull_request") or {}).get("comments_url")
+    if not token or not comments_url:
+        return False
+    body = format_scan_summary(
+        result.get("findings", []),
+        repo=result.get("repo", ""),
+        pr_number=result.get("pr_number", 0),
+    )
+    request = urllib.request.Request(
+        comments_url,
+        data=json.dumps({"body": body}).encode(),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "rushingtech-agents",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return 200 <= response.status < 300
+    except (OSError, ValueError):
+        return False
+
+
+def create_flask_app(integration: GitHubIntegration):
+    try:
+        from flask import Flask, jsonify, request
+    except ImportError as exc:
+        raise ImportError(
+            "Install the web extra: pip install 'rushingtech-agents[web]'"
+        ) from exc
+
+    app = Flask("agents-github-integration")
+    processed_deliveries: set[str] = set()
+
+    @app.post("/webhook")
+    def webhook():
+        raw = request.get_data(cache=True)
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        if not integration.verify_signature(raw, signature):
+            return jsonify({"error": "invalid signature"}), 401
+        delivery_id = request.headers.get("X-GitHub-Delivery", "")
+        if delivery_id and delivery_id in processed_deliveries:
+            return jsonify({"action": "duplicate", "delivery_id": delivery_id})
+        payload = request.get_json(silent=True) or {}
+
+        def scan_diff(diff: str) -> List[Dict[str, Any]]:
+            from agents.security_audit import SecurityAuditAgent
+
+            return (
+                SecurityAuditAgent()._audit_hardcoded_secrets(diff).get("findings", [])
+            )
+
+        event = request.headers.get("X-GitHub-Event", "")
+        result = integration.handle_event(event, payload, scan_diff)
+        result["summary_comment_posted"] = _post_pr_summary(payload, result)
+        if delivery_id:
+            processed_deliveries.add(delivery_id)
+            if len(processed_deliveries) > 10_000:
+                processed_deliveries.pop()
+        return jsonify(result)
+
+    return app
+
+
+def _main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="GitHub webhook receiver for rushingtech-agents"
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8001)
+    args = parser.parse_args()
+    secret = os.getenv("GITHUB_WEBHOOK_SECRET")
+    if not secret:
+        raise SystemExit("GITHUB_WEBHOOK_SECRET is required")
+    create_flask_app(GitHubIntegration(webhook_secret=secret)).run(
+        host=args.host, port=args.port
+    )
+
+
+if __name__ == "__main__":
+    _main()

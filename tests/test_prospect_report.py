@@ -5,8 +5,6 @@ numbers, rule internals) reaches the shareable body, and nothing is inflated
 — every count is unmodified scanner output and an empty report says so.
 """
 
-import json
-
 from agents.prospect_report import render_html, summarize
 
 
@@ -18,18 +16,39 @@ def _entry(tool, file, findings):
     return {"file": file, "agent": "x", "tool": tool, "result": {"findings": findings}}
 
 
-SCAN = _report([
-    _entry("audit_hardcoded_secrets", "src/config.ts", [
-        {"severity": "CRITICAL", "issue": "Hardcoded API Key detected", "line": 14},
-    ]),
-    _entry("audit_sql_injection", "src/db/users.py", [
-        {"severity": "HIGH", "issue": "string-built query", "line": 88},
-        {"severity": "HIGH", "issue": "string-built query", "line": 102},
-    ]),
-    _entry("audit_workflow", ".github/workflows/ci.yml", [
-        {"severity": "LOW", "issue": "`actions/checkout@v4` is pinned to a mutable tag, not a commit SHA"},
-    ]),
-])
+SCAN = _report(
+    [
+        _entry(
+            "audit_hardcoded_secrets",
+            "src/config.ts",
+            [
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Hardcoded API Key detected",
+                    "line": 14,
+                },
+            ],
+        ),
+        _entry(
+            "audit_sql_injection",
+            "src/db/users.py",
+            [
+                {"severity": "HIGH", "issue": "string-built query", "line": 88},
+                {"severity": "HIGH", "issue": "string-built query", "line": 102},
+            ],
+        ),
+        _entry(
+            "audit_workflow",
+            ".github/workflows/ci.yml",
+            [
+                {
+                    "severity": "LOW",
+                    "issue": "`actions/checkout@v4` is pinned to a mutable tag, not a commit SHA",
+                },
+            ],
+        ),
+    ]
+)
 
 
 def test_counts_are_unmodified_scanner_output():
@@ -52,8 +71,16 @@ def test_no_paths_lines_or_rule_ids_reach_the_page():
     weakness in a prospect's codebase must not be in it — that is both the
     engagement's value and the prospect's safety."""
     page = render_html(summarize(SCAN), company="Acme Inc")
-    for leak in ("src/config.ts", "src/db/users.py", "ci.yml", "line 14", "line 88", "audit_sql_injection",
-                 "actions/checkout", "string-built query"):
+    for leak in (
+        "src/config.ts",
+        "src/db/users.py",
+        "ci.yml",
+        "line 14",
+        "line 88",
+        "audit_sql_injection",
+        "actions/checkout",
+        "string-built query",
+    ):
         assert leak not in page, leak
     # But the real counts are there.
     assert "Acme Inc" in page
@@ -72,7 +99,9 @@ def test_an_empty_scan_says_so_rather_than_padding():
 
 
 def test_unknown_tools_land_in_the_generic_theme():
-    scan = _report([_entry("some_future_tool", "x.ts", [{"severity": "MEDIUM", "issue": "thing"}])])
+    scan = _report(
+        [_entry("some_future_tool", "x.ts", [{"severity": "MEDIUM", "issue": "thing"}])]
+    )
     s = summarize(scan)
     assert "Code quality & robustness" in s["themes"]
 
@@ -84,7 +113,9 @@ def test_severity_legend_prints_meanings():
 
 
 def test_page_is_self_contained_and_escaped():
-    scan = _report([_entry("audit_xss_patterns", "a.ts", [{"severity": "HIGH", "issue": "x"}])])
+    scan = _report(
+        [_entry("audit_xss_patterns", "a.ts", [{"severity": "HIGH", "issue": "x"}])]
+    )
     page = render_html(summarize(scan), company="<script>alert(1)</script>")
     assert "<script>alert" not in page
     assert "&lt;script&gt;" in page

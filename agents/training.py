@@ -14,7 +14,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -49,8 +48,15 @@ class DetectorTrainer(BaseAgent):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "detector": {"type": "string", "description": "e.g. 'security_audit.check_jwt_implementation'"},
-                        "min_confidence": {"type": "number", "description": "Minimum precision to accept new pattern (0–1)", "default": 0.8},
+                        "detector": {
+                            "type": "string",
+                            "description": "e.g. 'security_audit.check_jwt_implementation'",
+                        },
+                        "min_confidence": {
+                            "type": "number",
+                            "description": "Minimum precision to accept new pattern (0–1)",
+                            "default": 0.8,
+                        },
                     },
                     "required": ["detector"],
                 },
@@ -62,7 +68,10 @@ class DetectorTrainer(BaseAgent):
                     "type": "object",
                     "properties": {
                         "detector": {"type": "string"},
-                        "pattern": {"type": "string", "description": "Regex to evaluate"},
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex to evaluate",
+                        },
                         "holdout_fraction": {"type": "number", "default": 0.2},
                     },
                     "required": ["detector", "pattern"],
@@ -109,7 +118,8 @@ class DetectorTrainer(BaseAgent):
 
         # Discriminating tokens: appear often in confirmed, rarely in FP
         discriminating = [
-            tok for tok in positive_tokens
+            tok
+            for tok in positive_tokens
             if positive_tokens[tok] >= 2
             and negative_tokens.get(tok, 0) / max(len(false_positives), 1) < 0.3
         ]
@@ -123,12 +133,16 @@ class DetectorTrainer(BaseAgent):
             }
 
         # Build a simple alternation pattern
-        escaped = [re.escape(tok) for tok in sorted(discriminating, key=len, reverse=True)[:10]]
+        escaped = [
+            re.escape(tok) for tok in sorted(discriminating, key=len, reverse=True)[:10]
+        ]
         new_pattern = "(?:" + "|".join(escaped) + ")"
 
         # Evaluate on available examples
         metrics = _evaluate_pattern(new_pattern, confirmed, false_positives)
-        status = "improved" if metrics["precision"] >= min_confidence else "below_threshold"
+        status = (
+            "improved" if metrics["precision"] >= min_confidence else "below_threshold"
+        )
 
         return {
             "detector": detector,
@@ -176,6 +190,7 @@ class DetectorTrainer(BaseAgent):
             return {"error": "Evolution store not configured.", "versions": []}
         try:
             import sqlite3
+
             conn = sqlite3.connect(db)
             cur = conn.cursor()
             cur.execute(
@@ -186,7 +201,13 @@ class DetectorTrainer(BaseAgent):
             rows = cur.fetchall()
             conn.close()
             versions = [
-                {"version": r[0], "pattern": r[1], "precision": r[2], "recall": r[3], "created_at": r[4]}
+                {
+                    "version": r[0],
+                    "pattern": r[1],
+                    "precision": r[2],
+                    "recall": r[3],
+                    "created_at": r[4],
+                }
                 for r in rows
             ]
             return {"detector": detector, "versions": versions}
@@ -202,6 +223,7 @@ class DetectorTrainer(BaseAgent):
             return [], []
         try:
             import sqlite3
+
             conn = sqlite3.connect(db)
             cur = conn.cursor()
             cur.execute(
@@ -228,12 +250,14 @@ class DetectorTrainer(BaseAgent):
             return os.path.expanduser(self._db_path)
         try:
             from agents.evolution import default_database_path
+
             return default_database_path()
         except Exception:  # noqa: BLE001
             return None
 
 
 # ── Pure helpers ───────────────────────────────────────────────────────────
+
 
 def _tokenize_examples(examples: List[str]) -> Dict[str, int]:
     """Count short identifier-like tokens across all examples."""
@@ -261,7 +285,11 @@ def _evaluate_pattern(
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    f1 = (
+        (2 * precision * recall / (precision + recall))
+        if (precision + recall) > 0
+        else 0.0
+    )
 
     return {
         "precision": round(precision, 4),

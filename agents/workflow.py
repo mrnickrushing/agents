@@ -18,7 +18,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -68,7 +67,9 @@ class WorkflowOrchestrator:
         agent_triggers: Optional[Dict[str, str]] = None,
         max_chain_depth: int = 4,
     ) -> None:
-        self.agent_triggers = agent_triggers if agent_triggers is not None else dict(_DEFAULT_TRIGGERS)
+        self.agent_triggers = (
+            agent_triggers if agent_triggers is not None else dict(_DEFAULT_TRIGGERS)
+        )
         self.max_chain_depth = max_chain_depth
         self._shared_context: Dict[str, Any] = {}
         self._chain_log: List[Dict[str, Any]] = []
@@ -116,11 +117,16 @@ class WorkflowOrchestrator:
         instance = cls()
         handler: Optional[Callable] = instance._tool_handlers.get(tool_name)
         if handler is None:
-            return {"findings": [], "error": f"Unknown tool '{tool_name}' on '{agent_name}'"}
+            return {
+                "findings": [],
+                "error": f"Unknown tool '{tool_name}' on '{agent_name}'",
+            }
 
         merged_kwargs = dict(self._shared_context)
         merged_kwargs.update(kwargs)
-        result = handler(**{k: v for k, v in merged_kwargs.items() if k in _inspect_params(handler)})
+        result = handler(
+            **{k: v for k, v in merged_kwargs.items() if k in _inspect_params(handler)}
+        )
 
         log_entry = {
             "agent": agent_name,
@@ -178,8 +184,10 @@ class WorkflowOrchestrator:
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
+
 def _inspect_params(fn: Callable) -> set:
     import inspect
+
     try:
         return set(inspect.signature(fn).parameters.keys())
     except (TypeError, ValueError):
@@ -189,6 +197,7 @@ def _inspect_params(fn: Callable) -> set:
 def _default_tool(agent_name: str) -> Optional[str]:
     """Return the first available tool name for an agent, or None."""
     from agents.cli import AGENTS
+
     cls = AGENTS.get(agent_name)
     if cls is None:
         return None

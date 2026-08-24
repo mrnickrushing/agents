@@ -59,7 +59,10 @@ def downgrade():
     pass
 """
     result = DatabaseArchitectAgent()._review_migration_safety(migration)
-    assert any(f["severity"] == "CRITICAL" and "drops a column" in f["issue"] for f in result["findings"])
+    assert any(
+        f["severity"] == "CRITICAL" and "drops a column" in f["issue"]
+        for f in result["findings"]
+    )
 
 
 def test_alembic_not_null_column_without_backfill_is_detected():
@@ -72,7 +75,9 @@ def upgrade():
 
 
 def test_n_plus_one_detects_js_single_line_callback():
-    code = "const rows = users.map(async (user) => { return await db.query(user.id); });"
+    code = (
+        "const rows = users.map(async (user) => { return await db.query(user.id); });"
+    )
     issues = _issues(DatabaseArchitectAgent()._review_n_plus_one(code))
     assert any("N+1" in issue for issue in issues)
 

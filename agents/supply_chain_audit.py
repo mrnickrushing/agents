@@ -16,28 +16,66 @@ from agents.base import BaseAgent
 # Only a representative subset; exhaustive lists live in package-registry feeds.
 _POPULAR_PACKAGES = {
     # npm
-    "react", "lodash", "express", "axios", "moment", "webpack", "babel",
-    "eslint", "prettier", "typescript", "next", "nuxt", "vue", "angular",
-    "stripe", "dotenv", "jest", "mocha", "chai", "nodemon", "helmet",
-    "cors", "uuid", "dayjs", "zod", "prisma", "drizzle-orm",
+    "react",
+    "lodash",
+    "express",
+    "axios",
+    "moment",
+    "webpack",
+    "babel",
+    "eslint",
+    "prettier",
+    "typescript",
+    "next",
+    "nuxt",
+    "vue",
+    "angular",
+    "stripe",
+    "dotenv",
+    "jest",
+    "mocha",
+    "chai",
+    "nodemon",
+    "helmet",
+    "cors",
+    "uuid",
+    "dayjs",
+    "zod",
+    "prisma",
+    "drizzle-orm",
     # PyPI
-    "requests", "numpy", "pandas", "flask", "django", "fastapi",
-    "sqlalchemy", "pydantic", "pytest", "boto3", "pillow", "cryptography",
-    "bcrypt", "celery", "redis", "psycopg2", "aiohttp",
+    "requests",
+    "numpy",
+    "pandas",
+    "flask",
+    "django",
+    "fastapi",
+    "sqlalchemy",
+    "pydantic",
+    "pytest",
+    "boto3",
+    "pillow",
+    "cryptography",
+    "bcrypt",
+    "celery",
+    "redis",
+    "psycopg2",
+    "aiohttp",
 }
 
 # Copyleft licenses that may require open-sourcing the entire application
 _COPYLEFT_LICENSES = {"AGPL-3.0", "AGPL", "GPL-3.0", "GPL-2.0", "LGPL-3.0", "LGPL-2.1"}
 
-# Known-malicious or flagged package names (illustrative subset)
-_KNOWN_SUSPICIOUS = {
-    "event-stream",        # historic npm supply-chain attack
-    "ua-parser-js",        # 2021 hijacking
-    "coa",                 # 2021 malicious publish
-    "rc",                  # 2021 malicious publish
-    "node-ipc",            # 2022 sabotage
-    "colors",              # 2022 sabotage
-    "faker",               # 2022 sabotage (original)
+# Versions known to have carried malicious/sabotage payloads. Package-name
+# history alone is not a vulnerability: patched releases must remain clean.
+_KNOWN_COMPROMISED_VERSIONS = {
+    "event-stream": {"3.3.6"},
+    "ua-parser-js": {"0.7.29", "0.8.0", "1.0.0"},
+    "coa": {"2.0.3", "2.0.4", "2.1.1", "2.1.3", "3.0.1", "3.1.3"},
+    "rc": {"1.2.9", "1.3.9", "2.3.9"},
+    "node-ipc": {"10.1.1", "10.1.2"},
+    "colors": {"1.4.1", "1.4.2"},
+    "faker": {"6.6.6"},
 }
 
 
@@ -94,15 +132,20 @@ class SupplyChainAuditAgent(BaseAgent):
     model = "gpt-5"
 
     def _define_tools(self) -> List[Dict[str, Any]]:
-        return [{
-            "name": "audit_supply_chain",
-            "description": "Detect potentially risky dependency sourcing/versioning patterns in manifests and lockfiles.",
-            "parameters": {
-                "type": "object",
-                "properties": {"content": {"type": "string"}, "path": {"type": "string"}},
-                "required": ["content"],
-            },
-        }]
+        return [
+            {
+                "name": "audit_supply_chain",
+                "description": "Detect potentially risky dependency sourcing/versioning patterns in manifests and lockfiles.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                        "path": {"type": "string"},
+                    },
+                    "required": ["content"],
+                },
+            }
+        ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
         return {"audit_supply_chain": self._audit_supply_chain}
@@ -111,61 +154,91 @@ class SupplyChainAuditAgent(BaseAgent):
         findings: List[Dict[str, Any]] = []
 
         # ── 1. Mutable VCS / HTTP origins ────────────────────────────
-        if re.search(r"(?m)^\s*(?:npm|pip|gem|go)\s+.*(?:git\+|github\.com/|http://)", content):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Dependency is sourced from mutable VCS/HTTP origin",
-                "fix": "Prefer registry-published immutable releases over mutable Git refs.",
-            })
+        if re.search(
+            r"(?m)^\s*(?:npm|pip|gem|go)\s+.*(?:git\+|github\.com/|http://)", content
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Dependency is sourced from mutable VCS/HTTP origin",
+                    "fix": "Prefer registry-published immutable releases over mutable Git refs.",
+                }
+            )
         # Also catch npm/pip direct Git deps in package.json / requirements.txt
         if re.search(r'"[^"]+"\s*:\s*"(?:git\+|github:|bitbucket:|gitlab:)', content):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "package.json dependency points to mutable Git source",
-                "fix": "Publish to npm and depend on a registry version instead.",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "package.json dependency points to mutable Git source",
+                    "fix": "Publish to npm and depend on a registry version instead.",
+                }
+            )
         if re.search(r"(?m)^\s*[^#\n].*(?:git\+https?://|git\+ssh://|@git\+)", content):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Requirement sourced from Git URL (mutable)",
-                "fix": "Use a published PyPI package or pin to a specific commit hash.",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Requirement sourced from Git URL (mutable)",
+                    "fix": "Use a published PyPI package or pin to a specific commit hash.",
+                }
+            )
 
         # ── 2. Broad version ranges ───────────────────────────────────
         if re.search(r"(?m)^\s*[^#\n]+(?:\^|~|>=)\d", content):
-            findings.append({
-                "severity": "LOW",
-                "issue": "Manifest uses broad version ranges",
-                "fix": "Use lockfiles and tighter pinning for production services.",
-            })
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "Manifest uses broad version ranges",
+                    "fix": "Use lockfiles and tighter pinning for production services.",
+                }
+            )
 
         # ── 3. Suspicious large version jump ─────────────────────────
-        if re.search(r"\b0\.[0-9]+\.[0-9]+\b[\s\S]{0,200}\b9[0-9]\.[0-9]+\.[0-9]+\b", content):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Dependency history shows suspicious large version jump (0.x → 99.x pattern)",
-                "fix": "Investigate package provenance and maintainer history before adoption.",
-            })
+        if re.search(
+            r"\b0\.[0-9]+\.[0-9]+\b[\s\S]{0,200}\b9[0-9]\.[0-9]+\.[0-9]+\b", content
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Dependency history shows suspicious large version jump (0.x → 99.x pattern)",
+                    "fix": "Investigate package provenance and maintainer history before adoption.",
+                }
+            )
 
         # ── 4. Copyleft license compliance ───────────────────────────
         for lic in _COPYLEFT_LICENSES:
             if re.search(re.escape(lic), content, re.IGNORECASE):
-                findings.append({
-                    "severity": "MEDIUM",
-                    "issue": f"Copyleft license detected ({lic}) — may require open-sourcing your application",
-                    "fix": "Confirm license compatibility with your distribution model; consider alternatives.",
-                })
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": f"Copyleft license detected ({lic}) — may require open-sourcing your application",
+                        "fix": "Confirm license compatibility with your distribution model; consider alternatives.",
+                    }
+                )
                 break
 
         # ── 5. Known-suspicious / historically hijacked packages ─────
         pkg_names = _extract_package_names(content, path)
         for name in pkg_names:
-            if name.lower() in _KNOWN_SUSPICIOUS:
-                findings.append({
-                    "severity": "HIGH",
-                    "issue": f"Package '{name}' has a known supply-chain incident history",
-                    "fix": "Pin to a verified clean version or replace with a maintained alternative.",
-                })
+            compromised = _KNOWN_COMPROMISED_VERSIONS.get(name.lower(), set())
+            matched_version = next(
+                (
+                    version
+                    for version in compromised
+                    if re.search(
+                        rf"(?i){re.escape(name)}[^\n]{{0,80}}[\"'@~^=:\s]v?{re.escape(version)}\b",
+                        content,
+                    )
+                ),
+                None,
+            )
+            if matched_version:
+                findings.append(
+                    {
+                        "severity": "HIGH",
+                        "issue": f"Package '{name}' is pinned to compromised version {matched_version}",
+                        "fix": "Upgrade to a verified clean release and rotate credentials used during the affected install window.",
+                    }
+                )
 
         # ── 6. Typosquatting candidates ───────────────────────────────
         for name in pkg_names:
@@ -177,38 +250,47 @@ class SupplyChainAuditAgent(BaseAgent):
                     break
                 dist = _edit_distance(name_lower, popular)
                 if dist == 1:
-                    findings.append({
-                        "severity": "HIGH",
-                        "issue": f"Package '{name}' is 1 character away from popular '{popular}' — possible typosquatting",
-                        "fix": f"Verify '{name}' is intentional and not a typo of '{popular}'.",
-                    })
+                    findings.append(
+                        {
+                            "severity": "HIGH",
+                            "issue": f"Package '{name}' is 1 character away from popular '{popular}' — possible typosquatting",
+                            "fix": f"Verify '{name}' is intentional and not a typo of '{popular}'.",
+                        }
+                    )
                     break
 
         # ── 7. Transitive bloat (pnpm) ────────────────────────────────
-        if path.lower().endswith("pnpm-lock.yaml") and re.search(r"(?m)^\s{2,}dependencies:\s*$", content):
+        if path.lower().endswith("pnpm-lock.yaml") and re.search(
+            r"(?m)^\s{2,}dependencies:\s*$", content
+        ):
             dep_edges = len(re.findall(r"(?m)^\s{4,}[^\s].*:\s", content))
             if dep_edges > 500:
-                findings.append({
-                    "severity": "LOW",
-                    "issue": f"Large transitive dependency graph detected ({dep_edges} edges in pnpm-lock.yaml)",
-                    "fix": "Review heavy dependencies and prune unused packages.",
-                })
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": f"Large transitive dependency graph detected ({dep_edges} edges in pnpm-lock.yaml)",
+                        "fix": "Review heavy dependencies and prune unused packages.",
+                    }
+                )
 
         # ── 8. Unpinned * wildcard ────────────────────────────────────
         if re.search(r'["\']\s*\*\s*["\']', content):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Wildcard (*) version specifier detected — any version will be installed",
-                "fix": "Pin to a specific version or tight range for reproducible builds.",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Wildcard (*) version specifier detected — any version will be installed",
+                    "fix": "Pin to a specific version or tight range for reproducible builds.",
+                }
+            )
 
         # ── 9. HTTP (non-HTTPS) registry sources ─────────────────────
         if re.search(r"(?i)registry\s*=\s*http://", content):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Dependency registry URL uses HTTP instead of HTTPS",
-                "fix": "Change all registry URLs to HTTPS to prevent MITM attacks.",
-            })
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Dependency registry URL uses HTTP instead of HTTPS",
+                    "fix": "Change all registry URLs to HTTPS to prevent MITM attacks.",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
-

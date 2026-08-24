@@ -20,7 +20,7 @@ Usage:
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
@@ -30,7 +30,13 @@ from agents.base import BaseAgent
 
 _DETECTOR_COVERAGE: List[Dict[str, Any]] = [
     {
-        "keywords": ["n+1", "n plus 1", "query inside loop", "connection pool", "connection leak"],
+        "keywords": [
+            "n+1",
+            "n plus 1",
+            "query inside loop",
+            "connection pool",
+            "connection leak",
+        ],
         "detector": "database_architect.review_n_plus_one",
         "description": "Detects loops with DB queries inside",
         "severity": "HIGH",
@@ -44,7 +50,12 @@ _DETECTOR_COVERAGE: List[Dict[str, Any]] = [
         "enhancement": None,
     },
     {
-        "keywords": ["jwt", "token not validated", "missing exp", "algorithm confusion"],
+        "keywords": [
+            "jwt",
+            "token not validated",
+            "missing exp",
+            "algorithm confusion",
+        ],
         "detector": "auth_security.review_refresh_token_rotation",
         "description": "Detects JWT algorithm confusion and missing expiry",
         "severity": "HIGH",
@@ -65,7 +76,12 @@ _DETECTOR_COVERAGE: List[Dict[str, Any]] = [
         "enhancement": None,
     },
     {
-        "keywords": ["health check", "404 health", "healthcheck", "health endpoint missing"],
+        "keywords": [
+            "health check",
+            "404 health",
+            "healthcheck",
+            "health endpoint missing",
+        ],
         "detector": "infra_monitor.audit_health_check_endpoint",
         "description": "Detects shallow health checks (doesn't verify DB pool)",
         "severity": "MEDIUM",
@@ -86,7 +102,12 @@ _DETECTOR_COVERAGE: List[Dict[str, Any]] = [
         "enhancement": None,
     },
     {
-        "keywords": ["hardcoded secret", "api key", "password in code", "committed secret"],
+        "keywords": [
+            "hardcoded secret",
+            "api key",
+            "password in code",
+            "committed secret",
+        ],
         "detector": "security_audit.audit_hardcoded_secrets",
         "description": "Detects hardcoded credentials in source code",
         "severity": "CRITICAL",
@@ -226,25 +247,38 @@ class PostmortemAgent(BaseAgent):
                     continue
                 matched_detectors.add(entry["detector"])
                 if entry["enhancement"]:
-                    covered_with_enhancement.append({
-                        "detector": entry["detector"],
-                        "description": entry["description"],
-                        "enhancement": entry["enhancement"],
-                        "severity": entry["severity"],
-                    })
+                    covered_with_enhancement.append(
+                        {
+                            "detector": entry["detector"],
+                            "description": entry["description"],
+                            "enhancement": entry["enhancement"],
+                            "severity": entry["severity"],
+                        }
+                    )
                 else:
-                    covered.append({
-                        "detector": entry["detector"],
-                        "description": entry["description"],
-                        "severity": entry["severity"],
-                    })
+                    covered.append(
+                        {
+                            "detector": entry["detector"],
+                            "description": entry["description"],
+                            "severity": entry["severity"],
+                        }
+                    )
 
         # Gaps: keywords that appear in the incident but match no detector
         all_detector_keywords = {kw for e in _DETECTOR_COVERAGE for kw in e["keywords"]}
         incident_words = set(re.findall(r"\b\w+\b", lower))
         unmatched_technical = incident_words & {
-            "async", "concurrent", "race", "deadlock", "cache", "redis",
-            "queue", "worker", "cron", "scheduler", "timeout",
+            "async",
+            "concurrent",
+            "race",
+            "deadlock",
+            "cache",
+            "redis",
+            "queue",
+            "worker",
+            "cron",
+            "scheduler",
+            "timeout",
         }
         for word in sorted(unmatched_technical):
             if word not in " ".join(all_detector_keywords):
@@ -275,11 +309,13 @@ class PostmortemAgent(BaseAgent):
 
         findings = []
         for gap in not_covered_keywords:
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": f"No detector covers '{gap}' pattern found in incident",
-                "fix": f"Consider adding a detector for '{gap}' failure mode.",
-            })
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": f"No detector covers '{gap}' pattern found in incident",
+                    "fix": f"Consider adding a detector for '{gap}' failure mode.",
+                }
+            )
 
         return {
             "detectors_would_catch": covered,
