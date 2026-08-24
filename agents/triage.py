@@ -119,6 +119,97 @@ def _extract_verdict(text: str) -> Dict[str, str]:
     return {"verdict": verdict, "reason": str(parsed.get("reason", ""))}
 
 
+def _extract_verdicts(text: str, count: int) -> List[Dict[str, str]]:
+    """Parse a batched response: one verdict object per finding, in order.
+
+    Anything short of `count` well-formed verdicts degrades to UNKNOWN for
+    the missing ones rather than shifting later verdicts onto earlier
+    findings — a misaligned verdict is worse than no verdict, because it
+    silently teaches the scorer the opposite of the truth.
+    """
+    unknown = {"verdict": "UNKNOWN", "reason": "No verdict returned for this finding."}
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if not match:
+        return [dict(unknown) for _ in range(count)]
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return [{"verdict": "UNKNOWN", "reason": "Triage model returned malformed JSON."}
+                for _ in range(count)]
+    if not isinstance(parsed, list):
+        return [dict(unknown) for _ in range(count)]
+
+    by_index: Dict[int, Dict[str, str]] = {}
+    for position, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+        # Prefer an explicit index; fall back to position. The model is asked
+        # for indexes precisely so a dropped item cannot shift the rest.
+        try:
+            index = int(item.get("index", position))
+        except (TypeError, ValueError):
+            index = position
+        verdict = str(item.get("verdict", "UNKNOWN")).upper()
+        if verdict not in ("CONFIRMED", "FALSE_POSITIVE"):
+            verdict = "UNKNOWN"
+        by_index[index] = {"verdict": verdict, "reason": str(item.get("reason", ""))}
+    return [by_index.get(i, dict(unknown)) for i in range(count)]
+
+
+def triage_entry_findings(
+    agent: "TriageAgent", project_root: str, entry: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    """One verdict per finding in `entry`, using a single model call.
+
+    The per-finding loop this replaces re-sent the whole file for every
+    finding in it — a 14-finding component uploaded its own source fourteen
+    times. Findings from one entry share a file and a rule by construction,
+    so judging them together is both cheaper and better informed: the model
+    sees the whole picture once instead of fourteen keyhole views.
+    """
+    findings = _findings_of(entry)
+    if not findings:
+        return []
+
+    file_path = entry["file"]
+    abs_path = os.path.join(project_root, file_path)
+    try:
+        with open(abs_path, "r", errors="ignore") as fh:
+            file_content = fh.read(MAX_TRIAGE_FILE_BYTES)
+    except OSError:
+        file_content = "<could not read file>"
+
+    numbered = "\n".join(
+        f"[{i}] {f.get('severity', 'INFO')}: {f.get('issue', f.get('message', ''))}"
+        + (f" (line {f['line']})" if f.get("line") else "")
+        for i, f in enumerate(findings)
+    )
+
+    prompt = f"""Tool: {entry['agent']}.{entry['tool']}
+File: {file_path}
+
+Findings reported by the scanner, each with an index:
+{numbered}
+
+Contents of {file_path}:
+```
+{file_content}
+```
+
+Verify EACH finding independently. Read other project files if the real
+answer could live elsewhere. Judge every finding on its own merits — they
+share a file, not a fate.
+
+Respond with a JSON array only, one object per finding, each with:
+  "index"   the finding's index above
+  "verdict" either "CONFIRMED" or "FALSE_POSITIVE"
+  "reason"  one sentence
+Return exactly {len(findings)} objects, including every index."""
+
+    response = agent.run(prompt, conversation_id=f"{file_path}:{entry['tool']}")
+    return _extract_verdicts(response.content, len(findings))
+
+
 def _findings_of(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
     result = entry["result"]
     findings = (
@@ -192,15 +283,11 @@ def triage_report(
         if entry["result"].get("error"):
             continue
         findings = _findings_of(entry)
-        verdicts = []
-        for index, finding in enumerate(findings):
-            isolated = {
-                **entry,
-                "result": {"findings": [finding]},
-            }
-            triage = triage_entry(agent, project_root, isolated)
+        # One call per entry, not per finding: every finding here shares this
+        # file, and the old loop re-uploaded it once per finding.
+        verdicts = triage_entry_findings(agent, project_root, entry)
+        for finding, triage in zip(findings, verdicts):
             finding["triage"] = triage
-            verdicts.append(triage)
             if triage["verdict"] == "CONFIRMED":
                 confirmed += 1
             elif triage["verdict"] == "FALSE_POSITIVE":

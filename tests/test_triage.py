@@ -1,4 +1,5 @@
 import os
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -93,14 +94,16 @@ def test_triage_report_aggregates_and_skips_errored_entries(tmp_path):
         ],
     }
 
-    verdicts = iter([
-        {"verdict": "CONFIRMED", "reason": "real gap"},
-        {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
+    # One entry, one finding each — the batch call returns a single-element
+    # list per entry.
+    per_entry = iter([
+        [{"verdict": "CONFIRMED", "reason": "real gap"}],
+        [{"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"}],
     ])
 
     with patch("agents.triage.TriageAgent") as MockAgent:
         MockAgent.return_value = MagicMock()
-        with patch("agents.triage.triage_entry", side_effect=lambda *a, **k: next(verdicts)):
+        with patch("agents.triage.triage_entry_findings", side_effect=lambda *a, **k: next(per_entry)):
             result = triage_report(report, provider="anthropic", api_key="test-key")
 
     assert result["triage_summary"] == {"confirmed": 1, "false_positive": 1, "unknown": 0}
@@ -128,14 +131,14 @@ def test_triage_verdicts_are_per_finding_not_per_file(tmp_path):
             ]},
         }],
     }
-    verdicts = iter([
+    batched = [
         {"verdict": "CONFIRMED", "reason": "real gap"},
         {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
-    ])
+    ]
 
     with patch("agents.triage.TriageAgent") as MockAgent:
         MockAgent.return_value = MagicMock()
-        with patch("agents.triage.triage_entry", side_effect=lambda *a, **k: next(verdicts)):
+        with patch("agents.triage.triage_entry_findings", side_effect=lambda *a, **k: batched):
             result = triage_report(report, provider="anthropic", api_key="test-key")
 
     findings = result["results"][0]["result"]["findings"]
@@ -143,3 +146,68 @@ def test_triage_verdicts_are_per_finding_not_per_file(tmp_path):
     assert findings[1]["triage"]["verdict"] == "FALSE_POSITIVE"
     assert result["results"][0]["triage"]["verdict"] == "CONFIRMED"
     assert result["triage_summary"] == {"confirmed": 1, "false_positive": 1, "unknown": 0}
+
+
+# --- batching ------------------------------------------------------------------
+
+def test_one_call_per_entry_however_many_findings(tmp_path):
+    """The per-finding loop this replaced re-uploaded the file once per
+    finding: a 14-finding component sent its own source fourteen times."""
+    from agents.triage import triage_entry_findings
+
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "big.tsx").write_text("export const C = () => null;")
+    entry = {
+        "file": "big.tsx", "agent": "code_review", "tool": "review_react_component",
+        "result": {"findings": [{"severity": "LOW", "issue": f"issue {i}"} for i in range(14)]},
+    }
+
+    agent = MagicMock()
+    agent.run.return_value = MagicMock(content=json.dumps([
+        {"index": i, "verdict": "CONFIRMED", "reason": "r"} for i in range(14)
+    ]))
+
+    verdicts = triage_entry_findings(agent, str(project), entry)
+    assert len(verdicts) == 14
+    assert agent.run.call_count == 1, "fourteen findings must cost one call"
+
+
+def test_a_dropped_verdict_never_shifts_onto_another_finding(tmp_path):
+    """Indexes exist so a short response degrades to UNKNOWN for the missing
+    finding rather than sliding later verdicts onto earlier ones — a
+    misaligned verdict teaches the scorer the opposite of the truth."""
+    from agents.triage import triage_entry_findings
+
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "f.py").write_text("x")
+    entry = {
+        "file": "f.py", "agent": "x", "tool": "t",
+        "result": {"findings": [{"issue": "a"}, {"issue": "b"}, {"issue": "c"}]},
+    }
+
+    agent = MagicMock()
+    # The model answered for findings 0 and 2 only.
+    agent.run.return_value = MagicMock(content=json.dumps([
+        {"index": 0, "verdict": "CONFIRMED", "reason": "real"},
+        {"index": 2, "verdict": "FALSE_POSITIVE", "reason": "noise"},
+    ]))
+
+    verdicts = triage_entry_findings(agent, str(project), entry)
+    assert [v["verdict"] for v in verdicts] == ["CONFIRMED", "UNKNOWN", "FALSE_POSITIVE"]
+
+
+def test_malformed_batch_response_is_unknown_for_every_finding(tmp_path):
+    from agents.triage import triage_entry_findings
+
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "f.py").write_text("x")
+    entry = {"file": "f.py", "agent": "x", "tool": "t",
+             "result": {"findings": [{"issue": "a"}, {"issue": "b"}]}}
+
+    agent = MagicMock()
+    agent.run.return_value = MagicMock(content="the model rambled instead")
+    verdicts = triage_entry_findings(agent, str(project), entry)
+    assert [v["verdict"] for v in verdicts] == ["UNKNOWN", "UNKNOWN"]
