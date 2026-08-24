@@ -42,6 +42,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from agents.api_architect import APIArchitectAgent
 from agents.auth_security import AuthSecurityAgent
 from agents.code_review import CodeReviewAgent
+from agents.config_audit import ConfigAuditAgent
 from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.mobile_deploy import MobileDeployAgent
@@ -56,6 +57,7 @@ from agents.evolution import EvolutionStore, attach_finding_ids, default_databas
 
 AGENTS: Dict[str, type] = {
     "security_audit": SecurityAuditAgent,
+    "config_audit": ConfigAuditAgent,
     "code_review": CodeReviewAgent,
     "stripe_billing": StripeBillingAgent,
     "railway_deploy": RailwayDeployAgent,
@@ -91,10 +93,16 @@ NON_CODE_BASENAMES = {"package.json", "package-lock.json", "pnpm-lock.yaml", "ya
 TEXT_EXTENSIONS = CODE_EXTENSIONS | {
     ".json", ".jsonc", ".yaml", ".yml", ".toml", ".sql", ".md", ".txt",
     ".env", ".cfg", ".ini", ".sh", ".bash", ".zsh", ".fish", ".dockerfile",
+    # config_audit surfaces. These were never opened before it existed, which
+    # is why a fleet baseline showed zero findings across 12 Android
+    # manifests and 11 plists — the gate, not the files, was the reason.
+    ".xml", ".plist", ".example", ".entitlements",
 }
 TEXT_BASENAMES = {
     "Dockerfile", "Procfile", "Gemfile", "Makefile", "requirements.txt",
     "package.json", "eas.json", "codemagic.yaml", "codemagic.yml",
+    ".env.example", "AndroidManifest.xml", "Info.plist", "wrangler.toml",
+    "railway.toml", "railway.json",
 }
 
 RAW_DISCOVERY_TOOLS = {
@@ -420,6 +428,35 @@ TOOL_EXTENSION_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
 # arg_builder(path, content) -> dict of kwargs for the tool handler.
 
 RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], Dict[str, Any]]]] = [
+    # --- config_audit: deployment and platform configuration -----------------
+    # Every one of these surfaces produced zero findings on a fleet baseline
+    # scan — not because they were clean, but because no rule looked.
+    ("Dockerfile*", None, "config_audit", "audit_dockerfile",
+     lambda p, c: {"content": c, "path": p}),
+    ("docker-compose*.yml", None, "config_audit", "audit_compose",
+     lambda p, c: {"content": c, "path": p}),
+    ("docker-compose*.yaml", None, "config_audit", "audit_compose",
+     lambda p, c: {"content": c, "path": p}),
+    ("compose.y*ml", None, "config_audit", "audit_compose",
+     lambda p, c: {"content": c, "path": p}),
+    # Glob matches basename only; the handler drops anything outside
+    # .github/workflows so the other yml files in the fleet cost nothing.
+    ("*.yml", None, "config_audit", "audit_workflow",
+     lambda p, c: {"content": c, "path": p}),
+    ("*.yaml", None, "config_audit", "audit_workflow",
+     lambda p, c: {"content": c, "path": p}),
+    ("AndroidManifest.xml", None, "config_audit", "audit_android_manifest",
+     lambda p, c: {"content": c, "path": p}),
+    ("Info.plist", None, "config_audit", "audit_ios_plist",
+     lambda p, c: {"content": c, "path": p}),
+    ("wrangler.toml", None, "config_audit", "audit_wrangler",
+     lambda p, c: {"content": c, "path": p}),
+    ("railway.toml", None, "config_audit", "audit_railway_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("railway.json", None, "config_audit", "audit_railway_config",
+     lambda p, c: {"content": c, "path": p}),
+    (".env.example", None, "config_audit", "audit_env_example",
+     lambda p, c: {"content": c, "path": p}),
     ("package.json", None, "security_audit", "scan_dependencies",
      lambda p, c: {"package_json": c}),
     ("requirements*.txt", None, "security_audit", "scan_dependencies",
@@ -629,6 +666,8 @@ def _integrity_findings(path: str, content: str) -> List[Dict[str, Any]]:
 
 def _is_text_candidate(path: str) -> bool:
     base = os.path.basename(path)
+    if base.startswith("Dockerfile"):        # Dockerfile.prod, Dockerfile.dev
+        return True
     return base in TEXT_BASENAMES or os.path.splitext(base)[1].lower() in TEXT_EXTENSIONS
 
 

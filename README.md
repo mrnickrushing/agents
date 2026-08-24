@@ -6,6 +6,49 @@ Twelve specialized agents (73 tools total) that understand your exact stack — 
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.10.0 — Config surfaces, and a prospect-facing report
+
+**`config_audit` — the files the code scanners never opened.** A fleet
+baseline showed 368 findings and *zero* from Dockerfiles, docker-compose, 41
+GitHub workflow files, 12 Android manifests, 11 plists, wrangler.toml, or
+Railway config — not because they were clean, but because the text-candidate
+gate never let those files reach a rule. New agent, eight checks, all pure
+heuristics (no API key, so they run in CI where it matters):
+
+- **Dockerfile**: final stage running as root, unpinned base images,
+  secrets baked in via ENV/ARG, `curl | sh`.
+- **docker-compose**: privileged containers, databases published to all
+  interfaces, committed dev credentials.
+- **Workflows**: unpinned actions (third-party graded above first-party),
+  missing `permissions:`, `pull_request_target` + checkout, expression
+  injection from event titles into `run:`.
+- **AndroidManifest**: cleartext traffic, `debuggable`, `allowBackup`,
+  exported services/receivers/providers with no permission gate. Debug-variant
+  manifests are exempt — cleartext there is how Metro works.
+- **Info.plist**: ATS disabled. **wrangler.toml**: secrets in `[vars]`.
+- **railway config**: a `healthcheckPath` no route in the repo serves — the
+  misconfiguration that burned $40/month polling a 404 every 15 minutes.
+- **.env.example**: real-looking secret values committed, and env vars the
+  code reads that the example never documents (the "works locally, dies on
+  Railway" failure, caught before the deploy).
+
+**Reality-corrected before shipping, per the session-12 rule.** The first
+fleet run produced seven "committed secret" HIGHs — every one a placeholder
+(`change-me-in-production`, `REPLACE_WITH_...`) the old pattern missed — plus
+a stage alias flagged as an unpinned image, a `/ready` healthcheck flagged
+because the config sat in `infra/` away from the code, and debug-manifest
+cleartext flagged as if it shipped. All fixed and pinned by tests; the final
+fleet pass is 129 findings (3 HIGH, 48 MEDIUM, 78 LOW) with each HIGH
+verified by hand.
+
+**`prospect_report` — a scan rendered for someone deciding whether to hire
+you.** `python -m agents.prospect_report report.json --company "Acme"` groups
+findings into themes with business-consequence copy. Counts are unmodified
+scanner output; file paths, line numbers, and rule ids never reach the page —
+the document is designed to be forwarded, and a teaser that maps every
+weakness is both a free audit and a liability for the prospect. An empty scan
+says "no findings" rather than padding.
+
 ## 🆕 Version 2.9.0 — Every agent reachable from Claude Code, plus opt-in CI/pre-commit gating
 
 - **6 missing Claude Code subagent mirrors added**: `.claude/agents/` previously only mirrored 6 of the 12 Python agents. Added `auth-security-reviewer`, `api-architect`, `database-architect`, `infra-monitor`, `mobile-deploy-advisor`, and `roblox-auditor` so every domain this package covers is now reachable as a subagent inside a Claude Code session, not just from the standalone Python API/CLI.
