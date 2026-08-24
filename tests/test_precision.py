@@ -110,3 +110,60 @@ def test_scan_untouched_when_no_trust_file(tmp_path, monkeypatch):
         for f in entry.get("result", {}).get("findings", [])
     }
     assert "HIGH" in sevs
+
+
+def test_a_verdict_is_counted_once_however_many_scans_recorded_the_finding(db):
+    """findings carries one row per (finding, scan). The obvious join
+    multiplies every verdict by the rescan count — two real verdicts read as
+    twelve after six scans, enough to push a rule past the scoring threshold
+    and demote it on a single opinion. Caught by noticing a rule claimed 12
+    verdicts while the feedback table held 2.
+    """
+    from agents.evolution import EvolutionStore
+
+    report = {
+        "project": "/tmp/proj", "project_key": "proj",
+        "results": [{
+            "file": "a.py", "agent": "security_audit", "tool": "audit_xss_patterns",
+            "source_hash": "h" * 40,
+            "result": {"findings": [{"severity": "HIGH", "issue": "same finding"}]},
+        }],
+    }
+    with EvolutionStore(db) as store:
+        # The identical finding, recorded by six separate scans.
+        for _ in range(6):
+            import copy
+            store.record_scan(copy.deepcopy(report), detector_version="test")
+        fid = store.connection.execute(
+            "SELECT finding_id FROM findings LIMIT 1"
+        ).fetchone()["finding_id"]
+        store.add_feedback(fid, "FALSE_POSITIVE", "one human opinion")
+
+    rows = rule_precision(db)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["verdicts"] == 1, f"one verdict, six scans — got {r['verdicts']}"
+    assert r["false_positive"] == 1
+    assert r["scored"] is False, "a single opinion must never be enough to demote"
+
+
+def test_any_confirmed_wins_over_earlier_dismissals(db):
+    """Resolution matches evolution.py: confirming something once settles it."""
+    from agents.evolution import EvolutionStore
+
+    report = {
+        "project": "/tmp/proj", "project_key": "proj",
+        "results": [{
+            "file": "a.py", "agent": "security_audit", "tool": "audit_sql_injection",
+            "source_hash": "h" * 40,
+            "result": {"findings": [{"severity": "HIGH", "issue": "x"}]},
+        }],
+    }
+    with EvolutionStore(db) as store:
+        store.record_scan(report, detector_version="test")
+        fid = report["results"][0]["result"]["findings"][0]["finding_id"]
+        store.add_feedback(fid, "FALSE_POSITIVE", "dismissed first")
+        store.add_feedback(fid, "CONFIRMED", "then confirmed")
+
+    r = rule_precision(db)[0]
+    assert r["confirmed"] == 1 and r["false_positive"] == 0
