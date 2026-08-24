@@ -211,3 +211,45 @@ def test_malformed_batch_response_is_unknown_for_every_finding(tmp_path):
     agent.run.return_value = MagicMock(content="the model rambled instead")
     verdicts = triage_entry_findings(agent, str(project), entry)
     assert [v["verdict"] for v in verdicts] == ["UNKNOWN", "UNKNOWN"]
+
+
+def test_the_conversation_is_reset_after_every_verdict(tmp_path):
+    """BaseAgent accumulates history per conversation_id. A verdict is a
+    one-shot judgement, not a dialogue — without the reset, every later call
+    on the same file+tool re-sends the previous exchange, file included.
+    That is what made the old per-finding loop quadratic: 1+2+...+N copies
+    of one source file.
+    """
+    from agents.triage import triage_entry_findings
+
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "f.py").write_text("x = 1")
+    entry = {"file": "f.py", "agent": "x", "tool": "t",
+             "result": {"findings": [{"issue": "a"}]}}
+
+    agent = MagicMock()
+    agent.run.return_value = MagicMock(content=json.dumps(
+        [{"index": 0, "verdict": "CONFIRMED", "reason": "r"}]))
+
+    triage_entry_findings(agent, str(project), entry)
+    agent.reset.assert_called_once_with("f.py:t")
+
+
+def test_the_conversation_is_reset_even_when_the_call_raises(tmp_path):
+    """A failed call must not leave its file sitting in the agent's memory
+    for the rest of the run."""
+    from agents.triage import triage_entry_findings
+
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "f.py").write_text("x = 1")
+    entry = {"file": "f.py", "agent": "x", "tool": "t",
+             "result": {"findings": [{"issue": "a"}]}}
+
+    agent = MagicMock()
+    agent.run.side_effect = RuntimeError("model unavailable")
+
+    with pytest.raises(RuntimeError):
+        triage_entry_findings(agent, str(project), entry)
+    agent.reset.assert_called_once_with("f.py:t")

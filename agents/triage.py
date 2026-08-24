@@ -206,7 +206,19 @@ Respond with a JSON array only, one object per finding, each with:
   "reason"  one sentence
 Return exactly {len(findings)} objects, including every index."""
 
-    response = agent.run(prompt, conversation_id=f"{file_path}:{entry['tool']}")
+    conversation_id = f"{file_path}:{entry['tool']}"
+    try:
+        response = agent.run(prompt, conversation_id=conversation_id)
+    finally:
+        # A verdict is a one-shot judgement, not a dialogue. BaseAgent
+        # accumulates history per conversation_id, so without this every
+        # later call on the same file+tool re-sends the whole previous
+        # exchange — the file included. The old per-finding loop shared one
+        # id across all of a file's findings and paid 1+2+...+N copies of
+        # that file: a 27-finding entry sent 378 copies of one source file.
+        # Batching removed the common case; this removes the rest, and stops
+        # the agent holding every file it has read in memory for the run.
+        agent.reset(conversation_id)
     return _extract_verdicts(response.content, len(findings))
 
 
