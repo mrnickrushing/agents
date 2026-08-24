@@ -43,20 +43,25 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from agents.api_architect import APIArchitectAgent
 from agents.auth_security import AuthSecurityAgent
 from agents.code_review import CodeReviewAgent
+from agents.compliance import ComplianceAuditAgent
 from agents.config_audit import ConfigAuditAgent
 from agents import autofix
 from agents.database_architect import DatabaseArchitectAgent
+from agents.figma_scaffold import FigmaScaffoldAgent
 from agents.flow_audit import FlowAuditAgent
 from agents.frontend_performance import FrontendPerformanceAgent
+from agents.healing import HealingAgent
 from agents.iac_security import IACSecurityAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.mobile_deploy import MobileDeployAgent
+from agents.postmortem import PostmortemAgent
 from agents.railway_deploy import RailwayDeployAgent
 from agents.roblox_audit import RobloxAuditAgent
 from agents.scaffolder import ScaffolderAgent
 from agents.security_audit import SecurityAuditAgent
 from agents.supply_chain_audit import SupplyChainAuditAgent
 from agents.stripe_billing import StripeBillingAgent
+from agents.training import DetectorTrainer
 from agents.ui_generation import UIGenerationAgent
 from agents import __version__
 from agents.evolution import EvolutionStore, attach_finding_ids, default_database_path
@@ -79,6 +84,11 @@ AGENTS: Dict[str, type] = {
     "infra_monitor": InfraMonitorAgent,
     "roblox_audit": RobloxAuditAgent,
     "supply_chain_audit": SupplyChainAuditAgent,
+    "compliance": ComplianceAuditAgent,
+    "postmortem": PostmortemAgent,
+    "healing": HealingAgent,
+    "training": DetectorTrainer,
+    "figma_scaffold": FigmaScaffoldAgent,
 }
 
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
@@ -679,6 +689,18 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"code": c, "script_name": os.path.relpath(p)}),
     (None, r".", "roblox_audit", "review_luau_module",
      lambda p, c: {"code": c, "module_name": os.path.relpath(p)}),
+    # --- compliance: SOC2/HIPAA/GDPR/PCI-DSS control checks -----------------
+    # Runs on source files that touch auth, crypto, logging, or CI config so
+    # the compliance checker always has relevant evidence to evaluate.
+    (None, r"jwt\.|oauth|bcrypt|argon2|sentry_sdk|Sentry\.init|logger\.|logging\.", "compliance", "audit_compliance",
+     lambda p, c: {"code": c, "standard": "SOC2"}),
+    # --- postmortem: incident pattern detection in incident/postmortem docs --
+    ("*incident*.md", None, "postmortem", "analyze_incident",
+     lambda p, c: {"incident_text": c}),
+    ("*postmortem*.md", None, "postmortem", "analyze_incident",
+     lambda p, c: {"incident_text": c}),
+    ("*runbook*.md", None, "postmortem", "analyze_incident",
+     lambda p, c: {"incident_text": c}),
 ]
 
 
