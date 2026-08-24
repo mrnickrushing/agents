@@ -2,7 +2,7 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twenty-two specialized agents (110 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
+Twenty-three specialized agents (111 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
@@ -29,6 +29,16 @@ agents serve                 # http://0.0.0.0:8000 — reads $PORT / $HOST / $AG
 - `Dockerfile.server` + `railway.toml` deploy it (non-root, gunicorn, volume
   at `/data`); the tag pipeline also publishes
   `ghcr.io/mrnickrushing/agents-server`. Runbook: [`docs/deploy.md`](docs/deploy.md).
+- Repo hygiene pass: `FleetPolicyAgent` is now registered in the CLI (it was
+  exported and documented but unreachable — 23 agents, 111 tools);
+  `luau-scan --rules` accepts the rule ids the report actually prints
+  (`unresolved_require`, `rojo_*`, `unread_definition_field` used to be
+  silently ignored); every Python agent has a `.claude/agents/` mirror again
+  (10 were missing); `validate_accessibility`/`apply_design_token` no longer
+  advertise their *outputs* as input parameters; the Drizzle primary-key check
+  is per table instead of per file; `agents prospect-report` wraps
+  `python -m agents.prospect_report`; `example.py` runs again. No Dependabot
+  on this repo by decision — `agents fix` refreshes action pins instead.
 
 ## 🆕 Version 2.15.0 — PyPI + container distribution
 
@@ -56,7 +66,7 @@ docker run --rm -v "$(pwd)":/app ghcr.io/mrnickrushing/agents scan --path /app -
 exactly one correct fix that is the same fix everywhere:
 
 - **Pin actions** to the SHA their tag points at, tag kept as a comment so
-  dependabot maintains the pin. A tag that cannot be resolved is left alone
+  the pin stays readable and re-running `agents fix` can refresh it. A tag that cannot be resolved is left alone
   and reported: rewriting it to a guess would break the workflow while
   looking like a security improvement.
 - **Scope workflow tokens** — a least-privilege top-level `permissions:` for
@@ -182,7 +192,7 @@ cd ~/my-other-game
 python -m agents.cli luau-scan .                 # human-readable
 python -m agents.cli luau-scan . --json          # machine-readable
 python -m agents.cli luau-scan . --fail-on HIGH  # CI gate (default)
-python -m agents.cli luau-scan . --rules call_arity unresolved_requires
+python -m agents.cli luau-scan . --rules call_arity unresolved_require
 ```
 
 It exists because of a specific outage. A builder function gained a required
@@ -340,6 +350,34 @@ python -m agents.cli scan --path ~/lastlight --runtime --runtime-command 'npm ru
 ```
 
 `scan` walks the project (skipping dependencies, generated output, caches, and virtual environments), matches files by name or executable evidence, runs every applicable deterministic review, and prints a severity-sorted report. Both forms are supported: `scan --path ~/project` and `scan ~/project`.
+
+### Every subcommand
+
+| Command | What it does |
+|---|---|
+| `agents list` | Every agent and its tools |
+| `agents run <agent> <tool> [--arg k=v] [--file k=path] [--stdin k]` | Call one tool handler directly; `--file` reads a file into that argument, `--stdin` fills it from stdin |
+| `agents scan [--path P] [--agents a,b] [--out report.json] [--fail-on SEV] [--runtime [--runtime-command CMD] [--runtime-timeout S]] [--triage/--no-triage] [--triage-model M] [--no-record] [--db PATH] [--knowledge-graph] [--durable-db PATH --workflow-id ID]` | Project scan. `--knowledge-graph` builds the AST call/import graph for cross-file taint paths; `--durable-db`/`--workflow-id` persist each step so a re-run resumes instead of repeating |
+| `agents luau-scan [root] [--rules r1 r2] [--json] [--fail-on SEV]` | Roblox/Luau static analysis (rule ids as printed in the report) |
+| `agents fix [path] [--apply] [--kinds pin-actions,workflow-permissions,env-example,compose]` | Mechanical fixes; dry run unless `--apply` |
+| `agents feedback <agf_id> confirm\|dismiss --reason "..."` | Record a human verdict that outranks triage |
+| `agents history [--project P] [--limit N]` / `agents eval [--project P]` | Recorded scans; precision/agreement metrics |
+| `agents precision [--write-trust]` | Per-rule precision from verdicts; `--write-trust` demotes low-precision rules to INFO |
+| `agents scaffold-app-from-figma --app-name N --output DIR [--figma-json F] [--payment-model M] [--force]` | Expo app + Railway backend from design tokens |
+| `agents prospect-report <report.json> --company NAME [--out FILE]` | Prospect-facing HTML snapshot of a scan |
+| `agents serve [--host H] [--port P] [--db PATH] [--threads N]` | Hosted dashboard + GitHub webhook receiver + `/health` (needs `[web]`) |
+
+Every flag also has `--help`. Chaining tools across agents without the LLM loop:
+
+```python
+from agents.workflow import WorkflowOrchestrator
+
+orch = WorkflowOrchestrator()
+report = orch.run_chain(
+    [("security_audit", "check_jwt_implementation", {"code": src})],
+    auto_route=True,   # a JWT finding routes on to auth_security, a webhook one to stripe_billing, …
+)
+```
 
 ### Evolution loop — teach the agents from real outcomes
 
@@ -540,11 +578,26 @@ asyncio.run(main())
 
 ## Fleet Policy Checks
 
+Cross-repo hygiene rules that generic linters don't know about — CI that
+never runs on the default branch, forced package versions with no
+matching `dependabot` ignore, missing dependency grouping, and similar
+fleet-level drift. One tool, `run_fleet_policies`, takes a mapping of
+relative path → file contents:
+
 ```python
 from agents import FleetPolicyAgent
 
 agent = FleetPolicyAgent()
+report = agent.run_fleet_policies({
+    ".github/workflows/ci.yml": open(".github/workflows/ci.yml").read(),
+    "package.json": open("package.json").read(),
+})
+for finding in report["findings"]:
+    print(finding["severity"], finding["rule"], finding["path"], finding["message"])
 ```
+
+Or from the CLI: `agents run fleet_policy run_fleet_policies --file files=<json>`
+where the JSON is that same path → contents mapping.
 
 ## Using Tools Directly (No API Key Needed)
 
@@ -918,6 +971,8 @@ python example_ui_generation.py
 - Python 3.11+
 - `openai>=1.50.0` — For OpenAI provider
 - `anthropic>=0.40.0` — For Anthropic provider
+- `PyYAML>=6.0` — Workflow/config parsing (fleet policy, GitHub org config)
+- `flask>=3.0`, `gunicorn>=22` — only for `agents serve` (`pip install 'rushingtech-agents[web]'`)
 
 ## License
 
@@ -927,4 +982,4 @@ MIT
 
 Built by [Rushing Technologies](https://rushingtechnologies.com) — solo operator, full stack + security + AI.
 
-**Version 2.15.0** — Modern package/CLI/container distribution, expanded scan coverage, durable workflow primitives, knowledge graph, streaming events, and RAG-assisted triage.
+**Version 2.16.0** — Hosted service (`agents serve` on Railway), modern package/CLI/container distribution, expanded scan coverage, durable workflow primitives, knowledge graph, streaming events, and RAG-assisted triage.

@@ -8,8 +8,8 @@ applies confirmed fixes or stages them for review.
 Usage:
     from agents.healing import HealingAgent
     healer = HealingAgent()
-    result = healer.generate_patch(finding, code)
-    healer.apply_patch_and_test(result["patch"], project_path)
+    result = healer.generate_patch(finding, code)          # public wrappers over the
+    healer.apply_patch_and_test(result, file_path, project_path)  # tool handlers
 """
 
 from __future__ import annotations
@@ -140,6 +140,18 @@ class HealingAgent(BaseAgent):
         }
 
     # ── Tool handlers ─────────────────────────────────────────────────
+
+    # Public entry points (the tool handlers below are what the LLM loop and
+    # `agents run healing ...` call; these keep the module docstring honest).
+    def generate_patch(
+        self, finding: Dict[str, Any], code: str, language: str = ".ts"
+    ) -> Dict[str, Any]:
+        return self._generate_patch(finding, code, language)
+
+    def apply_patch_and_test(
+        self, patch: Dict[str, Any], file_path: str, project_path: str
+    ) -> Dict[str, Any]:
+        return self._apply_patch_and_test(patch, file_path, project_path)
 
     def _generate_patch(
         self,

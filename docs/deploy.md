@@ -51,7 +51,8 @@ railway domain agents.rushingtechnologies.com    # prints the CNAME target
 ```
 
 Then in Cloudflare (zone `rushingtechnologies.com`) add a **proxied** CNAME
-`agents` → the target Railway printed (`cname.railway.app` for the current service). Railway issues the certificate once
+`agents` → the target Railway printed (`jh8ifzti.up.railway.app` for the current
+service — it is per-domain, read it from Railway → Settings → Networking, not a generic host). Railway issues the certificate once
 the record resolves; Cloudflare SSL mode must be *Full* (it is for the other
 `*.rushingtechnologies.com` services).
 

@@ -8,7 +8,7 @@ It also supports A/B testing old vs new patterns and rolls back on regression.
 Usage:
     from agents.training import DetectorTrainer
     trainer = DetectorTrainer(db_path="~/.local/state/rushingtech-agents/evolution.db")
-    report = trainer.train(detector="security_audit.check_jwt_implementation")
+    report = trainer.train("security_audit.check_jwt_implementation")
     print(report)
 """
 
@@ -96,6 +96,10 @@ class DetectorTrainer(BaseAgent):
         }
 
     # ── Tool handlers ─────────────────────────────────────────────────
+
+    def train(self, detector: str, min_confidence: float = 0.8) -> Dict[str, Any]:
+        """Public alias for the `train_detector` tool (see module docstring)."""
+        return self._train_detector(detector, min_confidence)
 
     def _train_detector(
         self,

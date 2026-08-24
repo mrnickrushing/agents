@@ -272,28 +272,6 @@ You're not decorating screens — you're crafting the thing the user feels every
                             "enum": ["critical", "serious", "moderate", "minor"],
                             "description": "Minimum severity level to report",
                         },
-                        "issues": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "severity": {"type": "string"},
-                                    "issue": {"type": "string"},
-                                    "wcag_criterion": {"type": "string"},
-                                    "fix": {"type": "string"},
-                                },
-                            },
-                            "description": "List of accessibility issues found",
-                        },
-                        "overall_score": {
-                            "type": "number",
-                            "description": "Accessibility score 0-100",
-                        },
-                        "recommendations": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Recommendations for improvement",
-                        },
                     },
                     "required": ["component_code"],
                 },
@@ -311,15 +289,6 @@ You're not decorating screens — you're crafting the thing the user feels every
                         "design_tokens": {
                             "type": "object",
                             "description": "Design token key-value pairs",
-                        },
-                        "updated_code": {
-                            "type": "string",
-                            "description": "Component code with tokens applied",
-                        },
-                        "changes_made": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "List of changes applied",
                         },
                     },
                     "required": ["component_code", "design_tokens"],

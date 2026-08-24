@@ -8,7 +8,7 @@ description: Run this repo's no-API-key static scanner (python -m agents.cli sca
 This repo (`rushingtech-agents`) ships two deterministic, no-API-key checkers that are plain Python/regex/AST — not LLM calls — so they're fast, free, and safe to run automatically:
 
 - `python -m agents.cli scan --path <project>` — general project scan. Auto-discovers relevant files and routes them through the review-capable agents (security, auth, billing, mobile, API, database, infra, deployment, code quality, accessibility).
-- `python -m agents.cli luau-scan <path>` — Roblox/Luau-specific static analysis (18 rules, see this repo's README). Use for any project containing `.lua`/`.luau` files or a `*.project.json` (Rojo).
+- `python -m agents.cli luau-scan <path>` — Roblox/Luau-specific static analysis (19 rules, see this repo's README). Use for any project containing `.lua`/`.luau` files or a `*.project.json` (Rojo).
 
 Both require the package installed once per environment: `pip install -e ~/agents` (or wherever this repo is checked out), then they resolve as `python -m agents.cli ...` from any project directory.
 
@@ -60,7 +60,7 @@ Human feedback outranks LLM triage and is applied automatically on the next scan
 python -m agents.cli luau-scan <path>                    # human-readable
 python -m agents.cli luau-scan <path> --json              # machine-readable
 python -m agents.cli luau-scan <path> --fail-on HIGH      # CI gate (this is the default)
-python -m agents.cli luau-scan <path> --rules call_arity unresolved_requires   # subset of rules
+python -m agents.cli luau-scan <path> --rules call_arity unresolved_require   # subset of rules
 ```
 
 This one runs in about a second, has no network/model dependency, and was specifically designed to have a very low false-positive rate (rules decline to report when they can't be sure, rather than flagging speculatively) — treat its findings as high-confidence rather than something that needs a second triage pass.

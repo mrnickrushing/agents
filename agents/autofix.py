@@ -170,7 +170,7 @@ def resolve_tag(repo: str, tag: str) -> Optional[str]:
 
 def pin_actions(path: str, apply: bool = False) -> tuple[int, List[str]]:
     """Pin every mutable `uses:` tag to its commit SHA, tag kept as a comment
-    so dependabot can keep the pin current."""
+    so the pin stays readable and a later `agents fix` can refresh it."""
     out: List[str] = []
     changed = 0
     unresolved: List[str] = []

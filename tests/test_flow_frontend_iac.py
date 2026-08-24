@@ -1,0 +1,179 @@
+"""Direct unit tests for the three v2.13 scan-surface agents that were only
+exercised indirectly through `cli scan` routing: flow_audit,
+frontend_performance, iac_security."""
+
+from agents.flow_audit import FlowAuditAgent
+from agents.frontend_performance import FrontendPerformanceAgent
+from agents.iac_security import IACSecurityAgent
+
+
+def _issues(result):
+    return [f["issue"] for f in result["findings"]]
+
+
+# ── FlowAuditAgent ────────────────────────────────────────────────────────
+
+
+def test_flow_oauth_without_state_is_high():
+    code = "router.get('/oauth/callback', async (req, res) => { await exchange(req.query.code) })"
+    result = FlowAuditAgent()._audit_flow_logic(code)
+    issues = _issues(result)
+    assert "OAuth flow has no visible state parameter validation" in issues
+    assert result["total_issues"] == len(result["findings"])
+
+
+def test_flow_oauth_state_without_expiry_is_low_only():
+    code = (
+        "const state = crypto.randomUUID(); store.set(state, true);\n"
+        "router.get('/oauth/callback', (req, res) => { if (!store.has(req.query.state)) throw 1 })"
+    )
+    issues = _issues(FlowAuditAgent()._audit_flow_logic(code))
+    assert "OAuth flow has no visible state parameter validation" not in issues
+    assert "OAuth state exists but no visible timeout/expiry handling" in issues
+
+
+def test_flow_webhook_without_idempotency_is_high_and_idempotent_one_is_clean():
+    hot = "app.post('/webhook', (req, res) => { handlePayment(req.body) })"
+    assert "Payment/subscription flow has no visible idempotency guard" in _issues(
+        FlowAuditAgent()._audit_flow_logic(hot)
+    )
+    safe = (
+        "app.post('/webhook', (req, res) => { if (seen.has(event.id)) return; "
+        "handlePayment(req.body) })"
+    )
+    assert "Payment/subscription flow has no visible idempotency guard" not in _issues(
+        FlowAuditAgent()._audit_flow_logic(safe)
+    )
+
+
+def test_flow_retry_without_backoff_and_upload_without_cleanup():
+    code = "for attempt in range(5):\n    upload(file)\n"
+    issues = _issues(FlowAuditAgent()._audit_flow_logic(code))
+    assert "Retry logic has no visible exponential backoff" in issues
+    assert "Upload workflow has no visible cleanup on failure" in issues
+    assert "Upload flow has no visible malware scanning step" in issues
+
+
+def test_flow_clean_code_has_no_findings():
+    code = "def add(a, b):\n    return a + b\n"
+    assert FlowAuditAgent()._audit_flow_logic(code)["findings"] == []
+
+
+# ── FrontendPerformanceAgent ──────────────────────────────────────────────
+
+
+def test_frontend_lodash_and_keyless_list():
+    code = (
+        "import _ from 'lodash';\n"
+        "export const List = ({ items }) => <ul>{items.map((i) => <li>{i}</li>)}</ul>;\n"
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert "Whole lodash import may increase bundle size" in issues
+    assert "JSX list rendering has no key prop" in issues
+
+
+def test_frontend_keyed_list_is_not_flagged():
+    code = "export const List = ({ items }) => <ul>{items.map((i) => <li key={i.id}>{i}</li>)}</ul>;"
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert "JSX list rendering has no key prop" not in issues
+
+
+def test_frontend_image_hints():
+    bare = '<img src="/hero.png" />'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(bare))
+    assert "Image tag missing loading='lazy'" in issues
+    assert "Image may be unoptimized (missing srcSet/width/height hints)" in issues
+
+    good = '<img src="/hero.png" width=800 height=600 loading="lazy" />'
+    assert (
+        FrontendPerformanceAgent()._audit_frontend_performance(good)["findings"] == []
+    )
+
+
+def test_frontend_icon_button_needs_aria_label():
+    code = "<button onClick={close}><svg /></button>"
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert "Icon-only button missing aria-label" in issues
+    labelled = '<button aria-label="Close" onClick={close}><svg /></button>'
+    assert "Icon-only button missing aria-label" not in _issues(
+        FrontendPerformanceAgent()._audit_frontend_performance(labelled)
+    )
+
+
+def test_frontend_layout_thrashing_and_modal_focus():
+    code = (
+        "requestAnimationFrame(() => { el.style.top = el.getBoundingClientRect().top + 'px' });\n"
+        "function Modal() { return <div>modal</div> }"
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert "Animation loop reads layout metrics (possible layout thrashing)" in issues
+    assert "Modal/dialog lacks visible focus management" in issues
+
+
+# ── IACSecurityAgent ──────────────────────────────────────────────────────
+
+
+def test_iac_terraform_credentials_open_ingress_public_bucket():
+    tf = (
+        'provider "aws" {\n  access_key = "AKIA123"\n  secret_key = "abc"\n}\n'
+        'resource "aws_security_group" "sg" {\n  ingress { cidr_blocks = ["0.0.0.0/0"] }\n}\n'
+        'resource "aws_s3_bucket" "b" {\n  acl = "public-read"\n}\n'
+    )
+    result = IACSecurityAgent()._audit_iac_security(tf, path="infra/main.tf")
+    issues = _issues(result)
+    assert "Terraform file contains hardcoded cloud credentials" in issues
+    assert "Terraform security group appears open to 0.0.0.0/0" in issues
+    assert "S3 bucket configured as public-read" in issues
+    assert result["findings"][0]["severity"] == "CRITICAL"
+
+
+def test_iac_terraform_rules_only_apply_to_tf_files():
+    tf = 'access_key = "AKIA123"'
+    assert IACSecurityAgent()._audit_iac_security(tf, path="notes.md")["findings"] == []
+
+
+def test_iac_kubernetes_deployment_hardening():
+    manifest = (
+        "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+        "      containers:\n        - name: app\n          image: app:1\n"
+    )
+    issues = _issues(
+        IACSecurityAgent()._audit_iac_security(manifest, path="k8s/app.yaml")
+    )
+    assert "Kubernetes workload missing securityContext" in issues
+    assert "Kubernetes deployment has no resource limits/requests" in issues
+
+    hardened = (
+        manifest
+        + "          securityContext:\n            runAsNonRoot: true\n          resources:\n            limits: {cpu: 1}\n"
+    )
+    assert (
+        IACSecurityAgent()._audit_iac_security(hardened, path="k8s/app.yaml")[
+            "findings"
+        ]
+        == []
+    )
+
+
+def test_iac_kubernetes_cluster_admin_binding():
+    rb = (
+        "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\n"
+        "roleRef:\n  name: cluster-admin\n"
+    )
+    issues = _issues(IACSecurityAgent()._audit_iac_security(rb, path="rbac.yml"))
+    assert "Kubernetes RBAC appears overly permissive" in issues
+
+
+def test_iac_dockerfile_unpinned_image_and_baked_secret():
+    dockerfile = "FROM python\nENV API_TOKEN=abc123\nRUN pip install .\n"
+    issues = _issues(
+        IACSecurityAgent()._audit_iac_security(dockerfile, path="Dockerfile")
+    )
+    assert "Container base image is unpinned/latest" in issues
+    assert "Potential secret baked into container config" in issues
+
+    pinned = "FROM python:3.11-slim\nRUN pip install .\n"
+    assert (
+        IACSecurityAgent()._audit_iac_security(pinned, path="Dockerfile")["findings"]
+        == []
+    )
