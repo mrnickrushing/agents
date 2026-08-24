@@ -80,4 +80,4 @@ __all__ = [
     "TriageRAG",
 ]
 
-__version__ = "2.15.0"
+__version__ = "2.16.0"

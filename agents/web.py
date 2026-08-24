@@ -164,7 +164,8 @@ class AgentsDashboard:
     Minimal web dashboard for rushingtech-agents.
 
     Works without Flask when used as a library (pure data layer).
-    Requires Flask + flask-cors for the HTTP server path.
+    Requires Flask for the HTTP server path. For the hosted service
+    (dashboard + GitHub webhook + health) see `agents.server`.
     """
 
     def __init__(self, db_path: Optional[str] | object = _DEFAULT_DATABASE) -> None:
@@ -200,15 +201,22 @@ class AgentsDashboard:
             conn.close()
 
     def get_findings(self, limit: int = 50) -> Dict[str, Any]:
-        """Return the most recent findings."""
+        """Return the most recent findings, newest scan first.
+
+        Reads the evolution store's own schema (findings joined to scan_runs
+        for the timestamp and project) — the columns the CLI records, not a
+        dashboard-only shape.
+        """
         conn = self._connect()
         if conn is None:
             return {"findings": []}
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT severity, issue, file_path, detector, scanned_at "
-                "FROM findings ORDER BY scanned_at DESC LIMIT ?",
+                "SELECT f.severity, f.issue, f.file, f.agent, f.tool, f.fix, "
+                "f.finding_id, r.created_at, r.project_path "
+                "FROM findings f JOIN scan_runs r ON r.scan_id = f.scan_id "
+                "ORDER BY r.created_at DESC, f.rowid DESC LIMIT ?",
                 (limit,),
             )
             findings = [
@@ -216,8 +224,11 @@ class AgentsDashboard:
                     "severity": row[0],
                     "issue": row[1],
                     "file_path": row[2],
-                    "detector": row[3],
-                    "scanned_at": row[4],
+                    "detector": f"{row[3]}.{row[4]}" if row[4] else row[3],
+                    "fix": row[5],
+                    "finding_id": row[6],
+                    "scanned_at": row[7],
+                    "project": row[8],
                 }
                 for row in cur.fetchall()
             ]

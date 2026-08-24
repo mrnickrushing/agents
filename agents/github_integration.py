@@ -276,19 +276,43 @@ def _post_pr_summary(payload: Dict[str, Any], result: Dict[str, Any]) -> bool:
         return False
 
 
-def create_flask_app(integration: GitHubIntegration):
-    try:
-        from flask import Flask, jsonify, request
-    except ImportError as exc:
-        raise ImportError(
-            "Install the web extra: pip install 'rushingtech-agents[web]'"
-        ) from exc
+def _default_scan_fn(diff: str) -> List[Dict[str, Any]]:
+    from agents.security_audit import SecurityAuditAgent
 
-    app = Flask("agents-github-integration")
+    return SecurityAuditAgent()._audit_hardcoded_secrets(diff).get("findings", [])
+
+
+def register_webhook_routes(
+    app,
+    integration: Optional[GitHubIntegration],
+    scan_fn: Optional[Callable[[str], List[Dict[str, Any]]]] = None,
+    on_result: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
+):
+    """Mount POST /webhook on an existing Flask app.
+
+    `integration=None` mounts a route that answers 503 with a clear reason,
+    so a deployment without GITHUB_WEBHOOK_SECRET still serves everything
+    else and says why the webhook is off instead of 404ing.
+
+    `on_result(payload, result)` runs after a scan (before the response) —
+    the hosted service uses it to record findings and push SSE events.
+    """
+    from flask import jsonify, request
+
     processed_deliveries: set[str] = set()
+    scan = scan_fn or _default_scan_fn
 
     @app.post("/webhook")
     def webhook():
+        if integration is None or not integration.webhook_secret:
+            return (
+                jsonify(
+                    {
+                        "error": "webhook disabled: GITHUB_WEBHOOK_SECRET is not configured"
+                    }
+                ),
+                503,
+            )
         raw = request.get_data(cache=True)
         signature = request.headers.get("X-Hub-Signature-256", "")
         if not integration.verify_signature(raw, signature):
@@ -298,16 +322,12 @@ def create_flask_app(integration: GitHubIntegration):
             return jsonify({"action": "duplicate", "delivery_id": delivery_id})
         payload = request.get_json(silent=True) or {}
 
-        def scan_diff(diff: str) -> List[Dict[str, Any]]:
-            from agents.security_audit import SecurityAuditAgent
-
-            return (
-                SecurityAuditAgent()._audit_hardcoded_secrets(diff).get("findings", [])
-            )
-
         event = request.headers.get("X-GitHub-Event", "")
-        result = integration.handle_event(event, payload, scan_diff)
-        result["summary_comment_posted"] = _post_pr_summary(payload, result)
+        result = integration.handle_event(event, payload, scan)
+        if result.get("action") == "scanned":
+            result["summary_comment_posted"] = _post_pr_summary(payload, result)
+            if on_result is not None:
+                on_result(payload, result)
         if delivery_id:
             processed_deliveries.add(delivery_id)
             if len(processed_deliveries) > 10_000:
@@ -315,6 +335,18 @@ def create_flask_app(integration: GitHubIntegration):
         return jsonify(result)
 
     return app
+
+
+def create_flask_app(integration: GitHubIntegration):
+    try:
+        from flask import Flask
+    except ImportError as exc:
+        raise ImportError(
+            "Install the web extra: pip install 'rushingtech-agents[web]'"
+        ) from exc
+
+    app = Flask("agents-github-integration")
+    return register_webhook_routes(app, integration)
 
 
 def _main() -> None:

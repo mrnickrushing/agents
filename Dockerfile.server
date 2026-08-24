@@ -1,0 +1,34 @@
+# Hosted service image: dashboard + GitHub webhook receiver + health endpoints.
+# The CLI image (Dockerfile) stays a scanner; this one runs `agents serve`.
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md /build/
+COPY agents /build/agents
+RUN pip install --prefix=/install --no-cache-dir ".[web]"
+
+FROM python:3.11-slim
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
+# /data is where the evolution store lives; mount a volume there to persist it.
+RUN useradd --create-home --uid 10001 agents \
+    && mkdir -p /data \
+    && chown agents:agents /data
+
+COPY --from=builder /install /usr/local
+
+ENV XDG_STATE_HOME=/data \
+    HOST=0.0.0.0 \
+    PORT=8000
+USER agents
+EXPOSE 8000
+
+CMD ["agents", "serve"]

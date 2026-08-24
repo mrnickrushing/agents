@@ -6,6 +6,30 @@ Twenty-two specialized agents (110 tools total) that understand React/Node/Expre
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
+## 🆕 Version 2.16.0 — hosted service (`agents serve`)
+
+The dashboard, the GitHub webhook receiver, and `/health` now run as one
+service, so a single Railway deployment (or `docker compose up dashboard`)
+serves all of it:
+
+```bash
+pip install 'rushingtech-agents[web]'
+agents serve                 # http://0.0.0.0:8000 — reads $PORT / $HOST / $AGENTS_DB
+```
+
+- `GET /` dashboard, `GET /api/summary|findings|events`, `GET /health`,
+  `GET /ready`, `POST /webhook` (HMAC-verified GitHub `pull_request` events).
+- A webhook scan is **recorded into the evolution store** the dashboard reads,
+  so a PR event shows up on the dashboard and the SSE feed, and
+  `agents feedback <agf_id> dismiss` works on it like any local finding.
+- Without `GITHUB_WEBHOOK_SECRET` the webhook route answers 503 with the
+  reason; everything else keeps serving.
+- Fixed: the dashboard queried columns the evolution store never had and
+  silently showed zero findings. It now reads the real schema.
+- `Dockerfile.server` + `railway.toml` deploy it (non-root, gunicorn, volume
+  at `/data`); the tag pipeline also publishes
+  `ghcr.io/mrnickrushing/agents-server`. Runbook: [`docs/deploy.md`](docs/deploy.md).
+
 ## 🆕 Version 2.15.0 — PyPI + container distribution
 
 After the first signed release is published, install from PyPI:
