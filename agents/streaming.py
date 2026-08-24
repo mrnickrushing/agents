@@ -41,7 +41,6 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -100,7 +99,9 @@ class StreamingEventBus:
         # Optional SQLite persistence
         if db_path:
             self._db_path: Optional[str] = db_path
-            self._conn: Optional[sqlite3.Connection] = sqlite3.connect(db_path, check_same_thread=False)
+            self._conn: Optional[sqlite3.Connection] = sqlite3.connect(
+                db_path, check_same_thread=False
+            )
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_QUEUE_SCHEMA)
             self._conn.commit()
@@ -124,7 +125,9 @@ class StreamingEventBus:
             event = {**event, "scan_id": scan_id}
 
         payload = json.dumps(event)
-        logger.debug("StreamingEventBus.publish: scan_id=%s type=%s", scan_id, event.get("type"))
+        logger.debug(
+            "StreamingEventBus.publish: scan_id=%s type=%s", scan_id, event.get("type")
+        )
 
         # Persist to SQLite
         if self._conn is not None:
@@ -145,21 +148,29 @@ class StreamingEventBus:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
-                logger.warning("StreamingEventBus: subscriber queue full for scan_id=%s", scan_id)
+                logger.warning(
+                    "StreamingEventBus: subscriber queue full for scan_id=%s", scan_id
+                )
 
     def publish_sync(self, scan_id: str, event: Dict[str, Any]) -> None:
         """
         Synchronous publish — safe to call from non-async code.
 
-        Events published this way are only persisted to SQLite (if configured);
-        in-process async subscribers will not receive them unless they replay
-        from the SQLite queue.
+        Events are persisted to SQLite (if configured) and delivered to any
+        current in-process subscribers.
         """
         if "timestamp" not in event:
             event = {**event, "timestamp": _iso_now()}
         if "scan_id" not in event:
             event = {**event, "scan_id": scan_id}
         payload = json.dumps(event)
+        for queue in list(self._queues.get(scan_id, [])):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "StreamingEventBus: subscriber queue full for scan_id=%s", scan_id
+                )
         if self._conn is not None:
             try:
                 self._conn.execute(
@@ -285,21 +296,35 @@ class StreamingEventBus:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _iso_now() -> str:
     """Return current UTC time in ISO 8601 format."""
     import datetime
+
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ── Convenience event constructors ────────────────────────────────────────────
 
+
 def scan_started_event(scan_id: str, path: str, total_files: int) -> Dict[str, Any]:
-    return {"type": "scan_started", "scan_id": scan_id, "path": path, "total_files": total_files}
+    return {
+        "type": "scan_started",
+        "scan_id": scan_id,
+        "path": path,
+        "total_files": total_files,
+    }
 
 
-def file_scanned_event(scan_id: str, file: str, current: int, total: int) -> Dict[str, Any]:
-    return {"type": "file_scanned", "scan_id": scan_id, "file": file,
-            "progress": {"current": current, "total": total}}
+def file_scanned_event(
+    scan_id: str, file: str, current: int, total: int
+) -> Dict[str, Any]:
+    return {
+        "type": "file_scanned",
+        "scan_id": scan_id,
+        "file": file,
+        "progress": {"current": current, "total": total},
+    }
 
 
 def finding_found_event(
@@ -315,18 +340,35 @@ def finding_found_event(
     return {
         "type": "finding_found",
         "scan_id": scan_id,
-        "finding": {"agent": agent, "severity": severity, "file": file, "line": line, "issue": issue},
+        "finding": {
+            "agent": agent,
+            "severity": severity,
+            "file": file,
+            "line": line,
+            "issue": issue,
+        },
         "progress": {"current": current, "total": total},
     }
 
 
 def step_completed_event(scan_id: str, step_name: str, attempt: int) -> Dict[str, Any]:
-    return {"type": "step_completed", "scan_id": scan_id, "step_name": step_name, "attempt": attempt}
+    return {
+        "type": "step_completed",
+        "scan_id": scan_id,
+        "step_name": step_name,
+        "attempt": attempt,
+    }
 
 
 def scan_completed_event(scan_id: str, total_findings: int) -> Dict[str, Any]:
-    return {"type": "scan_completed", "scan_id": scan_id, "total_findings": total_findings}
+    return {
+        "type": "scan_completed",
+        "scan_id": scan_id,
+        "total_findings": total_findings,
+    }
 
 
-def error_occurred_event(scan_id: str, error: str, step: Optional[str] = None) -> Dict[str, Any]:
+def error_occurred_event(
+    scan_id: str, error: str, step: Optional[str] = None
+) -> Dict[str, Any]:
     return {"type": "error_occurred", "scan_id": scan_id, "error": error, "step": step}

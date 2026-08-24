@@ -48,7 +48,9 @@ class _AsyncOpenAIClient:
                     tool_calls=[
                         SimpleNamespace(
                             id="tool-1",
-                            function=SimpleNamespace(name="lookup", arguments='{"value": "abc"}'),
+                            function=SimpleNamespace(
+                                name="lookup", arguments='{"value": "abc"}'
+                            ),
                             model_dump=lambda: {"id": "tool-1"},
                         )
                     ],
@@ -136,8 +138,16 @@ def test_conversation_store_persists_history_across_instances(tmp_path, monkeypa
     second.run("second", conversation_id="session-1")
     messages = _SyncOpenAIClient.instances[-1].calls[-1]["messages"]
 
-    assert any(message.get("content") == "first" for message in messages if isinstance(message, dict))
-    assert any(message.get("content") == "ok" for message in messages if isinstance(message, dict))
+    assert any(
+        message.get("content") == "first"
+        for message in messages
+        if isinstance(message, dict)
+    )
+    assert any(
+        message.get("content") == "ok"
+        for message in messages
+        if isinstance(message, dict)
+    )
 
 
 def test_async_run_supports_async_tools_and_per_call_round_limit(monkeypatch):

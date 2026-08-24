@@ -41,6 +41,7 @@ class PolicyFinding:
 
 # --- individual rules ---------------------------------------------------------
 
+
 def check_trivy_sarif_gate(path: str, content: str) -> List[PolicyFinding]:
     """`format: sarif` + `exit-code: 1` in one trivy-action step.
 
@@ -60,24 +61,24 @@ def check_trivy_sarif_gate(path: str, content: str) -> List[PolicyFinding]:
         # trivy-action's documented escape hatch: with this set, the severity
         # filter *is* applied to sarif output, so the gate behaves correctly
         # and there is nothing to report.
-        limited = re.search(
-            r"limit-severities-for-sarif:\s*['\"]?true", block, re.I
-        )
+        limited = re.search(r"limit-severities-for-sarif:\s*['\"]?true", block, re.I)
         if has_sarif and has_exit and has_sev and not limited:
-            out.append(PolicyFinding(
-                rule="trivy-sarif-gate",
-                severity="HIGH",
-                file=path,
-                message=(
-                    "trivy step combines format: sarif with exit-code: 1 and a severity "
-                    "filter — the severity filter is ignored in sarif mode, so this gate "
-                    "fails on LOW/UNKNOWN findings and unfixable CVEs"
-                ),
-                fix=(
-                    "split into two steps: a blocking `format: table` step that keeps the "
-                    "severity filter, plus a separate non-blocking `format: sarif` upload"
-                ),
-            ))
+            out.append(
+                PolicyFinding(
+                    rule="trivy-sarif-gate",
+                    severity="HIGH",
+                    file=path,
+                    message=(
+                        "trivy step combines format: sarif with exit-code: 1 and a severity "
+                        "filter — the severity filter is ignored in sarif mode, so this gate "
+                        "fails on LOW/UNKNOWN findings and unfixable CVEs"
+                    ),
+                    fix=(
+                        "split into two steps: a blocking `format: table` step that keeps the "
+                        "severity filter, plus a separate non-blocking `format: sarif` upload"
+                    ),
+                )
+            )
     return out
 
 
@@ -91,13 +92,15 @@ def check_workflow_concurrency(path: str, content: str) -> List[PolicyFinding]:
         return []
     if re.search(r"^concurrency:", content, re.M):
         return []
-    return [PolicyFinding(
-        rule="workflow-missing-concurrency",
-        severity="MEDIUM",
-        file=path,
-        message="push/PR-triggered workflow has no concurrency group, so superseded runs bill to completion",
-        fix="add a top-level `concurrency:` with group ${{ github.workflow }}-${{ github.ref }} and cancel-in-progress: true",
-    )]
+    return [
+        PolicyFinding(
+            rule="workflow-missing-concurrency",
+            severity="MEDIUM",
+            file=path,
+            message="push/PR-triggered workflow has no concurrency group, so superseded runs bill to completion",
+            fix="add a top-level `concurrency:` with group ${{ github.workflow }}-${{ github.ref }} and cancel-in-progress: true",
+        )
+    ]
 
 
 def check_dependabot_grouping(path: str, content: str) -> List[PolicyFinding]:
@@ -113,13 +116,15 @@ def check_dependabot_grouping(path: str, content: str) -> List[PolicyFinding]:
         # Malformed config is itself worth reporting. Returning [] here would
         # read as "this repo is fine", which is how a broken parser silently
         # turns a policy checker into a no-op.
-        return [PolicyFinding(
-            rule="dependabot-unparseable",
-            severity="LOW",
-            file=path,
-            message="dependabot config could not be parsed as YAML, so grouping was not checked",
-            fix="fix the YAML syntax so dependabot actually reads this file",
-        )]
+        return [
+            PolicyFinding(
+                rule="dependabot-unparseable",
+                severity="LOW",
+                file=path,
+                message="dependabot config could not be parsed as YAML, so grouping was not checked",
+                fix="fix the YAML syntax so dependabot actually reads this file",
+            )
+        ]
     if not isinstance(data, dict):
         return out
     for entry in data.get("updates", []) or []:
@@ -130,16 +135,18 @@ def check_dependabot_grouping(path: str, content: str) -> List[PolicyFinding]:
         if eco in {"github-actions", "docker"}:
             continue
         if not entry.get("groups"):
-            out.append(PolicyFinding(
-                rule="dependabot-missing-grouping",
-                severity="MEDIUM",
-                file=path,
-                message=f"{eco} updates in {directory} are ungrouped — one PR per package, each running full CI",
-                fix=(
-                    f"add a `groups:` block for {eco} covering minor+patch "
-                    "(leave majors ungrouped so they stay bisectable)"
-                ),
-            ))
+            out.append(
+                PolicyFinding(
+                    rule="dependabot-missing-grouping",
+                    severity="MEDIUM",
+                    file=path,
+                    message=f"{eco} updates in {directory} are ungrouped — one PR per package, each running full CI",
+                    fix=(
+                        f"add a `groups:` block for {eco} covering minor+patch "
+                        "(leave majors ungrouped so they stay bisectable)"
+                    ),
+                )
+            )
     return out
 
 
@@ -181,26 +188,30 @@ def check_plaintext_secrets(path: str, content: str) -> List[PolicyFinding]:
     for pattern, label in _SECRET_PATTERNS:
         if pattern.search(content) and label not in seen:
             seen.add(label)
-            out.append(PolicyFinding(
-                rule="plaintext-secret",
-                severity="HIGH",
-                file=path,
-                message=f"{label} appears in plaintext in a committed file",
-                fix="rotate the credential, then move it to an encrypted CI variable or secret store",
-            ))
+            out.append(
+                PolicyFinding(
+                    rule="plaintext-secret",
+                    severity="HIGH",
+                    file=path,
+                    message=f"{label} appears in plaintext in a committed file",
+                    fix="rotate the credential, then move it to an encrypted CI variable or secret store",
+                )
+            )
 
     for m in _INLINE_SECRET.finditer(content):
         key, val = m.group("key"), m.group("val")
         if _NOT_A_SECRET.match(val) or key in seen:
             continue
         seen.add(key)
-        out.append(PolicyFinding(
-            rule="plaintext-secret",
-            severity="HIGH",
-            file=path,
-            message=f"{key} is assigned a literal value in a committed file",
-            fix=f"rotate it, then reference an encrypted variable instead of inlining {key}",
-        ))
+        out.append(
+            PolicyFinding(
+                rule="plaintext-secret",
+                severity="HIGH",
+                file=path,
+                message=f"{key} is assigned a literal value in a committed file",
+                fix=f"rotate it, then reference an encrypted variable instead of inlining {key}",
+            )
+        )
     return out
 
 
@@ -284,19 +295,21 @@ def check_forced_version_without_dependabot_ignore(
     for name, spec in sorted(forced.items()):
         if name not in direct or is_ignored(name):
             continue
-        out.append(PolicyFinding(
-            rule="forced-version-without-dependabot-ignore",
-            severity="MEDIUM",
-            file=path,
-            message=(
-                f"{name} is a direct dependency force-pinned to {spec}, but dependabot "
-                "has no ignore for it"
-            ),
-            fix=(
-                f"add a dependabot ignore for {name} — dependabot can bump the direct "
-                "dependency past the pin and silently undo the holdback"
-            ),
-        ))
+        out.append(
+            PolicyFinding(
+                rule="forced-version-without-dependabot-ignore",
+                severity="MEDIUM",
+                file=path,
+                message=(
+                    f"{name} is a direct dependency force-pinned to {spec}, but dependabot "
+                    "has no ignore for it"
+                ),
+                fix=(
+                    f"add a dependabot ignore for {name} — dependabot can bump the direct "
+                    "dependency past the pin and silently undo the holdback"
+                ),
+            )
+        )
     return out
 
 
@@ -304,7 +317,9 @@ def check_forced_version_without_dependabot_ignore(
 
 _WORKFLOW = re.compile(r"\.github/workflows/.+\.ya?ml$")
 _DEPENDABOT = re.compile(r"\.github/dependabot\.ya?ml$")
-_CI_CONFIG = re.compile(r"(codemagic\.ya?ml|\.github/workflows/.+\.ya?ml|Dockerfile|docker-compose\.ya?ml)$")
+_CI_CONFIG = re.compile(
+    r"(codemagic\.ya?ml|\.github/workflows/.+\.ya?ml|Dockerfile|docker-compose\.ya?ml)$"
+)
 
 _RULES: List[tuple[re.Pattern[str], Callable[[str, str], List[PolicyFinding]]]] = [
     (_WORKFLOW, check_trivy_sarif_gate),
@@ -329,7 +344,9 @@ def run_policies(files: Dict[str, str]) -> List[PolicyFinding]:
                 findings.extend(rule(path, content))
 
     pkg = files.get("package.json")
-    dependabot = files.get(".github/dependabot.yml") or files.get(".github/dependabot.yaml")
+    dependabot = files.get(".github/dependabot.yml") or files.get(
+        ".github/dependabot.yaml"
+    )
     # Only meaningful where dependabot version updates are actually configured.
     # With no config there is nothing that can bump a dependency past the pin,
     # so reporting it would be noise — and acting on it would mean *adding* a
@@ -347,7 +364,9 @@ class FleetPolicyAgent(BaseAgent):
     """Programmatic wrapper around repository-wide fleet policy checks."""
 
     name = "fleet_policy"
-    description = "Checks repository configuration files for recurring fleet-wide policy drift."
+    description = (
+        "Checks repository configuration files for recurring fleet-wide policy drift."
+    )
     system_prompt = "You analyze repository policy/configuration drift."
 
     def _define_tools(self) -> List[Dict[str, Any]]:

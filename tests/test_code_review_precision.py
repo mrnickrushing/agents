@@ -102,8 +102,12 @@ def test_project_express_async_errors_suppresses_per_route_try_catch_warning(tmp
 def test_express5_in_one_workspace_does_not_suppress_express4_sibling(tmp_path):
     (tmp_path / "modern").mkdir()
     (tmp_path / "legacy").mkdir()
-    (tmp_path / "modern/package.json").write_text('{"dependencies":{"express":"5.0.0"}}')
-    (tmp_path / "legacy/package.json").write_text('{"dependencies":{"express":"4.21.0"}}')
+    (tmp_path / "modern/package.json").write_text(
+        '{"dependencies":{"express":"5.0.0"}}'
+    )
+    (tmp_path / "legacy/package.json").write_text(
+        '{"dependencies":{"express":"4.21.0"}}'
+    )
     (tmp_path / "legacy/routes.ts").write_text(
         "router.get('/users', async (_req, res) => { res.json(await loadUsers()); });"
     )

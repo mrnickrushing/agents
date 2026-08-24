@@ -15,11 +15,6 @@ keywords = ["agents", "security", "code-review", "ai", "llm"]
 dependencies = [
   "openai>=1.50.0",
   "anthropic>=0.40.0",
-  "click>=8.1.0",
-  "flask>=3.0.0",
-  "flask-cors>=4.0.0",
-  "tree-sitter>=0.21.0",
-  "sentence-transformers>=3.0.0",
   "PyYAML>=6.0",
 ]
 classifiers = [
@@ -36,19 +31,21 @@ agents = "agents.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mrnickrushing/agents"
-Documentation = "https://rushingtech-agents.readthedocs.io"
+Documentation = "https://github.com/mrnickrushing/agents#readme"
 Repository = "https://github.com/mrnickrushing/agents"
 Issues = "https://github.com/mrnickrushing/agents/issues"
 
 [project.optional-dependencies]
 dev = [
   "pytest",
-  "black",
-  "ruff",
+  "black==26.5.1",
+  "ruff==0.15.22",
 ]
+web = ["flask>=3.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["agents*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -58,3 +55,6 @@ line-length = 88
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F841"]

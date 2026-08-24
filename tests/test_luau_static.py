@@ -160,10 +160,14 @@ part:Remove()
 
 
 def test_unanchored_part_only_when_file_never_anchors():
-    noisy = scan({"src/Build.luau": 'local p = Instance.new("Part")\np.Parent = workspace\n'})
+    noisy = scan(
+        {"src/Build.luau": 'local p = Instance.new("Part")\np.Parent = workspace\n'}
+    )
     assert "unanchored_part" in rules_fired(noisy)
 
-    quiet = scan({"src/Build.luau": 'local p = Instance.new("Part")\np.Anchored = true\n'})
+    quiet = scan(
+        {"src/Build.luau": 'local p = Instance.new("Part")\np.Anchored = true\n'}
+    )
     assert "unanchored_part" not in rules_fired(quiet)
 
 
@@ -244,16 +248,20 @@ return ready
 
 
 def test_unresolved_require():
-    report = scan({
-        "src/Main.luau": "local Gone = require(script.Parent.DeletedModule)\nreturn Gone\n",
-        "src/Present.luau": "return {}\n",
-    })
+    report = scan(
+        {
+            "src/Main.luau": "local Gone = require(script.Parent.DeletedModule)\nreturn Gone\n",
+            "src/Present.luau": "return {}\n",
+        }
+    )
     assert "unresolved_require" in rules_fired(report)
 
-    ok = scan({
-        "src/Main.luau": "local Present = require(script.Parent.Present)\nreturn Present\n",
-        "src/Present.luau": "return {}\n",
-    })
+    ok = scan(
+        {
+            "src/Main.luau": "local Present = require(script.Parent.Present)\nreturn Present\n",
+            "src/Present.luau": "return {}\n",
+        }
+    )
     assert "unresolved_require" not in rules_fired(ok)
 
 
@@ -261,38 +269,43 @@ def test_unresolved_require():
 
 
 def test_rojo_missing_path_and_unset_lighting():
-    report = scan({
-        "default.project.json": """{
+    report = scan(
+        {
+            "default.project.json": """{
   "name": "Demo",
   "tree": {
     "$className": "DataModel",
     "ServerScriptService": { "$path": "src/does_not_exist" }
   }
 }""",
-        "src/Present.luau": "return {}\n",
-    })
+            "src/Present.luau": "return {}\n",
+        }
+    )
     fired = rules_fired(report)
     assert "rojo_missing_path" in fired
     assert "rojo_lighting_unset" in fired
 
 
 def test_rojo_lighting_declared_is_silent():
-    report = scan({
-        "default.project.json": """{
+    report = scan(
+        {
+            "default.project.json": """{
   "name": "Demo",
   "tree": {
     "$className": "DataModel",
     "Lighting": { "$properties": { "Technology": "Future" } }
   }
 }""",
-        "src/Present.luau": "return {}\n",
-    })
+            "src/Present.luau": "return {}\n",
+        }
+    )
     assert "rojo_lighting_unset" not in rules_fired(report)
 
 
 def test_rojo_server_source_in_client_service():
-    report = scan({
-        "default.project.json": """{
+    report = scan(
+        {
+            "default.project.json": """{
   "name": "Demo",
   "tree": {
     "$className": "DataModel",
@@ -300,19 +313,22 @@ def test_rojo_server_source_in_client_service():
     "ReplicatedStorage": { "Shared": { "$path": "src/server" } }
   }
 }""",
-        "src/server/Secret.luau": "return {}\n",
-    })
+            "src/server/Secret.luau": "return {}\n",
+        }
+    )
     assert "rojo_server_in_client" in rules_fired(report)
 
 
 def test_test_project_is_not_asked_for_lighting():
-    report = scan({
-        "test.project.json": """{
+    report = scan(
+        {
+            "test.project.json": """{
   "name": "Tests",
   "tree": { "$className": "DataModel" }
 }""",
-        "src/Present.luau": "return {}\n",
-    })
+            "src/Present.luau": "return {}\n",
+        }
+    )
     assert "rojo_lighting_unset" not in rules_fired(report)
 
 
@@ -320,8 +336,9 @@ def test_test_project_is_not_asked_for_lighting():
 
 
 def test_unread_definition_field():
-    report = scan({
-        "src/shared/Content/Definitions/Events.luau": """--!strict
+    report = scan(
+        {
+            "src/shared/Content/Definitions/Events.luau": """--!strict
 return {
     {
         id = "a",
@@ -337,15 +354,17 @@ return {
     },
 }
 """,
-        "src/server/Service.luau": "--!strict\nlocal x = 1\nreturn x\n",
-    })
+            "src/server/Service.luau": "--!strict\nlocal x = 1\nreturn x\n",
+        }
+    )
     fired = [f for f in report["findings"] if f["rule"] == "unread_definition_field"]
     assert any("guidanceLine" in f["issue"] for f in fired)
 
 
 def test_read_definition_field_is_silent():
-    report = scan({
-        "src/shared/Content/Definitions/Events.luau": """--!strict
+    report = scan(
+        {
+            "src/shared/Content/Definitions/Events.luau": """--!strict
 return {
     {
         id = "a",
@@ -361,8 +380,9 @@ return {
     },
 }
 """,
-        "src/server/Service.luau": "--!strict\nreturn function(d) return d.guidanceLine end\n",
-    })
+            "src/server/Service.luau": "--!strict\nreturn function(d) return d.guidanceLine end\n",
+        }
+    )
     fired = [f for f in report["findings"] if f["rule"] == "unread_definition_field"]
     assert not any("guidanceLine" in f["issue"] for f in fired)
 
@@ -371,8 +391,9 @@ return {
 
 
 def test_clean_repository_reports_nothing():
-    report = scan({
-        "default.project.json": """{
+    report = scan(
+        {
+            "default.project.json": """{
   "name": "Demo",
   "tree": {
     "$className": "DataModel",
@@ -380,13 +401,14 @@ def test_clean_repository_reports_nothing():
     "ServerScriptService": { "$path": "src" }
   }
 }""",
-        "src/Clean.luau": """--!strict
+            "src/Clean.luau": """--!strict
 local function add(left: number, right: number): number
     return left + right
 end
 return add(1, 2)
 """,
-    })
+        }
+    )
     assert report["total_issues"] == 0, report["findings"]
 
 
@@ -443,8 +465,9 @@ end)
 
 def test_type_schema_is_not_authored_content():
     """A type export beside content looks exactly like content to a regex."""
-    report = scan({
-        "src/shared/Content/Registry.luau": """--!strict
+    report = scan(
+        {
+            "src/shared/Content/Registry.luau": """--!strict
 export type Entry = {
     displayNameKey: string,
     analyticsKey: string,
@@ -457,8 +480,9 @@ local ALLOWED = {
 }
 return ALLOWED
 """,
-        "src/server/Use.luau": "--!strict\nreturn 1\n",
-    })
+            "src/server/Use.luau": "--!strict\nreturn 1\n",
+        }
+    )
     assert "unread_definition_field" not in rules_fired(report)
 
 

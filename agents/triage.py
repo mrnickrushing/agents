@@ -99,7 +99,10 @@ class TriageAgent(BaseAgent):
         # steered (by its own mistake or a crafted finding) into reading
         # anything outside the scanned project, e.g. via a `../../` path.
         target = os.path.realpath(os.path.join(self._project_root, path))
-        if not (target == self._project_root or target.startswith(self._project_root + os.sep)):
+        if not (
+            target == self._project_root
+            or target.startswith(self._project_root + os.sep)
+        ):
             return {"error": "Path escapes project root"}
         if not os.path.isfile(target):
             return {"error": f"No such file: {path}"}
@@ -114,7 +117,10 @@ class TriageAgent(BaseAgent):
 def _extract_verdict(text: str) -> Dict[str, str]:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
-        return {"verdict": "UNKNOWN", "reason": "Triage model did not return a parseable verdict."}
+        return {
+            "verdict": "UNKNOWN",
+            "reason": "Triage model did not return a parseable verdict.",
+        }
     try:
         parsed = json.loads(match.group(0))
     except json.JSONDecodeError:
@@ -140,8 +146,10 @@ def _extract_verdicts(text: str, count: int) -> List[Dict[str, str]]:
     try:
         parsed = json.loads(match.group(0))
     except json.JSONDecodeError:
-        return [{"verdict": "UNKNOWN", "reason": "Triage model returned malformed JSON."}
-                for _ in range(count)]
+        return [
+            {"verdict": "UNKNOWN", "reason": "Triage model returned malformed JSON."}
+            for _ in range(count)
+        ]
     if not isinstance(parsed, list):
         return [dict(unknown) for _ in range(count)]
 
@@ -300,7 +308,9 @@ def _finding_summary(entry: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def triage_entry(agent: TriageAgent, project_root: str, entry: Dict[str, Any]) -> Dict[str, str]:
+def triage_entry(
+    agent: TriageAgent, project_root: str, entry: Dict[str, Any]
+) -> Dict[str, str]:
     """Ask the triage agent to confirm or dismiss one scan entry (a file +
     the tool that flagged it — may bundle several individual findings)."""
     file_path = entry["file"]
@@ -342,6 +352,7 @@ def triage_report(
     no finding to confirm, just a crash to fix."""
     project_root = os.path.realpath(report["project"])
     agent = TriageAgent(project_root, provider=provider, model=model, api_key=api_key)
+    rag = TriageRAG(project_root=project_root)
 
     confirmed = 0
     dismissed = 0
@@ -352,7 +363,30 @@ def triage_report(
         findings = _findings_of(entry)
         # One call per entry, not per finding: every finding here shares this
         # file, and the old loop re-uploaded it once per finding.
-        verdicts = triage_entry_findings(agent, project_root, entry)
+        contexts = []
+        for finding in findings:
+            contexts.append(
+                rag.retrieve_context(
+                    {
+                        "agent": entry.get("agent", ""),
+                        "rule": entry.get("tool", ""),
+                        "file": entry.get("file", ""),
+                        "issue": finding.get("issue", ""),
+                    }
+                )
+            )
+        if contexts and all(
+            c["total_similar"] >= 3 and c["confidence"] >= 0.75 for c in contexts
+        ):
+            verdicts = [
+                {
+                    "verdict": c["majority_verdict"],
+                    "reason": f"RAG cache: {c['confidence'] * 100:.0f}% agreement across {c['total_similar']} similar findings.",
+                }
+                for c in contexts
+            ]
+        else:
+            verdicts = triage_entry_findings(agent, project_root, entry)
         for finding, triage in zip(findings, verdicts):
             finding["triage"] = triage
             if triage["verdict"] == "CONFIRMED":
@@ -361,6 +395,17 @@ def triage_report(
                 dismissed += 1
             else:
                 unknown += 1
+            if triage["verdict"] in {"CONFIRMED", "FALSE_POSITIVE"}:
+                rag.record_verdict(
+                    {
+                        "agent": entry.get("agent", ""),
+                        "rule": entry.get("tool", ""),
+                        "file": entry.get("file", ""),
+                        "issue": finding.get("issue", ""),
+                    },
+                    triage["verdict"],
+                    triage.get("reason", ""),
+                )
 
         if verdicts:
             if any(v["verdict"] == "CONFIRMED" for v in verdicts):
@@ -372,6 +417,7 @@ def triage_report(
             reasons = "; ".join(v["reason"] for v in verdicts if v.get("reason"))
             entry["triage"] = {"verdict": entry_verdict, "reason": reasons}
 
+    rag.close()
     report["triage_summary"] = {
         "confirmed": confirmed,
         "false_positive": dismissed,
@@ -395,7 +441,9 @@ async def triage_report_async(
     project_root = os.path.realpath(report["project"])
     agent = TriageAgent(project_root, provider=provider, model=model, api_key=api_key)
 
-    async def process_entry(entry: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, str]]] | None:
+    async def process_entry(
+        entry: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], List[Dict[str, Any]], List[Dict[str, str]]] | None:
         if entry["result"].get("error"):
             return None
         findings = _findings_of(entry)
@@ -406,7 +454,9 @@ async def triage_report_async(
     dismissed = 0
     unknown = 0
     try:
-        processed = await asyncio.gather(*(process_entry(entry) for entry in report["results"]))
+        processed = await asyncio.gather(
+            *(process_entry(entry) for entry in report["results"])
+        )
         for item in processed:
             if item is None:
                 continue
@@ -649,7 +699,13 @@ class TriageRAG:
         confirmed = sum(1 for t in top if t["verdict"] == "CONFIRMED")
         fp_count = sum(1 for t in top if t["verdict"] == "FALSE_POSITIVE")
         total = len(top)
-        confidence = (confirmed / total) if total > 0 else 0.0
+        majority_verdict = "UNKNOWN"
+        majority_count = 0
+        if confirmed > fp_count:
+            majority_verdict, majority_count = "CONFIRMED", confirmed
+        elif fp_count > confirmed:
+            majority_verdict, majority_count = "FALSE_POSITIVE", fp_count
+        confidence = (majority_count / total) if total > 0 else 0.0
 
         lines = []
         for item in top:
@@ -665,6 +721,7 @@ class TriageRAG:
             "false_positive_count": fp_count,
             "total_similar": total,
             "confidence": confidence,
+            "majority_verdict": majority_verdict,
             "context_text": context_text,
         }
 
@@ -696,10 +753,10 @@ class TriageRAG:
 
         # Fast path: high-confidence historical verdict
         if ctx["total_similar"] >= 3 and ctx["confidence"] >= min_confidence:
-            verdict = "CONFIRMED"
+            verdict = ctx["majority_verdict"]
             reason = (
-                f"RAG: {ctx['confirmed_count']}/{ctx['total_similar']} similar past findings "
-                f"were CONFIRMED ({ctx['confidence'] * 100:.0f}% confidence)."
+                f"RAG: the {verdict} verdict has {ctx['confidence'] * 100:.0f}% agreement "
+                f"across {ctx['total_similar']} similar past findings."
             )
             return {
                 "verdict": verdict,

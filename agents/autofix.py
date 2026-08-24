@@ -37,11 +37,24 @@ from typing import Dict, List, Optional, Set
 
 # Directories never worth walking, mirroring the scanner's own exclusions.
 SKIP_DIRS = {
-    "node_modules", ".git", "dist", "build", ".next", ".venv", "venv",
-    "__pycache__", ".expo", "coverage", "Pods", ".gradle", "vendor",
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".expo",
+    "coverage",
+    "Pods",
+    ".gradle",
+    "vendor",
 }
 
-USES = re.compile(r"^(\s*-?\s*uses:\s*)([\w.-]+/[\w.-]+(?:/[\w./-]+)?)@([^\s#]+)(\s*(?:#.*)?)$")
+USES = re.compile(
+    r"^(\s*-?\s*uses:\s*)([\w.-]+/[\w.-]+(?:/[\w./-]+)?)@([^\s#]+)(\s*(?:#.*)?)$"
+)
 
 ENV_USAGE = re.compile(
     r"process\.env\.([A-Z][A-Z0-9_]{2,})"
@@ -52,15 +65,41 @@ ENV_USAGE = re.compile(
 
 # Names the platform supplies, or that no example file should carry.
 ENV_IGNORE = {
-    "NODE_ENV", "PORT", "HOSTNAME", "CI", "HOME", "PATH", "PWD", "TZ", "SHELL",
-    "USER", "LANG", "TERM", "DEBUG", "LOG_LEVEL", "PYTHONPATH", "PYTHONUNBUFFERED",
-    "JEST_WORKER_ID", "NODE_OPTIONS", "GITHUB_ACTIONS", "VERCEL", "VERCEL_URL",
-    "RAILWAY_ENVIRONMENT", "RAILWAY_PUBLIC_DOMAIN", "RAILWAY_PRIVATE_DOMAIN",
-    "RAILWAY_SERVICE_NAME", "RAILWAY_GIT_COMMIT_SHA",
+    "NODE_ENV",
+    "PORT",
+    "HOSTNAME",
+    "CI",
+    "HOME",
+    "PATH",
+    "PWD",
+    "TZ",
+    "SHELL",
+    "USER",
+    "LANG",
+    "TERM",
+    "DEBUG",
+    "LOG_LEVEL",
+    "PYTHONPATH",
+    "PYTHONUNBUFFERED",
+    "JEST_WORKER_ID",
+    "NODE_OPTIONS",
+    "GITHUB_ACTIONS",
+    "VERCEL",
+    "VERCEL_URL",
+    "RAILWAY_ENVIRONMENT",
+    "RAILWAY_PUBLIC_DOMAIN",
+    "RAILWAY_PRIVATE_DOMAIN",
+    "RAILWAY_SERVICE_NAME",
+    "RAILWAY_GIT_COMMIT_SHA",
 }
 
 DB_PORTS = ("5432", "3306", "6379", "27017")
-PASSWORD_VARS = ("POSTGRES_PASSWORD", "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "REDIS_PASSWORD")
+PASSWORD_VARS = (
+    "POSTGRES_PASSWORD",
+    "MYSQL_ROOT_PASSWORD",
+    "MYSQL_PASSWORD",
+    "REDIS_PASSWORD",
+)
 
 ENV_HEADER = (
     "\n# --- Read by the code but previously undocumented (config_audit). A deploy\n"
@@ -72,7 +111,7 @@ ENV_HEADER = (
 @dataclass
 class Change:
     path: str
-    kind: str            # pin-actions | workflow-permissions | env-example | compose
+    kind: str  # pin-actions | workflow-permissions | env-example | compose
     detail: str
     count: int = 1
 
@@ -104,8 +143,9 @@ def resolve_tag(repo: str, tag: str) -> Optional[str]:
     break the workflow in a way that looks like a security improvement.
     """
     for ref in (f"tags/{tag}", f"heads/{tag}"):
-        proc = subprocess.run(["gh", "api", f"repos/{repo}/git/ref/{ref}"],
-                              capture_output=True, text=True)
+        proc = subprocess.run(
+            ["gh", "api", f"repos/{repo}/git/ref/{ref}"], capture_output=True, text=True
+        )
         if proc.returncode != 0:
             continue
         try:
@@ -113,8 +153,11 @@ def resolve_tag(repo: str, tag: str) -> Optional[str]:
         except (ValueError, KeyError):
             return None
         if obj.get("type") == "tag":
-            deref = subprocess.run(["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
-                                   capture_output=True, text=True)
+            deref = subprocess.run(
+                ["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
+                capture_output=True,
+                text=True,
+            )
             if deref.returncode == 0:
                 try:
                     return json.loads(deref.stdout)["object"]["sha"]
@@ -176,7 +219,11 @@ def add_workflow_permissions(path: str, apply: bool = False) -> bool:
     if not jobs:
         return False
 
-    text = text[:jobs.start()] + "permissions:\n  contents: read\n\n" + text[jobs.start():]
+    text = (
+        text[: jobs.start()]
+        + "permissions:\n  contents: read\n\n"
+        + text[jobs.start() :]
+    )
 
     job_re = re.compile(r"^(  [A-Za-z0-9_-]+):\s*$", re.M)
     positions = [m.start() for m in job_re.finditer(text)]
@@ -186,9 +233,11 @@ def add_workflow_permissions(path: str, apply: bool = False) -> bool:
         body = text[start:end]
         if "upload-sarif" in body and "security-events" not in body:
             head_end = start + body.index("\n") + 1
-            text = (text[:head_end]
-                    + "    permissions:\n      contents: read\n      security-events: write\n"
-                    + text[head_end:])
+            text = (
+                text[:head_end]
+                + "    permissions:\n      contents: read\n      security-events: write\n"
+                + text[head_end:]
+            )
 
     if apply:
         with open(path, "w") as fh:
@@ -205,8 +254,10 @@ def undocumented_env_vars(example_path: str) -> List[str]:
     with open(example_path) as fh:
         existing = fh.read()
     documented = {
-        m.group(1) for m in
-        re.finditer(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=", existing, re.M)
+        m.group(1)
+        for m in re.finditer(
+            r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=", existing, re.M
+        )
     }
 
     used: Set[str] = set()
@@ -238,8 +289,12 @@ def document_env_vars(example_path: str, names: List[str], apply: bool = False) 
         with open(example_path) as fh:
             existing = fh.read()
         with open(example_path, "w") as fh:
-            fh.write(existing.rstrip("\n") + "\n" + ENV_HEADER
-                     + "".join(f"{n}=\n" for n in names))
+            fh.write(
+                existing.rstrip("\n")
+                + "\n"
+                + ENV_HEADER
+                + "".join(f"{n}=\n" for n in names)
+            )
     return len(names)
 
 
@@ -293,13 +348,24 @@ def plan(root: str, apply: bool = False, kinds: Optional[Set[str]] = None) -> Fi
             path = os.path.join(workflows_dir, name)
             rel = os.path.relpath(path, root)
             if "workflow-permissions" in want and add_workflow_permissions(path, apply):
-                result.changes.append(Change(rel, "workflow-permissions",
-                                             "added least-privilege permissions block"))
+                result.changes.append(
+                    Change(
+                        rel,
+                        "workflow-permissions",
+                        "added least-privilege permissions block",
+                    )
+                )
             if "pin-actions" in want:
                 pinned, unresolved = pin_actions(path, apply)
                 if pinned:
-                    result.changes.append(Change(rel, "pin-actions",
-                                                 f"pinned {pinned} action(s) to SHAs", pinned))
+                    result.changes.append(
+                        Change(
+                            rel,
+                            "pin-actions",
+                            f"pinned {pinned} action(s) to SHAs",
+                            pinned,
+                        )
+                    )
                 result.unresolved.extend(f"{rel}: {u}" for u in unresolved)
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -311,16 +377,28 @@ def plan(root: str, apply: bool = False, kinds: Optional[Set[str]] = None) -> Fi
                 missing = undocumented_env_vars(path)
                 if missing:
                     document_env_vars(path, missing, apply)
-                    result.changes.append(Change(
-                        rel, "env-example",
-                        f"documented {len(missing)} var(s): " + ", ".join(missing[:5])
-                        + (f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""),
-                        len(missing),
-                    ))
-            elif "compose" in want and re.fullmatch(r"(docker-)?compose.*\.ya?ml", name):
+                    result.changes.append(
+                        Change(
+                            rel,
+                            "env-example",
+                            f"documented {len(missing)} var(s): "
+                            + ", ".join(missing[:5])
+                            + (
+                                f" (+{len(missing) - 5} more)"
+                                if len(missing) > 5
+                                else ""
+                            ),
+                            len(missing),
+                        )
+                    )
+            elif "compose" in want and re.fullmatch(
+                r"(docker-)?compose.*\.ya?ml", name
+            ):
                 notes = harden_compose(path, apply)
                 if notes:
-                    result.changes.append(Change(rel, "compose", "; ".join(notes), len(notes)))
+                    result.changes.append(
+                        Change(rel, "compose", "; ".join(notes), len(notes))
+                    )
 
     return result
 

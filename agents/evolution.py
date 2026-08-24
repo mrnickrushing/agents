@@ -553,8 +553,16 @@ class EvolutionStore:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                incident_id, signature, project_key, surface, check_name,
-                summary, root_cause, fix, fix_ref, _utc_now(),
+                incident_id,
+                signature,
+                project_key,
+                surface,
+                check_name,
+                summary,
+                root_cause,
+                fix,
+                fix_ref,
+                _utc_now(),
             ),
         )
         self.connection.commit()

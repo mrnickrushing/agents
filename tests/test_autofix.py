@@ -33,14 +33,19 @@ def _wf(repo, name, text):
 
 # --- dry run writes nothing ------------------------------------------------------
 
+
 def test_dry_run_never_writes(repo):
-    wf = _wf(repo, "ci.yml", """
+    wf = _wf(
+        repo,
+        "ci.yml",
+        """
         on: push
         jobs:
           t:
             steps:
               - uses: actions/checkout@v4
-    """)
+    """,
+    )
     (repo / ".env.example").write_text("A=\n")
     (repo / "app.py").write_text('import os\nos.getenv("B_VAR")\n')
     before = {p: p.read_bytes() for p in (wf, repo / ".env.example")}
@@ -55,15 +60,20 @@ def test_dry_run_never_writes(repo):
 
 # --- action pinning ----------------------------------------------------------------
 
+
 def test_pins_mutable_tags_and_keeps_the_tag_as_a_comment(repo):
-    wf = _wf(repo, "ci.yml", """
+    wf = _wf(
+        repo,
+        "ci.yml",
+        """
         permissions: { contents: read }
         jobs:
           t:
             steps:
               - uses: actions/checkout@v4
               - uses: aquasecurity/trivy-action@v0.36.0
-    """)
+    """,
+    )
     with patch.object(autofix, "resolve_tag", return_value=SHA):
         changed, unresolved = autofix.pin_actions(str(wf), apply=True)
 
@@ -74,13 +84,17 @@ def test_pins_mutable_tags_and_keeps_the_tag_as_a_comment(repo):
 
 
 def test_already_pinned_and_local_actions_are_left_alone(repo):
-    wf = _wf(repo, "ci.yml", f"""
+    wf = _wf(
+        repo,
+        "ci.yml",
+        f"""
         jobs:
           t:
             steps:
               - uses: actions/checkout@{OTHER_SHA} # v7
               - uses: ./.github/actions/local
-    """)
+    """,
+    )
     before = wf.read_text()
     with patch.object(autofix, "resolve_tag", return_value=SHA):
         changed, _ = autofix.pin_actions(str(wf), apply=True)
@@ -91,12 +105,16 @@ def test_already_pinned_and_local_actions_are_left_alone(repo):
 def test_an_unresolvable_tag_is_reported_not_guessed(repo):
     """Rewriting it to a guess would break the workflow while looking like a
     security improvement."""
-    wf = _wf(repo, "ci.yml", """
+    wf = _wf(
+        repo,
+        "ci.yml",
+        """
         jobs:
           t:
             steps:
               - uses: someone/deleted-action@v9
-    """)
+    """,
+    )
     before = wf.read_text()
     with patch.object(autofix, "resolve_tag", return_value=None):
         changed, unresolved = autofix.pin_actions(str(wf), apply=True)
@@ -108,20 +126,28 @@ def test_an_unresolvable_tag_is_reported_not_guessed(repo):
 
 # --- workflow permissions ------------------------------------------------------------
 
+
 def test_adds_top_level_permissions_when_there_are_none(repo):
-    wf = _wf(repo, "ci.yml", """
+    wf = _wf(
+        repo,
+        "ci.yml",
+        """
         on: push
         jobs:
           t:
             steps:
               - run: echo hi
-    """)
+    """,
+    )
     assert autofix.add_workflow_permissions(str(wf), apply=True) is True
     assert "permissions:\n  contents: read" in wf.read_text()
 
 
 def test_a_workflow_that_already_scopes_per_job_is_untouched(repo):
-    wf = _wf(repo, "ci.yml", """
+    wf = _wf(
+        repo,
+        "ci.yml",
+        """
         on: push
         jobs:
           t:
@@ -129,7 +155,8 @@ def test_a_workflow_that_already_scopes_per_job_is_untouched(repo):
               contents: read
             steps:
               - run: echo hi
-    """)
+    """,
+    )
     before = wf.read_text()
     assert autofix.add_workflow_permissions(str(wf), apply=True) is False
     assert wf.read_text() == before
@@ -138,7 +165,10 @@ def test_a_workflow_that_already_scopes_per_job_is_untouched(repo):
 def test_sarif_jobs_keep_the_permission_their_upload_needs(repo):
     """Restricting the token without this turns a passing security-scan job
     into a failing one — worse than the permissive token it replaced."""
-    wf = _wf(repo, "scan.yml", """
+    wf = _wf(
+        repo,
+        "scan.yml",
+        """
         on: push
         jobs:
           build:
@@ -147,7 +177,8 @@ def test_sarif_jobs_keep_the_permission_their_upload_needs(repo):
           scan:
             steps:
               - uses: github/codeql-action/upload-sarif@v3
-    """)
+    """,
+    )
     autofix.add_workflow_permissions(str(wf), apply=True)
     text = wf.read_text()
 
@@ -160,15 +191,16 @@ def test_sarif_jobs_keep_the_permission_their_upload_needs(repo):
 
 # --- .env.example ---------------------------------------------------------------------
 
+
 def test_documents_only_undocumented_non_platform_vars(repo):
     (repo / ".env.example").write_text("DATABASE_URL=\n")
     (repo / "app.py").write_text(
-        'import os\n'
-        'os.getenv("DATABASE_URL")\n'      # already documented
-        'os.getenv("REDIS_URL")\n'          # missing -> documented
-        'os.getenv("PORT")\n'               # platform-supplied -> ignored
+        "import os\n"
+        'os.getenv("DATABASE_URL")\n'  # already documented
+        'os.getenv("REDIS_URL")\n'  # missing -> documented
+        'os.getenv("PORT")\n'  # platform-supplied -> ignored
     )
-    (repo / "app.test.py").write_text('os.getenv("ONLY_IN_TESTS")\n')   # tests ignored
+    (repo / "app.test.py").write_text('os.getenv("ONLY_IN_TESTS")\n')  # tests ignored
 
     missing = autofix.undocumented_env_vars(str(repo / ".env.example"))
     assert missing == ["REDIS_URL"]
@@ -188,6 +220,7 @@ def test_node_modules_is_not_scanned_for_env_usage(repo):
 
 
 # --- compose ------------------------------------------------------------------------------
+
 
 def test_compose_keeps_todays_behaviour_while_parameterizing(repo):
     """The current literal becomes the default, so anyone running this file
@@ -225,19 +258,25 @@ def test_compose_already_hardened_is_a_no_op(repo):
 
 # --- idempotence + validation ---------------------------------------------------------------
 
+
 def test_running_twice_changes_nothing_the_second_time(repo):
-    _wf(repo, "ci.yml", """
+    _wf(
+        repo,
+        "ci.yml",
+        """
         on: push
         jobs:
           t:
             steps:
               - uses: actions/checkout@v4
-    """)
+    """,
+    )
     (repo / ".env.example").write_text("A=\n")
     (repo / "app.py").write_text('import os\nos.getenv("B_VAR")\n')
     (repo / "docker-compose.yml").write_text(
-        'services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: dev\n'
-        '    ports:\n      - "5432:5432"\n')
+        "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: dev\n"
+        '    ports:\n      - "5432:5432"\n'
+    )
 
     with patch.object(autofix, "resolve_tag", return_value=SHA):
         first = autofix.plan(str(repo), apply=True)
@@ -263,7 +302,8 @@ def test_validate_workflows_passes_on_good_yaml(repo):
 def test_kinds_restricts_what_runs(repo):
     _wf(repo, "ci.yml", "on: push\njobs:\n  t:\n    steps:\n      - run: echo\n")
     (repo / "docker-compose.yml").write_text(
-        'services:\n  db:\n    ports:\n      - "5432:5432"\n')
+        'services:\n  db:\n    ports:\n      - "5432:5432"\n'
+    )
 
     result = autofix.plan(str(repo), apply=False, kinds={"compose"})
     assert {c.kind for c in result.changes} == {"compose"}

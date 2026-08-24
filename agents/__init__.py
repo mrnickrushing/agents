@@ -25,6 +25,7 @@ from agents.api_architect import APIArchitectAgent
 from agents.database_architect import DatabaseArchitectAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.roblox_audit import RobloxAuditAgent
+from agents.config_audit import ConfigAuditAgent
 from agents.fleet_policy import FleetPolicyAgent
 from agents.flow_audit import FlowAuditAgent
 from agents.frontend_performance import FrontendPerformanceAgent
@@ -54,6 +55,7 @@ __all__ = [
     "DatabaseArchitectAgent",
     "InfraMonitorAgent",
     "RobloxAuditAgent",
+    "ConfigAuditAgent",
     "FleetPolicyAgent",
     "FlowAuditAgent",
     "FrontendPerformanceAgent",
@@ -78,4 +80,4 @@ __all__ = [
     "TriageRAG",
 ]
 
-__version__ = "2.14.0"
+__version__ = "2.15.0"

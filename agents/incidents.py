@@ -42,13 +42,13 @@ _ERROR_LINE = re.compile(
 # Applied in order. Order matters: hashes before numbers, or a hex string
 # gets shredded into <n> fragments first.
 _SCRUB: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\x1b\[[0-9;]*[a-zA-Z]"), ""),                    # ANSI colour
+    (re.compile(r"\x1b\[[0-9;]*[a-zA-Z]"), ""),  # ANSI colour
     (re.compile(r"^\s*\d{4}-\d{2}-\d{2}t[\d:.]+z?\s*", re.I), ""),  # leading ISO ts
     (re.compile(r"##\[(error|warning|group|endgroup)\]", re.I), ""),
-    (re.compile(r"\b[0-9a-f]{7,64}\b", re.I), "<hash>"),           # sha/commit/uuid-ish
+    (re.compile(r"\b[0-9a-f]{7,64}\b", re.I), "<hash>"),  # sha/commit/uuid-ish
     (re.compile(r"\bv?\d+\.\d+(\.\d+)*([-+][0-9a-z.]+)?\b", re.I), "<ver>"),
-    (re.compile(r"(/[\w.@+-]+){2,}/?"), "<path>"),                 # unix-ish paths
-    (re.compile(r"\b[a-z]:\\[\w\\.@+-]+", re.I), "<path>"),        # windows paths
+    (re.compile(r"(/[\w.@+-]+){2,}/?"), "<path>"),  # unix-ish paths
+    (re.compile(r"\b[a-z]:\\[\w\\.@+-]+", re.I), "<path>"),  # windows paths
     (re.compile(r"\b\d+\b"), "<n>"),
     (re.compile(r"\s+"), " "),
 ]

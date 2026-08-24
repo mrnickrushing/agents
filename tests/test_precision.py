@@ -7,11 +7,15 @@ not a measurement — unscored rules are never demoted.
 """
 
 import json
-import os
 
 import pytest
 
-from agents.cli import TRUST_MIN_VERDICTS, TRUST_THRESHOLD, load_rule_trust, rule_precision
+from agents.cli import (
+    TRUST_MIN_VERDICTS,
+    TRUST_THRESHOLD,
+    load_rule_trust,
+    rule_precision,
+)
 from agents.evolution import EvolutionStore
 
 
@@ -26,13 +30,20 @@ def _seed(db_path, rule_tool, verdicts):
         report = {
             "project": "/tmp/proj",
             "project_key": "proj",
-            "results": [{
-                "file": f"f{i}.py", "agent": "security_audit", "tool": rule_tool,
-                "source_hash": "h" * 40,
-                "result": {"findings": [{"severity": "HIGH", "issue": f"issue {i}"}]},
-            } for i in range(len(verdicts))],
+            "results": [
+                {
+                    "file": f"f{i}.py",
+                    "agent": "security_audit",
+                    "tool": rule_tool,
+                    "source_hash": "h" * 40,
+                    "result": {
+                        "findings": [{"severity": "HIGH", "issue": f"issue {i}"}]
+                    },
+                }
+                for i in range(len(verdicts))
+            ],
         }
-        store.record_scan(report, detector_version="test")   # attaches finding ids
+        store.record_scan(report, detector_version="test")  # attaches finding ids
         for entry, verdict in zip(report["results"], verdicts):
             fid = entry["result"]["findings"][0]["finding_id"]
             store.add_feedback(fid, verdict, "test")
@@ -72,21 +83,27 @@ def test_scan_demotes_findings_of_untrusted_rules(tmp_path, monkeypatch):
     the original severity visible, and says why."""
     state = tmp_path / "state"
     state.mkdir()
-    (state / "rule_trust.json").write_text(json.dumps({
-        "demoted": {"config_audit.audit_dockerfile": 0.2},
-    }))
+    (state / "rule_trust.json").write_text(
+        json.dumps(
+            {
+                "demoted": {"config_audit.audit_dockerfile": 0.2},
+            }
+        )
+    )
     monkeypatch.setenv("AGENTS_STATE_DIR", str(state))
     # Also point the evolution DB somewhere disposable.
     monkeypatch.setenv("AGENTS_EVOLUTION_DB", str(tmp_path / "evo.db"))
 
     proj = tmp_path / "proj"
     proj.mkdir()
-    (proj / "Dockerfile").write_text("FROM python:3.13-slim\nCMD ['x']\n")   # rootful
+    (proj / "Dockerfile").write_text("FROM python:3.13-slim\nCMD ['x']\n")  # rootful
 
     from agents.cli import _run_scan
+
     report = _run_scan(str(proj), ["config_audit"])
     findings = [
-        f for entry in report["results"]
+        f
+        for entry in report["results"]
         for f in entry.get("result", {}).get("findings", [])
     ]
     assert findings, "the rootful Dockerfile should still be found"
@@ -104,9 +121,11 @@ def test_scan_untouched_when_no_trust_file(tmp_path, monkeypatch):
     (proj / "Dockerfile").write_text("FROM python:3.13-slim\nCMD ['x']\n")
 
     from agents.cli import _run_scan
+
     report = _run_scan(str(proj), ["config_audit"])
     sevs = {
-        f["severity"] for entry in report["results"]
+        f["severity"]
+        for entry in report["results"]
         for f in entry.get("result", {}).get("findings", [])
     }
     assert "HIGH" in sevs
@@ -122,17 +141,23 @@ def test_a_verdict_is_counted_once_however_many_scans_recorded_the_finding(db):
     from agents.evolution import EvolutionStore
 
     report = {
-        "project": "/tmp/proj", "project_key": "proj",
-        "results": [{
-            "file": "a.py", "agent": "security_audit", "tool": "audit_xss_patterns",
-            "source_hash": "h" * 40,
-            "result": {"findings": [{"severity": "HIGH", "issue": "same finding"}]},
-        }],
+        "project": "/tmp/proj",
+        "project_key": "proj",
+        "results": [
+            {
+                "file": "a.py",
+                "agent": "security_audit",
+                "tool": "audit_xss_patterns",
+                "source_hash": "h" * 40,
+                "result": {"findings": [{"severity": "HIGH", "issue": "same finding"}]},
+            }
+        ],
     }
     with EvolutionStore(db) as store:
         # The identical finding, recorded by six separate scans.
         for _ in range(6):
             import copy
+
             store.record_scan(copy.deepcopy(report), detector_version="test")
         fid = store.connection.execute(
             "SELECT finding_id FROM findings LIMIT 1"
@@ -152,12 +177,17 @@ def test_any_confirmed_wins_over_earlier_dismissals(db):
     from agents.evolution import EvolutionStore
 
     report = {
-        "project": "/tmp/proj", "project_key": "proj",
-        "results": [{
-            "file": "a.py", "agent": "security_audit", "tool": "audit_sql_injection",
-            "source_hash": "h" * 40,
-            "result": {"findings": [{"severity": "HIGH", "issue": "x"}]},
-        }],
+        "project": "/tmp/proj",
+        "project_key": "proj",
+        "results": [
+            {
+                "file": "a.py",
+                "agent": "security_audit",
+                "tool": "audit_sql_injection",
+                "source_hash": "h" * 40,
+                "result": {"findings": [{"severity": "HIGH", "issue": "x"}]},
+            }
+        ],
     }
     with EvolutionStore(db) as store:
         store.record_scan(report, detector_version="test")

@@ -26,14 +26,13 @@ from __future__ import annotations
 
 import ast
 import concurrent.futures
-import json
 import logging
 import os
 import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +93,15 @@ _ALL_EXTS = _PYTHON_EXTS | _JS_EXTS
 
 # Directories to skip
 _SKIP_DIRS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv",
-    "dist", "build", ".next", "coverage",
+    ".git",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
 }
 
 # ── Helper visitors ───────────────────────────────────────────────────────────
@@ -124,14 +130,16 @@ class _PythonVisitor(ast.NodeVisitor):
     def _record_function(self, node: Any) -> None:
         args = [a.arg for a in node.args.args]
         sig = f"({', '.join(args)})"
-        self.symbols.append({
-            "name": node.name,
-            "kind": KIND_FUNCTION,
-            "file": self.filepath,
-            "line": node.lineno,
-            "col": node.col_offset,
-            "signature": sig,
-        })
+        self.symbols.append(
+            {
+                "name": node.name,
+                "kind": KIND_FUNCTION,
+                "file": self.filepath,
+                "line": node.lineno,
+                "col": node.col_offset,
+                "signature": sig,
+            }
+        )
         self._func_stack.append(node.name)
         self._current_func = node.name
         self.generic_visit(node)
@@ -139,79 +147,104 @@ class _PythonVisitor(ast.NodeVisitor):
         self._current_func = self._func_stack[-1] if self._func_stack else "<module>"
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # type: ignore[override]
-        self.symbols.append({
-            "name": node.name,
-            "kind": KIND_CLASS,
-            "file": self.filepath,
-            "line": node.lineno,
-            "col": node.col_offset,
-            "signature": None,
-        })
+        self.symbols.append(
+            {
+                "name": node.name,
+                "kind": KIND_CLASS,
+                "file": self.filepath,
+                "line": node.lineno,
+                "col": node.col_offset,
+                "signature": None,
+            }
+        )
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:  # type: ignore[override]
         for target in node.targets:
             if isinstance(target, ast.Name):
-                self.symbols.append({
-                    "name": target.id,
-                    "kind": KIND_VARIABLE,
-                    "file": self.filepath,
-                    "line": node.lineno,
-                    "col": node.col_offset,
-                    "signature": None,
-                })
+                self.symbols.append(
+                    {
+                        "name": target.id,
+                        "kind": KIND_VARIABLE,
+                        "file": self.filepath,
+                        "line": node.lineno,
+                        "col": node.col_offset,
+                        "signature": None,
+                    }
+                )
         self.generic_visit(node)
 
     # ── imports ───────────────────────────────────────────────────────
 
     def visit_Import(self, node: ast.Import) -> None:  # type: ignore[override]
         for alias in node.names:
-            self.imports.append({
-                "file": self.filepath,
-                "module": alias.name,
-                "alias": alias.asname,
-            })
+            self.imports.append(
+                {
+                    "file": self.filepath,
+                    "module": alias.name,
+                    "alias": alias.asname,
+                }
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # type: ignore[override]
         module = node.module or ""
         for alias in node.names:
-            self.imports.append({
-                "file": self.filepath,
-                "module": f"{module}.{alias.name}" if module else alias.name,
-                "alias": alias.asname,
-            })
+            self.imports.append(
+                {
+                    "file": self.filepath,
+                    "module": f"{module}.{alias.name}" if module else alias.name,
+                    "alias": alias.asname,
+                }
+            )
 
     # ── calls ─────────────────────────────────────────────────────────
 
     def visit_Call(self, node: ast.Call) -> None:  # type: ignore[override]
         callee = _extract_call_name(node.func)
         if callee:
-            self.calls.append({
-                "caller_file": self.filepath,
-                "caller_func": self._current_func,
-                "callee": callee,
-                "line": node.lineno,
-            })
+            self.calls.append(
+                {
+                    "caller_file": self.filepath,
+                    "caller_func": self._current_func,
+                    "callee": callee,
+                    "line": node.lineno,
+                }
+            )
         # simple taint: look for source→sink in same call chain
         self._check_taint(node)
         self.generic_visit(node)
 
     def _check_taint(self, node: ast.Call) -> None:
         """Very lightweight taint: detect source patterns used as args to sinks."""
-        _SOURCES = {"request.args.get", "request.form.get", "request.json", "os.getenv", "input"}
-        _SINKS = {"db.execute", "cursor.execute", "eval", "exec", "subprocess.run", "os.system"}
+        _SOURCES = {
+            "request.args.get",
+            "request.form.get",
+            "request.json",
+            "os.getenv",
+            "input",
+        }
+        _SINKS = {
+            "db.execute",
+            "cursor.execute",
+            "eval",
+            "exec",
+            "subprocess.run",
+            "os.system",
+        }
         callee = _extract_call_name(node.func)
         if callee in _SINKS:
             for arg in ast.walk(node):
                 if isinstance(arg, ast.Call):
                     src = _extract_call_name(arg.func)
                     if src in _SOURCES:
-                        self.data_flows.append({
-                            "file": self.filepath,
-                            "source": src,
-                            "sink": callee,
-                            "line": node.lineno,
-                        })
+                        self.data_flows.append(
+                            {
+                                "file": self.filepath,
+                                "source": src,
+                                "sink": callee,
+                                "line": node.lineno,
+                            }
+                        )
 
 
 def _extract_call_name(node: Any) -> Optional[str]:
@@ -250,54 +283,62 @@ def _parse_js_file(filepath: str, source: str) -> Dict[str, List[Dict[str, Any]]
     imports: List[Dict[str, Any]] = []
     calls: List[Dict[str, Any]] = []
 
-    lines = source.splitlines()
-
     def _lineno_for(match: re.Match) -> int:  # type: ignore[type-arg]
         return source[: match.start()].count("\n") + 1
 
     for m in _JS_FUNCTION_RE.finditer(source):
-        symbols.append({
-            "name": m.group(1),
-            "kind": KIND_FUNCTION,
-            "file": filepath,
-            "line": _lineno_for(m),
-            "col": 0,
-            "signature": None,
-        })
+        symbols.append(
+            {
+                "name": m.group(1),
+                "kind": KIND_FUNCTION,
+                "file": filepath,
+                "line": _lineno_for(m),
+                "col": 0,
+                "signature": None,
+            }
+        )
     for m in _JS_ARROW_RE.finditer(source):
-        symbols.append({
-            "name": m.group(1),
-            "kind": KIND_FUNCTION,
-            "file": filepath,
-            "line": _lineno_for(m),
-            "col": 0,
-            "signature": None,
-        })
+        symbols.append(
+            {
+                "name": m.group(1),
+                "kind": KIND_FUNCTION,
+                "file": filepath,
+                "line": _lineno_for(m),
+                "col": 0,
+                "signature": None,
+            }
+        )
     for m in _JS_CLASS_RE.finditer(source):
-        symbols.append({
-            "name": m.group(1),
-            "kind": KIND_CLASS,
-            "file": filepath,
-            "line": _lineno_for(m),
-            "col": 0,
-            "signature": None,
-        })
+        symbols.append(
+            {
+                "name": m.group(1),
+                "kind": KIND_CLASS,
+                "file": filepath,
+                "line": _lineno_for(m),
+                "col": 0,
+                "signature": None,
+            }
+        )
     for m in _JS_IMPORT_RE.finditer(source):
-        imports.append({
-            "file": filepath,
-            "module": m.group(1),
-            "alias": None,
-        })
+        imports.append(
+            {
+                "file": filepath,
+                "module": m.group(1),
+                "alias": None,
+            }
+        )
     for m in _JS_CALL_RE.finditer(source):
         name = m.group(1)
         # Skip keywords
         if name not in {"if", "while", "for", "switch", "catch", "return"}:
-            calls.append({
-                "caller_file": filepath,
-                "caller_func": "<module>",
-                "callee": name,
-                "line": _lineno_for(m),
-            })
+            calls.append(
+                {
+                    "caller_file": filepath,
+                    "caller_func": "<module>",
+                    "callee": name,
+                    "line": _lineno_for(m),
+                }
+            )
 
     return {"symbols": symbols, "imports": imports, "calls": calls, "data_flows": []}
 
@@ -380,7 +421,9 @@ class CodebaseGraph:
         """
         graph = cls(db_path=db_path)
         files = list(_collect_files(project_path))
-        logger.info("CodebaseGraph: indexing %d files with %d workers", len(files), max_workers)
+        logger.info(
+            "CodebaseGraph: indexing %d files with %d workers", len(files), max_workers
+        )
         start = time.time()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -396,7 +439,9 @@ class CodebaseGraph:
         )
         return graph
 
-    def _ingest_results(self, results: List[Optional[Dict[str, List[Dict[str, Any]]]]]) -> None:
+    def _ingest_results(
+        self, results: List[Optional[Dict[str, List[Dict[str, Any]]]]]
+    ) -> None:
         conn = self._conn
         symbols_all: List[tuple] = []
         imports_all: List[tuple] = []
@@ -409,11 +454,22 @@ class CodebaseGraph:
             self._file_count += 1
             for s in result["symbols"]:
                 self._symbol_count += 1
-                symbols_all.append((s["name"], s["kind"], s["file"], s["line"], s.get("col"), s.get("signature")))
+                symbols_all.append(
+                    (
+                        s["name"],
+                        s["kind"],
+                        s["file"],
+                        s["line"],
+                        s.get("col"),
+                        s.get("signature"),
+                    )
+                )
             for i in result["imports"]:
                 imports_all.append((i["file"], i["module"], i.get("alias")))
             for c in result["calls"]:
-                calls_all.append((c["caller_file"], c["caller_func"], c["callee"], c.get("line")))
+                calls_all.append(
+                    (c["caller_file"], c["caller_func"], c["callee"], c.get("line"))
+                )
             for f in result["data_flows"]:
                 flows_all.append((f["file"], f["source"], f["sink"], f.get("line")))
 
@@ -463,7 +519,9 @@ class CodebaseGraph:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def find_symbols(self, name: str, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+    def find_symbols(
+        self, name: str, kind: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Find all symbols with *name* (optionally filtered by kind)."""
         if kind:
             rows = self._conn.execute(

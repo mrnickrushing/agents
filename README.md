@@ -2,22 +2,28 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twelve specialized agents (73 tools total) that understand your exact stack — React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, EAS/Codemagic, Helmet, Roblox/Luau, and security-hardened everything. Dual-provider support, Claude-powered UI component generation, and a no-API-key CLI for running the underlying checks directly.
+Twenty-two specialized agents (110 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
 ## 🆕 Version 2.15.0 — PyPI + container distribution
 
-Install globally from PyPI:
+After the first signed release is published, install from PyPI:
 
 ```bash
 pip install rushingtech-agents
 ```
 
-Run via Docker:
+Until then, install from source:
 
 ```bash
-docker run --rm -v "$(pwd)":/app rushingtech/agents scan --path /app --fail-on never
+pip install "git+https://github.com/mrnickrushing/agents.git"
+```
+
+After a tagged container release, run from GHCR:
+
+```bash
+docker run --rm -v "$(pwd)":/app ghcr.io/mrnickrushing/agents scan --path /app --fail-on never
 ```
 
 ## 🆕 Version 2.12.0 — `agents fix`, and cheaper triage
@@ -271,10 +277,17 @@ Grounded against Roblox's own Creator Hub docs (security tactics, DataStore requ
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
 | **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
 | **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |
+| **ConfigAuditAgent** | OpenAI, Anthropic | Docker, workflow, mobile-platform, Railway, environment, framework, and web-server configuration auditing |
+| **FleetPolicyAgent** | OpenAI, Anthropic | Cross-repository policy consistency and dependency-update controls |
 | **FlowAuditAgent** ⭐ NEW | OpenAI, Anthropic | Async flow/state-machine checks for OAuth state, payment/subscription idempotency, retries/backoff, upload cleanup, and concurrency hazards |
 | **FrontendPerformanceAgent** ⭐ NEW | OpenAI, Anthropic | Bundle-size leaks, render-efficiency checks, image optimization hints, and deeper accessibility performance patterns |
 | **IACSecurityAgent** ⭐ NEW | OpenAI, Anthropic | Terraform/Kubernetes/Docker infrastructure security checks for credentials, overly-permissive networking/RBAC, and encryption gaps |
 | **SupplyChainAuditAgent** ⭐ NEW | OpenAI, Anthropic | Dependency provenance, pinning precision, transitive bloat signals, and risky supply-chain version/source patterns |
+| **ComplianceAuditAgent** | OpenAI, Anthropic | Explicit SOC 2, HIPAA, GDPR, and PCI-DSS evidence mapping using repository-level evidence |
+| **PostmortemAgent** | OpenAI, Anthropic | Incident-to-detector coverage analysis and prevention recommendations |
+| **HealingAgent** | OpenAI, Anthropic | Previewed mechanical patches with test validation and rollback |
+| **DetectorTrainer** | OpenAI, Anthropic | Feedback-driven detector evaluation and candidate rule training |
+| **FigmaScaffoldAgent** | OpenAI, Anthropic | Figma design-token extraction and Expo/Railway scaffold generation |
 | **InfraMonitorAgent** ⭐ NEW | OpenAI, Anthropic | Sentry setup (DSN, sampling, PII), health-check depth, React error boundary coverage, alert rule design |
 | **RobloxAuditAgent** ⭐ NEW | OpenAI, Anthropic | RemoteEvent/RemoteFunction trust boundary and validation, client-side writes to authoritative state, Rojo project-structure leaks (server source shipped to clients), DataStore pcall/UpdateAsync/BindToClose/request-budget safety, connection-leak and per-frame caching detection, deprecated wait/spawn/delay and unyielding loops, MarketplaceService.ProcessReceipt/PromptProductPurchaseFinished review, TextService/TextChatService filtering gaps, Name/DisplayName-based admin backdoors |
 | **ScaffolderAgent** | OpenAI, Anthropic | Project bootstrapping — Express APIs, React SPAs, Expo apps, FastAPI services, SaaS platforms, CI/CD configs |
@@ -890,4 +903,4 @@ MIT
 
 Built by [Rushing Technologies](https://rushingtechnologies.com) — solo operator, full stack + security + AI.
 
-**Version 2.9.0** — Every agent mirrored as a Claude Code subagent, an `agents-scan` skill, and opt-in pre-commit/CI gating via `scan --fail-on`.
+**Version 2.15.0** — Modern package/CLI/container distribution, expanded scan coverage, durable workflow primitives, knowledge graph, streaming events, and RAG-assisted triage.

@@ -1,7 +1,6 @@
 import tomllib
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,5 +24,6 @@ def test_publish_workflow_builds_and_publishes():
 
     assert 'tags:\n      - "v*"' in workflow
     assert "python -m build" in workflow
-    assert "pypa/gh-action-pypi-publish@release/v1" in workflow
+    assert "pypa/gh-action-pypi-publish@" in workflow
+    assert "# release/v1" in workflow
     assert "generate_release_notes: true" in workflow

@@ -43,7 +43,10 @@ Prefer boring, maintainable choices over clever abstractions.
                     "type": "object",
                     "properties": {
                         "project_name": {"type": "string"},
-                        "database": {"type": "string", "enum": ["sqlite", "postgresql"]},
+                        "database": {
+                            "type": "string",
+                            "enum": ["sqlite", "postgresql"],
+                        },
                         "auth": {"type": "boolean"},
                         "stripe": {"type": "boolean"},
                     },
@@ -57,7 +60,10 @@ Prefer boring, maintainable choices over clever abstractions.
                     "type": "object",
                     "properties": {
                         "project_name": {"type": "string"},
-                        "state_manager": {"type": "string", "enum": ["zustand", "redux", "context"]},
+                        "state_manager": {
+                            "type": "string",
+                            "enum": ["zustand", "redux", "context"],
+                        },
                         "tailwind": {"type": "boolean"},
                     },
                     "required": ["project_name"],
@@ -83,7 +89,10 @@ Prefer boring, maintainable choices over clever abstractions.
                     "type": "object",
                     "properties": {
                         "project_name": {"type": "string"},
-                        "tiers": {"type": "string", "description": "Comma-separated billing tiers"},
+                        "tiers": {
+                            "type": "string",
+                            "description": "Comma-separated billing tiers",
+                        },
                         "mobile_app": {"type": "boolean"},
                         "email": {"type": "boolean"},
                     },
@@ -157,7 +166,9 @@ Prefer boring, maintainable choices over clever abstractions.
                 "};\n"
             )
         if stripe:
-            files["src/routes/stripe.ts"] = "// Verify the raw-body signature, persist event.id idempotently, then dispatch the Stripe event.\n"
+            files["src/routes/stripe.ts"] = (
+                "// Verify the raw-body signature, persist event.id idempotently, then dispatch the Stripe event.\n"
+            )
 
         return {
             "project_name": project_name,
@@ -240,8 +251,12 @@ Prefer boring, maintainable choices over clever abstractions.
             ],
         }
 
-    def _generate_file_tree(self, project_type: str, features: str = "") -> Dict[str, Any]:
-        feature_list = [feature.strip() for feature in features.split(",") if feature.strip()]
+    def _generate_file_tree(
+        self, project_type: str, features: str = ""
+    ) -> Dict[str, Any]:
+        feature_list = [
+            feature.strip() for feature in features.split(",") if feature.strip()
+        ]
         tree = {
             "web_app": ["src", "public", "tests"],
             "api_only": ["src/routes", "src/middleware", "src/lib"],

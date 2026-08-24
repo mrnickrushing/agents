@@ -14,13 +14,10 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
 import subprocess
-import tempfile
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
@@ -83,9 +80,18 @@ class HealingAgent(BaseAgent):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "finding": {"type": "object", "description": "A finding dict with 'issue', 'severity', 'fix' keys"},
-                        "code": {"type": "string", "description": "Source code to patch"},
-                        "language": {"type": "string", "description": "File extension, e.g. '.ts'"},
+                        "finding": {
+                            "type": "object",
+                            "description": "A finding dict with 'issue', 'severity', 'fix' keys",
+                        },
+                        "code": {
+                            "type": "string",
+                            "description": "Source code to patch",
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "File extension, e.g. '.ts'",
+                        },
                     },
                     "required": ["finding", "code"],
                 },
@@ -96,9 +102,18 @@ class HealingAgent(BaseAgent):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "patch": {"type": "object", "description": "Patch dict from generate_patch"},
-                        "file_path": {"type": "string", "description": "Absolute path to the file to patch"},
-                        "project_path": {"type": "string", "description": "Project root for running tests"},
+                        "patch": {
+                            "type": "object",
+                            "description": "Patch dict from generate_patch",
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to patch",
+                        },
+                        "project_path": {
+                            "type": "string",
+                            "description": "Project root for running tests",
+                        },
                     },
                     "required": ["patch", "file_path", "project_path"],
                 },
@@ -234,27 +249,39 @@ class HealingAgent(BaseAgent):
             "body": "\n".join(lines),
             "patches": patches,
             "total_patches": len(patches),
-            "auto_apply_count": sum(1 for p in patches if p.get("confidence", 0) >= 0.8),
+            "auto_apply_count": sum(
+                1 for p in patches if p.get("confidence", 0) >= 0.8
+            ),
         }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
+
 def _run_tests(project_path: str) -> Dict[str, Any]:
     """Run the project's test suite and return a result dict."""
     from agents.cli import _project_runtime_commands
+
     commands = _project_runtime_commands(project_path)
-    test_commands = [cmd for cmd in commands if "test" in cmd.lower().split()]
+    test_commands = [
+        cmd
+        for cmd in commands
+        if any(part == "test" or "pytest" in part for part in cmd)
+    ]
 
     if not test_commands:
-        return {"passed": True, "output": "No test commands detected", "commands": []}
+        return {
+            "passed": False,
+            "output": "No test commands detected; patch was not validated",
+            "commands": [],
+        }
 
     cmd = test_commands[0]
     try:
         proc = subprocess.run(
             cmd,
             cwd=project_path,
-            shell=True,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=120,

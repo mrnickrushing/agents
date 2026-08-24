@@ -152,16 +152,16 @@ Format findings as structured reports with severity, location, description, and 
                     "properties": {
                         "config_json": {
                             "type": "string",
-                            "description": "The Helmet configuration object as a JSON string"
+                            "description": "The Helmet configuration object as a JSON string",
                         },
                         "framework": {
                             "type": "string",
                             "enum": ["express", "fastify", "koa"],
-                            "description": "The Node.js framework being used"
-                        }
+                            "description": "The Node.js framework being used",
+                        },
                     },
-                    "required": ["config_json"]
-                }
+                    "required": ["config_json"],
+                },
             },
             {
                 "name": "check_jwt_implementation",
@@ -171,15 +171,15 @@ Format findings as structured reports with severity, location, description, and 
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "The JWT/auth implementation code to audit"
+                            "description": "The JWT/auth implementation code to audit",
                         },
                         "concerns": {
                             "type": "string",
-                            "description": "Specific concerns to focus on (e.g., 'token storage', 'key rotation', 'refresh flow')"
-                        }
+                            "description": "Specific concerns to focus on (e.g., 'token storage', 'key rotation', 'refresh flow')",
+                        },
                     },
-                    "required": ["code"]
-                }
+                    "required": ["code"],
+                },
             },
             {
                 "name": "scan_dependencies",
@@ -189,16 +189,16 @@ Format findings as structured reports with severity, location, description, and 
                     "properties": {
                         "package_json": {
                             "type": "string",
-                            "description": "The contents of package.json OR requirements.txt"
+                            "description": "The contents of package.json OR requirements.txt",
                         },
                         "severity_threshold": {
                             "type": "string",
                             "enum": ["critical", "high", "medium", "low"],
-                            "description": "Minimum severity to report"
-                        }
+                            "description": "Minimum severity to report",
+                        },
                     },
-                    "required": ["package_json"]
-                }
+                    "required": ["package_json"],
+                },
             },
             {
                 "name": "audit_cors_config",
@@ -208,15 +208,15 @@ Format findings as structured reports with severity, location, description, and 
                     "properties": {
                         "cors_code": {
                             "type": "string",
-                            "description": "The CORS configuration code"
+                            "description": "The CORS configuration code",
                         },
                         "allowed_origins": {
                             "type": "string",
-                            "description": "List of allowed origins (comma-separated)"
-                        }
+                            "description": "List of allowed origins (comma-separated)",
+                        },
                     },
-                    "required": ["cors_code"]
-                }
+                    "required": ["cors_code"],
+                },
             },
             {
                 "name": "generate_helmet_config",
@@ -227,23 +227,23 @@ Format findings as structured reports with severity, location, description, and 
                         "app_type": {
                             "type": "string",
                             "enum": ["spa", "ssr", "api_only", "saas_platform"],
-                            "description": "Type of application"
+                            "description": "Type of application",
                         },
                         "domains": {
                             "type": "string",
-                            "description": "Comma-separated list of trusted domains"
+                            "description": "Comma-separated list of trusted domains",
                         },
                         "cdn_used": {
                             "type": "boolean",
-                            "description": "Whether the app uses a CDN (Cloudflare, etc.)"
+                            "description": "Whether the app uses a CDN (Cloudflare, etc.)",
                         },
                         "stripe_enabled": {
                             "type": "boolean",
-                            "description": "Whether Stripe.js is used (affects CSP)"
-                        }
+                            "description": "Whether Stripe.js is used (affects CSP)",
+                        },
                     },
-                    "required": ["app_type"]
-                }
+                    "required": ["app_type"],
+                },
             },
             {
                 "name": "audit_rate_limiting",
@@ -253,16 +253,16 @@ Format findings as structured reports with severity, location, description, and 
                     "properties": {
                         "endpoints": {
                             "type": "string",
-                            "description": "JSON string describing endpoints and their rate limit configs"
+                            "description": "JSON string describing endpoints and their rate limit configs",
                         },
                         "backend_framework": {
                             "type": "string",
                             "enum": ["express", "fastify"],
-                            "description": "Backend framework in use"
-                        }
+                            "description": "Backend framework in use",
+                        },
                     },
-                    "required": ["endpoints"]
-                }
+                    "required": ["endpoints"],
+                },
             },
             {
                 "name": "audit_sql_injection",
@@ -270,7 +270,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The database query code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The database query code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -281,7 +284,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The frontend/template code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The frontend/template code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -292,7 +298,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The session/cookie handling code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The session/cookie handling code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -303,7 +312,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The code to audit for dangerous-sink usage"},
+                        "code": {
+                            "type": "string",
+                            "description": "The code to audit for dangerous-sink usage",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -314,7 +326,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The file upload handler code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The file upload handler code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -325,7 +340,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The WebSocket/Socket.io handler code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The WebSocket/Socket.io handler code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -336,7 +354,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The code to scan for secrets"},
+                        "code": {
+                            "type": "string",
+                            "description": "The code to scan for secrets",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -347,7 +368,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The error handling code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The error handling code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -358,7 +382,10 @@ Format findings as structured reports with severity, location, description, and 
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "The logging code to audit"},
+                        "code": {
+                            "type": "string",
+                            "description": "The logging code to audit",
+                        },
                     },
                     "required": ["code"],
                 },
@@ -386,7 +413,9 @@ Format findings as structured reports with severity, location, description, and 
 
     # ── Tool handlers ──────────────────────────────────────────────────
 
-    def _analyze_helmet_config(self, config_json: str, framework: str = "express") -> Dict[str, Any]:
+    def _analyze_helmet_config(
+        self, config_json: str, framework: str = "express"
+    ) -> Dict[str, Any]:
         """Analyze a Helmet configuration.
 
         Accepts either a hand-built JSON config object (original behavior) or
@@ -420,50 +449,115 @@ Format findings as structured reports with severity, location, description, and 
             # A hand-built options object was passed directly.
             for key, warning in checks.items():
                 if key not in config:
-                    findings.append({"severity": "MEDIUM", "setting": key, "issue": warning})
+                    findings.append(
+                        {"severity": "MEDIUM", "setting": key, "issue": warning}
+                    )
 
             if "contentSecurityPolicy" in config:
                 csp = config["contentSecurityPolicy"]
                 if isinstance(csp, dict) and "directives" in csp:
                     directives = csp["directives"]
-                    if directives.get("scriptSrc") and "'unsafe-inline'" in str(directives.get("scriptSrc", [])):
-                        findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-inline scripts — XSS risk"})
-                    if directives.get("scriptSrc") and "'unsafe-eval'" in str(directives.get("scriptSrc", [])):
-                        findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-eval — code injection risk"})
+                    if directives.get("scriptSrc") and "'unsafe-inline'" in str(
+                        directives.get("scriptSrc", [])
+                    ):
+                        findings.append(
+                            {
+                                "severity": "HIGH",
+                                "setting": "contentSecurityPolicy.scriptSrc",
+                                "issue": "CSP allows unsafe-inline scripts — XSS risk",
+                            }
+                        )
+                    if directives.get("scriptSrc") and "'unsafe-eval'" in str(
+                        directives.get("scriptSrc", [])
+                    ):
+                        findings.append(
+                            {
+                                "severity": "HIGH",
+                                "setting": "contentSecurityPolicy.scriptSrc",
+                                "issue": "CSP allows unsafe-eval — code injection risk",
+                            }
+                        )
             mode = "config"
         elif not re.search(r"\bhelmet\s*\(", text):
-            findings.append({"severity": "CRITICAL", "setting": "helmet", "issue": "No helmet() call found in this source — the app likely has no security headers applied at all"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "setting": "helmet",
+                    "issue": "No helmet() call found in this source — the app likely has no security headers applied at all",
+                }
+            )
             mode = "source"
         else:
             mode = "source"
             if re.search(r"helmet\s*\(\s*\)", text):
-                findings.append({
-                    "severity": "INFO", "setting": "helmet",
-                    "issue": "helmet() is called with no options, which uses Helmet's secure defaults (CSP, HSTS, X-Frame-Options, etc. are all enabled). Verify the default CSP actually allows the frameworks/CDNs you use"
-                })
+                findings.append(
+                    {
+                        "severity": "INFO",
+                        "setting": "helmet",
+                        "issue": "helmet() is called with no options, which uses Helmet's secure defaults (CSP, HSTS, X-Frame-Options, etc. are all enabled). Verify the default CSP actually allows the frameworks/CDNs you use",
+                    }
+                )
             else:
                 if re.search(r"contentSecurityPolicy\s*:\s*false", text, re.IGNORECASE):
-                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy", "issue": "contentSecurityPolicy is explicitly disabled — this turns off Helmet's strongest XSS mitigation"})
+                    findings.append(
+                        {
+                            "severity": "HIGH",
+                            "setting": "contentSecurityPolicy",
+                            "issue": "contentSecurityPolicy is explicitly disabled — this turns off Helmet's strongest XSS mitigation",
+                        }
+                    )
                 elif not re.search(r"contentSecurityPolicy\s*:", text):
-                    findings.append({"severity": "MEDIUM", "setting": "contentSecurityPolicy", "issue": checks["contentSecurityPolicy"]})
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "setting": "contentSecurityPolicy",
+                            "issue": checks["contentSecurityPolicy"],
+                        }
+                    )
                 if re.search(r"['\"]unsafe-inline['\"]", text):
-                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-inline — XSS risk"})
+                    findings.append(
+                        {
+                            "severity": "HIGH",
+                            "setting": "contentSecurityPolicy.scriptSrc",
+                            "issue": "CSP allows unsafe-inline — XSS risk",
+                        }
+                    )
                 if re.search(r"['\"]unsafe-eval['\"]", text):
-                    findings.append({"severity": "HIGH", "setting": "contentSecurityPolicy.scriptSrc", "issue": "CSP allows unsafe-eval — code injection risk"})
+                    findings.append(
+                        {
+                            "severity": "HIGH",
+                            "setting": "contentSecurityPolicy.scriptSrc",
+                            "issue": "CSP allows unsafe-eval — code injection risk",
+                        }
+                    )
                 for key, warning in checks.items():
                     if key == "contentSecurityPolicy":
                         continue
                     if not re.search(rf"\b{key}\s*:", text):
-                        findings.append({"severity": "MEDIUM", "setting": key, "issue": warning})
+                        findings.append(
+                            {"severity": "MEDIUM", "setting": key, "issue": warning}
+                        )
 
-        return {"framework": framework, "mode": mode, "findings": findings, "total_issues": len(findings)}
+        return {
+            "framework": framework,
+            "mode": mode,
+            "findings": findings,
+            "total_issues": len(findings),
+        }
 
-    def _check_jwt_implementation(self, code: str, concerns: str = "") -> Dict[str, Any]:
+    def _check_jwt_implementation(
+        self, code: str, concerns: str = ""
+    ) -> Dict[str, Any]:
         """Check JWT code for common vulnerabilities."""
         findings = []
-        code_lower = code.lower()
         has_signing = bool(re.search(r"jwt\.(?:sign|encode)\s*\(", code, re.IGNORECASE))
-        has_verification = bool(re.search(r"jwt\.(?:verify|decode)\s*\(|jwt_verify\s*\(|jose\.jwt\.decode\s*\(", code, re.IGNORECASE))
+        has_verification = bool(
+            re.search(
+                r"jwt\.(?:verify|decode)\s*\(|jwt_verify\s*\(|jose\.jwt\.decode\s*\(",
+                code,
+                re.IGNORECASE,
+            )
+        )
         # Apple's APNs provider token deliberately has `iss` and `iat` claims
         # but no `exp`; APNs rejects tokens based on the age of `iat`. Treat
         # that protocol-specific shape separately from ordinary application
@@ -471,7 +565,9 @@ Format findings as structured reports with severity, location, description, and 
         is_apns_provider_token = bool(
             has_signing
             and re.search(r"\b(?:apns|api\.push\.apple\.com)\b", code, re.IGNORECASE)
-            and re.search(r"\b(?:ES256|algorithm\s*[:=]\s*[\"']ES256[\"'])\b", code, re.IGNORECASE)
+            and re.search(
+                r"\b(?:ES256|algorithm\s*[:=]\s*[\"']ES256[\"'])\b", code, re.IGNORECASE
+            )
             and re.search(r"\b(?:iss|team_?id|teamId)\b", code)
             and re.search(r"\b(?:iat|key_?id|keyId|keyid|kid)\b", code)
         )
@@ -486,56 +582,103 @@ Format findings as structured reports with severity, location, description, and 
             re.IGNORECASE | re.DOTALL,
         )
         if weak_hs_secret:
-            findings.append({
-                "severity": "CRITICAL",
-                "issue": "JWT uses HS256 with a short hardcoded signing secret",
-                "fix": "Load a cryptographically random secret of at least 32 bytes from a secret manager, or use an asymmetric algorithm when multiple services verify tokens",
-            })
-        
-        if re.search(r"localStorage\.setItem\s*\([^,]*(?:token|jwt)|localStorage\s*\[[^]]*(?:token|jwt)", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies."})
-        
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "JWT uses HS256 with a short hardcoded signing secret",
+                    "fix": "Load a cryptographically random secret of at least 32 bytes from a secret manager, or use an asymmetric algorithm when multiple services verify tokens",
+                }
+            )
+
+        if re.search(
+            r"localStorage\.setItem\s*\([^,]*(?:token|jwt)|localStorage\s*\[[^]]*(?:token|jwt)",
+            code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "JWT stored in localStorage — vulnerable to XSS token theft. Use httpOnly secure cookies.",
+                }
+            )
+
         # Issuers set expiration; verifiers do not need to set it again. The
         # old whole-file check flagged every verify-only middleware.
-        if has_signing and not is_apns_provider_token and not re.search(r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\"exp\"\s*:", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "No token expiration set — tokens are valid forever"})
+        if (
+            has_signing
+            and not is_apns_provider_token
+            and not re.search(
+                r"expiresin|expires_delta|expire_minutes|expires_at|maxage|[\"']exp[\"']\s*:|\"exp\"\s*:",
+                code,
+                re.IGNORECASE,
+            )
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "No token expiration set — tokens are valid forever",
+                }
+            )
 
         # jsonwebtoken's jwt.decode() only parses; unlike PyJWT's decode it
         # never validates a signature. A one-argument decode in JS/TS is
         # therefore high-confidence evidence of trusting an unverified token.
-        if re.search(r"(?:const|let|var)\s+\w+\s*=\s*jwt\.decode\s*\(\s*[^,)]+\s*\)", code):
-            findings.append({
-                "severity": "CRITICAL",
-                "issue": "jwt.decode() result is used without signature verification",
-                "fix": "Use jwt.verify() with an explicit algorithms allowlist before trusting claims",
-            })
+        if re.search(
+            r"(?:const|let|var)\s+\w+\s*=\s*jwt\.decode\s*\(\s*[^,)]+\s*\)", code
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "jwt.decode() result is used without signature verification",
+                    "fix": "Use jwt.verify() with an explicit algorithms allowlist before trusting claims",
+                }
+            )
 
-        if has_verification and re.search(r"verify_signature[\"']?\s*:\s*false|options\s*=\s*\{[^}]*verify_signature[^}]*false", code, re.IGNORECASE | re.DOTALL):
-            findings.append({
-                "severity": "CRITICAL",
-                "issue": "JWT signature verification is explicitly disabled",
-                "fix": "Verify the signature and issuer/audience before trusting any claim",
-            })
+        if has_verification and re.search(
+            r"verify_signature[\"']?\s*:\s*false|options\s*=\s*\{[^}]*verify_signature[^}]*false",
+            code,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "JWT signature verification is explicitly disabled",
+                    "fix": "Verify the signature and issuer/audience before trusting any claim",
+                }
+            )
 
-        if re.search(r"jwt\.verify\s*\(", code, re.IGNORECASE) and not re.search(r"algorithms\s*[:=]", code, re.IGNORECASE):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "jwt.verify() has no explicit algorithms allowlist",
-                "fix": "Pass algorithms: ['RS256'] (or the one algorithm your issuer actually uses)",
-            })
-        
+        if re.search(r"jwt\.verify\s*\(", code, re.IGNORECASE) and not re.search(
+            r"algorithms\s*[:=]", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "jwt.verify() has no explicit algorithms allowlist",
+                    "fix": "Pass algorithms: ['RS256'] (or the one algorithm your issuer actually uses)",
+                }
+            )
+
         # FIX BUG #2: Require an actual algorithms:["none"] / alg=none pattern, not just the
         # words "none" and "algorithm" appearing anywhere (e.g. CSS "display: none"
         # alongside an unrelated "algorithm" comment would previously false-positive).
         if re.search(r"algorithms?\s*[:=]\s*\[?\s*[\"']none[\"']", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "Algorithm 'none' detected — this allows unauthenticated token forgery"})
-        
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Algorithm 'none' detected — this allows unauthenticated token forgery",
+                }
+            )
+
         if concerns:
-            findings.append({"severity": "INFO", "issue": f"Specific concern noted: {concerns}"})
+            findings.append(
+                {"severity": "INFO", "issue": f"Specific concern noted: {concerns}"}
+            )
 
         return {"jwt_findings": findings, "total_issues": len(findings)}
 
-    def _scan_dependencies(self, package_json: str, severity_threshold: str = "medium") -> Dict[str, Any]:
+    def _scan_dependencies(
+        self, package_json: str, severity_threshold: str = "medium"
+    ) -> Dict[str, Any]:
         """Scan a dependency manifest for known risky patterns.
 
         Despite the parameter name (kept for tool-schema/backward compatibility),
@@ -555,7 +698,9 @@ Format findings as structured reports with severity, location, description, and 
                 parsed = json.loads(manifest)
             except json.JSONDecodeError:
                 return {"error": "Invalid dependency manifest JSON"}
-            if isinstance(parsed, dict) and ("dependencies" in parsed or "devDependencies" in parsed):
+            if isinstance(parsed, dict) and (
+                "dependencies" in parsed or "devDependencies" in parsed
+            ):
                 ecosystem = "npm"
                 deps = {
                     **(parsed.get("dependencies") or {}),
@@ -563,13 +708,21 @@ Format findings as structured reports with severity, location, description, and 
                 }
             elif isinstance(parsed, dict) and "packageManager" in parsed:
                 ecosystem = "npm"
-            elif isinstance(parsed, dict) and "default" in parsed and isinstance(parsed.get("default"), dict):
+            elif (
+                isinstance(parsed, dict)
+                and "default" in parsed
+                and isinstance(parsed.get("default"), dict)
+            ):
                 ecosystem = "pip"
                 lockfile = "Pipfile.lock"
                 for name, details in (parsed.get("default") or {}).items():
                     if isinstance(details, dict):
                         deps[name.lower()] = str(details.get("version", "")).lstrip("=")
-            elif isinstance(parsed, dict) and "package" in parsed and isinstance(parsed.get("package"), list):
+            elif (
+                isinstance(parsed, dict)
+                and "package" in parsed
+                and isinstance(parsed.get("package"), list)
+            ):
                 ecosystem = "pip"
                 lockfile = "poetry.lock"
                 for pkg in parsed.get("package") or []:
@@ -581,11 +734,23 @@ Format findings as structured reports with severity, location, description, and 
         elif "lockfileVersion:" in manifest and "packages:" in manifest:
             ecosystem = "npm"
             lockfile = "pnpm-lock.yaml"
-            for name, version in re.findall(r"(?m)^\s{2,}([@A-Za-z0-9._/-]+)\s*:\s*([0-9][^,\s]*)\s*$", manifest):
+            for name, version in re.findall(
+                r"(?m)^\s{2,}([@A-Za-z0-9._/-]+)\s*:\s*([0-9][^,\s]*)\s*$", manifest
+            ):
                 deps[name.lower()] = version
             if "overrides:" in manifest:
-                findings.append({"severity": "LOW", "issue": "pnpm lockfile uses overrides; verify they do not pin vulnerable versions"})
-        elif re.search(r"(?m)^\[\[package\]\]\s*$", manifest) and "python-versions" in manifest and "name =" in manifest and "version =" in manifest:
+                findings.append(
+                    {
+                        "severity": "LOW",
+                        "issue": "pnpm lockfile uses overrides; verify they do not pin vulnerable versions",
+                    }
+                )
+        elif (
+            re.search(r"(?m)^\[\[package\]\]\s*$", manifest)
+            and "python-versions" in manifest
+            and "name =" in manifest
+            and "version =" in manifest
+        ):
             ecosystem = "pip"
             lockfile = "poetry.lock"
             pkg_names = re.findall(r'(?m)^\s*name\s*=\s*"([^"]+)"', manifest)
@@ -595,30 +760,55 @@ Format findings as structured reports with severity, location, description, and 
         elif re.search(r"(?m)^\s*\"_meta\"\s*:\s*\{", manifest):
             ecosystem = "pip"
             lockfile = "Pipfile.lock"
-            for name, details in re.findall(r'"([A-Za-z0-9._-]+)"\s*:\s*\{[^}]*"version"\s*:\s*"([^"]+)"', manifest):
+            for name, details in re.findall(
+                r'"([A-Za-z0-9._-]+)"\s*:\s*\{[^}]*"version"\s*:\s*"([^"]+)"', manifest
+            ):
                 deps[name.lower()] = details.lstrip("=")
         elif re.search(r"(?m)^\s*\w+\s+\(Hex package\)\s*=", manifest):
             ecosystem = "elixir"
             lockfile = "mix.lock"
-            for name, version in re.findall(r"(?m)^\s*:?([a-z0-9_]+)\s*,\s*\{\s*:hex,\s*:[a-z0-9_]+,\s*\"([^\"]+)\"", manifest, re.IGNORECASE):
+            for name, version in re.findall(
+                r"(?m)^\s*:?([a-z0-9_]+)\s*,\s*\{\s*:hex,\s*:[a-z0-9_]+,\s*\"([^\"]+)\"",
+                manifest,
+                re.IGNORECASE,
+            ):
                 deps[name.lower()] = version
-        elif "\"pins\"" in manifest and "\"identity\"" in manifest and "\"version\"" in manifest:
+        elif (
+            '"pins"' in manifest
+            and '"identity"' in manifest
+            and '"version"' in manifest
+        ):
             ecosystem = "swift"
             lockfile = "Package.resolved"
-            for name, version in re.findall(r'"identity"\s*:\s*"([^"]+)"[\s\S]{0,200}?"version"\s*:\s*"([^"]+)"', manifest):
+            for name, version in re.findall(
+                r'"identity"\s*:\s*"([^"]+)"[\s\S]{0,200}?"version"\s*:\s*"([^"]+)"',
+                manifest,
+            ):
                 deps[name.lower()] = version
-        elif re.search(r"(?m)^version\s*=\s*3\s*$", manifest) and "[[package]]" in manifest:
+        elif (
+            re.search(r"(?m)^version\s*=\s*3\s*$", manifest)
+            and "[[package]]" in manifest
+        ):
             ecosystem = "rust"
             lockfile = "Cargo.lock"
-            for name, version in re.findall(r'(?m)^name\s*=\s*"([^"]+)"\nversion\s*=\s*"([^"]+)"', manifest):
+            for name, version in re.findall(
+                r'(?m)^name\s*=\s*"([^"]+)"\nversion\s*=\s*"([^"]+)"', manifest
+            ):
                 deps[name.lower()] = version
         else:
             ecosystem = "pip"
+            has_local_editable = False
             for line in manifest.splitlines():
                 line = line.split("#", 1)[0].strip()
+                if line in {"-e .", "--editable ."}:
+                    has_local_editable = True
+                    continue
                 if not line or line.startswith("-"):
                     continue
-                match = re.match(r"^([A-Za-z0-9_.\-\[\]]+)\s*(==|>=|<=|~=|!=|>|<)?\s*([\w.\-]*)", line)
+                match = re.match(
+                    r"^([A-Za-z0-9_.\-\[\]]+)\s*(==|>=|<=|~=|!=|>|<)?\s*([\w.\-]*)",
+                    line,
+                )
                 if match:
                     deps[match.group(1).lower()] = match.group(3) or ""
 
@@ -633,22 +823,50 @@ Format findings as structured reports with severity, location, description, and 
                 "pyyaml": "Ensure yaml.safe_load() is used, never yaml.load() default loader",
                 "requests": "Ensure outbound requests set a timeout",
             },
-            "rust": {"openssl": "Track RustSec advisories for openssl and transitive native deps"},
-            "elixir": {"plug_cowboy": "Ensure Phoenix/Plug stack versions include latest security patches"},
-            "swift": {"alamofire": "Track GHSA/CVE advisories for networking libraries"},
+            "rust": {
+                "openssl": "Track RustSec advisories for openssl and transitive native deps"
+            },
+            "elixir": {
+                "plug_cowboy": "Ensure Phoenix/Plug stack versions include latest security patches"
+            },
+            "swift": {
+                "alamofire": "Track GHSA/CVE advisories for networking libraries"
+            },
         }
         for name, note in risky.get(ecosystem, {}).items():
             if name in deps:
                 review_notes.append({"package": name, "note": note})
 
         if ecosystem == "npm" and "express" in deps and "helmet" not in deps:
-            findings.append({"severity": "MEDIUM", "package": "helmet", "issue": "Express is installed but Helmet is not declared"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "package": "helmet",
+                    "issue": "Express is installed but Helmet is not declared",
+                }
+            )
 
-        if lockfile == "pnpm-lock.yaml" and re.search(r"(?m)^\s*neverBuiltDependencies:\s*$", manifest):
-            findings.append({"severity": "LOW", "issue": "pnpm lockfile includes neverBuiltDependencies; verify skipped build scripts are intentional"})
+        if lockfile == "pnpm-lock.yaml" and re.search(
+            r"(?m)^\s*neverBuiltDependencies:\s*$", manifest
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "pnpm lockfile includes neverBuiltDependencies; verify skipped build scripts are intentional",
+                }
+            )
 
-        if ecosystem in {"rust", "pip", "elixir", "swift"} and not deps:
-            findings.append({"severity": "LOW", "issue": f"{lockfile} detected but no dependencies were parsed; verify lockfile parser coverage"})
+        if (
+            ecosystem in {"rust", "pip", "elixir", "swift"}
+            and not deps
+            and not locals().get("has_local_editable", False)
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": f"{lockfile} detected but no dependencies were parsed; verify lockfile parser coverage",
+                }
+            )
 
         return {
             "ecosystem": ecosystem,
@@ -659,7 +877,9 @@ Format findings as structured reports with severity, location, description, and 
             "threshold": severity_threshold,
         }
 
-    def _audit_cors_config(self, cors_code: str, allowed_origins: str = "") -> Dict[str, Any]:
+    def _audit_cors_config(
+        self, cors_code: str, allowed_origins: str = ""
+    ) -> Dict[str, Any]:
         """Audit CORS configuration — Express cors() or FastAPI/Starlette CORSMiddleware."""
         findings = []
         code_lower = cors_code.lower()
@@ -675,49 +895,95 @@ Format findings as structured reports with severity, location, description, and 
         # so check the whole list's contents, not just "list of exactly one
         # wildcard element with nothing else".
         origin_list = re.search(r"allow_origins\s*=\s*\[([^\]]*)\]", cors_code)
-        fastapi_wildcard = bool(origin_list and re.search(r"[\"']\*[\"']", origin_list.group(1)))
+        fastapi_wildcard = bool(
+            origin_list and re.search(r"[\"']\*[\"']", origin_list.group(1))
+        )
         # The "origin" key can be a bare identifier (JS object literal shorthand)
         # or itself quoted (JSON-style: "origin": "*") — allow an optional
         # quote on either side of the key name.
-        express_origin_list = re.search(r"[\"']?\borigin\b[\"']?\s*:\s*\[([^\]]*)\]", cors_code, re.IGNORECASE)
+        express_origin_list = re.search(
+            r"[\"']?\borigin\b[\"']?\s*:\s*\[([^\]]*)\]", cors_code, re.IGNORECASE
+        )
         express_wildcard = bool(
-            re.search(r"[\"']?\borigin\b[\"']?\s*:\s*[\"']\*[\"']", cors_code, re.IGNORECASE)
-            or (express_origin_list and re.search(r"[\"']\*[\"']", express_origin_list.group(1)))
+            re.search(
+                r"[\"']?\borigin\b[\"']?\s*:\s*[\"']\*[\"']", cors_code, re.IGNORECASE
+            )
+            or (
+                express_origin_list
+                and re.search(r"[\"']\*[\"']", express_origin_list.group(1))
+            )
         )
         wildcard = fastapi_wildcard or express_wildcard
         if wildcard:
-            findings.append({"severity": "CRITICAL", "issue": "CORS origin is '*' — any domain can make requests to this API"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "CORS origin is '*' — any domain can make requests to this API",
+                }
+            )
 
-        credentials_true = (
-            bool(re.search(r"[\"']?\bcredentials\b[\"']?\s*:\s*true", cors_code, re.IGNORECASE))
-            or bool(re.search(r"allow_credentials\s*=\s*true", cors_code, re.IGNORECASE))
-        )
+        credentials_true = bool(
+            re.search(
+                r"[\"']?\bcredentials\b[\"']?\s*:\s*true", cors_code, re.IGNORECASE
+            )
+        ) or bool(re.search(r"allow_credentials\s*=\s*true", cors_code, re.IGNORECASE))
         if credentials_true and wildcard:
-            findings.append({"severity": "CRITICAL", "issue": "credentials/allow_credentials=true with origin '*' — browsers reject this combination outright (CORS spec forbids it)"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "credentials/allow_credentials=true with origin '*' — browsers reject this combination outright (CORS spec forbids it)",
+                }
+            )
 
         if is_fastapi:
             if not re.search(r"allow_methods\s*=", cors_code):
-                findings.append({"severity": "MEDIUM", "issue": "No allow_methods restriction — all HTTP methods are allowed"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "No allow_methods restriction — all HTTP methods are allowed",
+                    }
+                )
         elif "methods" not in code_lower:
-            findings.append({"severity": "MEDIUM", "issue": "No methods restriction — all HTTP methods are allowed"})
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No methods restriction — all HTTP methods are allowed",
+                }
+            )
 
         if allowed_origins:
             origins = [o.strip() for o in allowed_origins.split(",")]
             non_https = [o for o in origins if o.startswith("http://")]
             if non_https:
-                findings.append({"severity": "MEDIUM", "issue": f"Non-HTTPS origins allowed: {non_https}"})
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": f"Non-HTTPS origins allowed: {non_https}",
+                    }
+                )
 
-        return {"cors_findings": findings, "framework": "fastapi" if is_fastapi else "express", "total_issues": len(findings)}
+        return {
+            "cors_findings": findings,
+            "framework": "fastapi" if is_fastapi else "express",
+            "total_issues": len(findings),
+        }
 
-    def _generate_helmet_config(self, app_type: str = "saas_platform", domains: str = "", cdn_used: bool = False, stripe_enabled: bool = False) -> Dict[str, Any]:
+    def _generate_helmet_config(
+        self,
+        app_type: str = "saas_platform",
+        domains: str = "",
+        cdn_used: bool = False,
+        stripe_enabled: bool = False,
+    ) -> Dict[str, Any]:
         """Generate a production Helmet config."""
-        trusted_domains = [d.strip() for d in domains.split(",")] if domains else ["'self'"]
-
         csp_script_src = ["'self'"]
         csp_connect_src = ["'self'"]
         csp_img_src = ["'self'", "data:"]
         csp_frame_src = ["'none'"]
-        csp_style_src = ["'self'", "'unsafe-inline'"]  # Most apps need unsafe-inline for styles
+        csp_style_src = [
+            "'self'",
+            "'unsafe-inline'",
+        ]  # Most apps need unsafe-inline for styles
 
         if stripe_enabled:
             csp_script_src.extend(["js.stripe.com"])
@@ -729,7 +995,9 @@ Format findings as structured reports with severity, location, description, and 
             csp_img_src.append("cdn.jsdelivr.net")
 
         if app_type == "spa":
-            csp_connect_src.append("https:")  # SPAs often call APIs on different domains
+            csp_connect_src.append(
+                "https:"
+            )  # SPAs often call APIs on different domains
 
         config = {
             "contentSecurityPolicy": {
@@ -762,9 +1030,15 @@ Format findings as structured reports with severity, location, description, and 
             "xXssProtection": False,  # Deprecated, CSP handles this
         }
 
-        return {"helmet_config": config, "app_type": app_type, "stripe_enabled": stripe_enabled}
+        return {
+            "helmet_config": config,
+            "app_type": app_type,
+            "stripe_enabled": stripe_enabled,
+        }
 
-    def _audit_rate_limiting(self, endpoints: str, backend_framework: str = "express") -> Dict[str, Any]:
+    def _audit_rate_limiting(
+        self, endpoints: str, backend_framework: str = "express"
+    ) -> Dict[str, Any]:
         """Audit rate limiting configuration."""
         try:
             endpoint_data = json.loads(endpoints)
@@ -772,18 +1046,46 @@ Format findings as structured reports with severity, location, description, and 
             return {"error": "Invalid endpoints JSON"}
 
         recommendations = []
-        critical_endpoints = ["login", "register", "password-reset", "forgot-password", "api-key"]
+        critical_endpoints = [
+            "login",
+            "register",
+            "password-reset",
+            "forgot-password",
+            "api-key",
+        ]
 
         if isinstance(endpoint_data, list):
             for ep in endpoint_data:
                 path = ep.get("path", "")
                 limit = ep.get("limit")
                 if not limit:
-                    recommendations.append({"endpoint": path, "severity": "HIGH", "issue": f"No rate limit on {path}", "recommended": "5 requests per 15 minutes" if any(c in path for c in critical_endpoints) else "Standard tier"})
+                    recommendations.append(
+                        {
+                            "endpoint": path,
+                            "severity": "HIGH",
+                            "issue": f"No rate limit on {path}",
+                            "recommended": (
+                                "5 requests per 15 minutes"
+                                if any(c in path for c in critical_endpoints)
+                                else "Standard tier"
+                            ),
+                        }
+                    )
                 elif any(c in path for c in critical_endpoints) and limit > 10:
-                    recommendations.append({"endpoint": path, "severity": "MEDIUM", "issue": f"Rate limit too high ({limit}) for sensitive endpoint {path}", "recommended": "5 requests per 15 minutes"})
+                    recommendations.append(
+                        {
+                            "endpoint": path,
+                            "severity": "MEDIUM",
+                            "issue": f"Rate limit too high ({limit}) for sensitive endpoint {path}",
+                            "recommended": "5 requests per 15 minutes",
+                        }
+                    )
 
-        return {"framework": backend_framework, "recommendations": recommendations, "total_issues": len(recommendations)}
+        return {
+            "framework": backend_framework,
+            "recommendations": recommendations,
+            "total_issues": len(recommendations),
+        }
 
     def _audit_sql_injection(self, code: str) -> Dict[str, Any]:
         """Detect SQL injection risk from string-built queries."""
@@ -800,34 +1102,82 @@ Format findings as structured reports with severity, location, description, and 
         # placeholders while real data goes through a separate params array
         # to db.query(sql, params), a common and safe pattern) as it is raw
         # unsanitized input. Don't assert CRITICAL on a guess either way.
-        direct_input_re = re.compile(r"\$\{\s*(req|request|ctx)\.(body|params|query)|\{\s*(request|req)\.(query_params|path_params)", re.IGNORECASE)
+        direct_input_re = re.compile(
+            r"\$\{\s*(req|request|ctx)\.(body|params|query)|\{\s*(request|req)\.(query_params|path_params)",
+            re.IGNORECASE,
+        )
 
         for m in re.finditer(r"`([^`]*)`", code, re.DOTALL):
             literal = m.group(1)
-            if re.search(sql_stmt, literal, re.IGNORECASE | re.DOTALL) and "${" in literal:
+            if (
+                re.search(sql_stmt, literal, re.IGNORECASE | re.DOTALL)
+                and "${" in literal
+            ):
                 if direct_input_re.search(literal):
-                    findings.append({"severity": "CRITICAL", "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection", "fix": "Replace with parameterized query using placeholders ($1, $2, etc.)"})
+                    findings.append(
+                        {
+                            "severity": "CRITICAL",
+                            "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection",
+                            "fix": "Replace with parameterized query using placeholders ($1, $2, etc.)",
+                        }
+                    )
                 else:
-                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments", "fix": "Replace with parameterized query"})
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments",
+                            "fix": "Replace with parameterized query",
+                        }
+                    )
                 break
 
         for m in re.finditer(r"[\"']([^\"']*)[\"']\s*\+\s*\w", code):
             literal = m.group(1)
             if re.search(sql_stmt, literal, re.IGNORECASE):
-                findings.append({"severity": "CRITICAL", "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input", "fix": "Use parameterized queries instead"})
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input",
+                        "fix": "Use parameterized queries instead",
+                    }
+                )
                 break
 
         # Python: f-string or %/.format() with SQL statement shape
         for m in re.finditer(r"f[\"']([^\"']*)[\"']", code):
             literal = m.group(1)
             if re.search(sql_stmt, literal, re.IGNORECASE) and "{" in literal:
-                if re.search(r"\{\s*(request|req)\.(query_params|path_params|json)", literal, re.IGNORECASE):
-                    findings.append({"severity": "CRITICAL", "issue": "SQL query f-string interpolates a request value directly — SQL injection", "fix": "Use parameterized queries (SQLAlchemy text() with bound parameters)"})
+                if re.search(
+                    r"\{\s*(request|req)\.(query_params|path_params|json)",
+                    literal,
+                    re.IGNORECASE,
+                ):
+                    findings.append(
+                        {
+                            "severity": "CRITICAL",
+                            "issue": "SQL query f-string interpolates a request value directly — SQL injection",
+                            "fix": "Use parameterized queries (SQLAlchemy text() with bound parameters)",
+                        }
+                    )
                 else:
-                    findings.append({"severity": "MEDIUM", "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input", "fix": "Use parameterized queries"})
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input",
+                            "fix": "Use parameterized queries",
+                        }
+                    )
                 break
-        if re.search(rf"[\"'][^\"']*{sql_stmt}[^\"']*[\"']\s*%\s*[\(\w]", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "SQL query built with %-formatting — use parameterized queries instead", "fix": "Pass values as query parameters, not via % string formatting"})
+        if re.search(
+            rf"[\"'][^\"']*{sql_stmt}[^\"']*[\"']\s*%\s*[\(\w]", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "SQL query built with %-formatting — use parameterized queries instead",
+                    "fix": "Pass values as query parameters, not via % string formatting",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -835,20 +1185,49 @@ Format findings as structured reports with severity, location, description, and 
         """Detect XSS risk from raw HTML injection."""
         findings = []
 
-        for m in re.finditer(r"dangerouslySetInnerHTML\s*=\s*\{\{[^}]*__html\s*:\s*([^,}]+)", code, re.DOTALL):
+        for m in re.finditer(
+            r"dangerouslySetInnerHTML\s*=\s*\{\{[^}]*__html\s*:\s*([^,}]+)",
+            code,
+            re.DOTALL,
+        ):
             value_expr = m.group(1)
-            user_controlled = bool(re.search(r"props\.|req\.|input|user|params|query|body", value_expr, re.IGNORECASE))
-            findings.append({
-                "severity": "CRITICAL" if user_controlled else "MEDIUM",
-                "issue": "dangerouslySetInnerHTML used" + (" with what looks like user/request-derived content — likely XSS" if user_controlled else " — verify the HTML is not derived from user input"),
-                "fix": "Sanitize with DOMPurify.sanitize() before assigning to __html, or avoid raw HTML injection entirely if the content isn't static",
-            })
+            user_controlled = bool(
+                re.search(
+                    r"props\.|req\.|input|user|params|query|body",
+                    value_expr,
+                    re.IGNORECASE,
+                )
+            )
+            findings.append(
+                {
+                    "severity": "CRITICAL" if user_controlled else "MEDIUM",
+                    "issue": "dangerouslySetInnerHTML used"
+                    + (
+                        " with what looks like user/request-derived content — likely XSS"
+                        if user_controlled
+                        else " — verify the HTML is not derived from user input"
+                    ),
+                    "fix": "Sanitize with DOMPurify.sanitize() before assigning to __html, or avoid raw HTML injection entirely if the content isn't static",
+                }
+            )
 
         if re.search(r"\.innerHTML\s*=(?!=)", code):
-            findings.append({"severity": "HIGH", "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled", "fix": "Use .textContent for plain text, or sanitize HTML with DOMPurify"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled",
+                    "fix": "Use .textContent for plain text, or sanitize HTML with DOMPurify",
+                }
+            )
 
         if re.search(r"\|\s*safe\b", code) or re.search(r"Markup\(", code):
-            findings.append({"severity": "HIGH", "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value", "fix": "Only use |safe/Markup() on content you control completely; never on user input"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Jinja |safe filter or Markup() found — this disables Jinja's autoescaping for that value",
+                    "fix": "Only use |safe/Markup() on content you control completely; never on user input",
+                }
+            )
 
         for pattern, framework in (
             (r"\bv-html\s*=\s*[\"']([^\"']+)", "Vue v-html"),
@@ -856,19 +1235,34 @@ Format findings as structured reports with severity, location, description, and 
         ):
             for match in re.finditer(pattern, code, re.IGNORECASE):
                 expression = match.group(1)
-                user_controlled = bool(re.search(r"user|input|content|body|query|param|prop", expression, re.IGNORECASE))
-                findings.append({
-                    "severity": "HIGH" if user_controlled else "MEDIUM",
-                    "issue": f"{framework} renders raw HTML" + (" from a user/content-like expression — likely XSS" if user_controlled else " — verify the expression is trusted and sanitized"),
-                    "fix": "Render text normally or sanitize untrusted HTML with a framework-compatible allowlist sanitizer",
-                })
+                user_controlled = bool(
+                    re.search(
+                        r"user|input|content|body|query|param|prop",
+                        expression,
+                        re.IGNORECASE,
+                    )
+                )
+                findings.append(
+                    {
+                        "severity": "HIGH" if user_controlled else "MEDIUM",
+                        "issue": f"{framework} renders raw HTML"
+                        + (
+                            " from a user/content-like expression — likely XSS"
+                            if user_controlled
+                            else " — verify the expression is trusted and sanitized"
+                        ),
+                        "fix": "Render text normally or sanitize untrusted HTML with a framework-compatible allowlist sanitizer",
+                    }
+                )
 
         if re.search(r"bypassSecurityTrustHtml\s*\(", code):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Angular bypassSecurityTrustHtml disables built-in HTML sanitization",
-                "fix": "Avoid the bypass; if rich HTML is required, sanitize it with a strict allowlist before binding",
-            })
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Angular bypassSecurityTrustHtml disables built-in HTML sanitization",
+                    "fix": "Avoid the bypass; if rich HTML is required, sanitize it with a strict allowlist before binding",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -879,14 +1273,36 @@ Format findings as structured reports with severity, location, description, and 
         # aren't automatically attached by the browser the way cookies are,
         # so classic CSRF doesn't apply the same way — don't demand a CSRF
         # token for an API that's already immune to it by construction.
-        uses_session_cookie = bool(re.search(r"express-session|cookie-session|req\.session\b|connect\.sid", code))
+        uses_session_cookie = bool(
+            re.search(
+                r"express-session|cookie-session|req\.session\b|connect\.sid", code
+            )
+        )
         if not uses_session_cookie:
-            return {"findings": [], "total_issues": 0, "note": "No cookie/session-based auth detected — CSRF tokens don't apply to bearer-token/API-key auth the same way"}
+            return {
+                "findings": [],
+                "total_issues": 0,
+                "note": "No cookie/session-based auth detected — CSRF tokens don't apply to bearer-token/API-key auth the same way",
+            }
 
         if not re.search(r"csurf|csrf", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Session-cookie auth found with no CSRF protection (csurf or equivalent) visible", "fix": "Add CSRF token validation for state-changing requests"})
-        if re.search(r"sameSite\s*:\s*[\"']?none[\"']?", code, re.IGNORECASE) and not re.search(r"csurf|csrf", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "Cookie set with SameSite=None and no CSRF protection — cross-site requests will include the cookie with no CSRF defense", "fix": "Set SameSite=Strict or Lax, or add CSRF token validation"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Session-cookie auth found with no CSRF protection (csurf or equivalent) visible",
+                    "fix": "Add CSRF token validation for state-changing requests",
+                }
+            )
+        if re.search(
+            r"sameSite\s*:\s*[\"']?none[\"']?", code, re.IGNORECASE
+        ) and not re.search(r"csurf|csrf", code, re.IGNORECASE):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "Cookie set with SameSite=None and no CSRF protection — cross-site requests will include the cookie with no CSRF defense",
+                    "fix": "Set SameSite=Strict or Lax, or add CSRF token validation",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -895,19 +1311,61 @@ Format findings as structured reports with severity, location, description, and 
         findings = []
 
         if re.search(r"\beval\s*\(", code):
-            findings.append({"severity": "CRITICAL", "issue": "eval() found — arbitrary code execution if any part of the evaluated string is influenced by user input", "fix": "Avoid eval() entirely; use safer alternatives like JSON.parse() for JSON data"})
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "eval() found — arbitrary code execution if any part of the evaluated string is influenced by user input",
+                    "fix": "Avoid eval() entirely; use safer alternatives like JSON.parse() for JSON data",
+                }
+            )
         if re.search(r"new Function\s*\(", code):
-            findings.append({"severity": "HIGH", "issue": "new Function() found — similar risk to eval(), executes dynamically constructed code", "fix": "Avoid constructing functions from strings; use lambdas/closures instead"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "new Function() found — similar risk to eval(), executes dynamically constructed code",
+                    "fix": "Avoid constructing functions from strings; use lambdas/closures instead",
+                }
+            )
 
-        if re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*\$\{", code) or re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*[\"']\s*\+", code):
-            findings.append({"severity": "CRITICAL", "issue": "child_process.exec() called with interpolated/concatenated input — shell command injection risk", "fix": "Use execFile()/spawn() with argument array instead, or validate input strictly"})
-        if re.search(r"subprocess\.(run|call|Popen)\([^)]*shell\s*=\s*True", code, re.DOTALL):
-            findings.append({"severity": "HIGH", "issue": "subprocess called with shell=True — shell command injection risk if any argument is influenced by user input", "fix": "Use shell=False (the default) and pass arguments as a list"})
+        if re.search(r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*\$\{", code) or re.search(
+            r"exec(Sync)?\s*\(\s*[`\"'][^`\"']*[\"']\s*\+", code
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "child_process.exec() called with interpolated/concatenated input — shell command injection risk",
+                    "fix": "Use execFile()/spawn() with argument array instead, or validate input strictly",
+                }
+            )
+        if re.search(
+            r"subprocess\.(run|call|Popen)\([^)]*shell\s*=\s*True", code, re.DOTALL
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "subprocess called with shell=True — shell command injection risk if any argument is influenced by user input",
+                    "fix": "Use shell=False (the default) and pass arguments as a list",
+                }
+            )
         if re.search(r"os\.system\s*\(", code):
-            findings.append({"severity": "HIGH", "issue": "os.system() found — shell command injection risk if any part of the command is influenced by user input", "fix": "Use subprocess.run() with shell=False instead"})
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "os.system() found — shell command injection risk if any part of the command is influenced by user input",
+                    "fix": "Use subprocess.run() with shell=False instead",
+                }
+            )
 
-        if re.search(r"path\.join\([^)]*req\.(body|params|query)", code) or re.search(r"os\.path\.join\([^)]*request\.", code):
-            findings.append({"severity": "HIGH", "issue": "Path built directly from request input — path traversal risk (e.g. '../../etc/passwd')", "fix": "Validate/sanitize the path segment with a whitelist or normalize it"})
+        if re.search(r"path\.join\([^)]*req\.(body|params|query)", code) or re.search(
+            r"os\.path\.join\([^)]*request\.", code
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Path built directly from request input — path traversal risk (e.g. '../../etc/passwd')",
+                    "fix": "Validate/sanitize the path segment with a whitelist or normalize it",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -919,12 +1377,40 @@ Format findings as structured reports with severity, location, description, and 
         is_multer = "multer" in code_lower
         is_fastapi_upload = "uploadfile" in code_lower
 
-        if (is_multer or is_fastapi_upload) and not re.search(r"mimetype|content_type|content-type|filetype|file_type", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "File upload with no MIME type / content-type validation visible", "fix": "Validate the uploaded file's mimetype against an allowlist server-side"})
-        if (is_multer or is_fastapi_upload) and not re.search(r"limits|max_size|maxsize|max_length|content_length", code, re.IGNORECASE):
-            findings.append({"severity": "MEDIUM", "issue": "No file size limit visible — unbounded uploads can exhaust disk/memory (DoS)", "fix": "Set multer's limits.fileSize (Node) or check max_size (FastAPI)"})
-        if re.search(r"req\.(file|files)\.(originalname|filename)", code) and not re.search(r"sanitize|randomUUID|uuid|nanoid|basename", code, re.IGNORECASE):
-            findings.append({"severity": "HIGH", "issue": "Uploaded filename used directly (e.g. for the storage path) without sanitizing — path traversal / overwrite risk", "fix": "Generate a random filename (UUID/nanoid) instead of using user-supplied name"})
+        if (is_multer or is_fastapi_upload) and not re.search(
+            r"mimetype|content_type|content-type|filetype|file_type",
+            code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "File upload with no MIME type / content-type validation visible",
+                    "fix": "Validate the uploaded file's mimetype against an allowlist server-side",
+                }
+            )
+        if (is_multer or is_fastapi_upload) and not re.search(
+            r"limits|max_size|maxsize|max_length|content_length", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No file size limit visible — unbounded uploads can exhaust disk/memory (DoS)",
+                    "fix": "Set multer's limits.fileSize (Node) or check max_size (FastAPI)",
+                }
+            )
+        if re.search(
+            r"req\.(file|files)\.(originalname|filename)", code
+        ) and not re.search(
+            r"sanitize|randomUUID|uuid|nanoid|basename", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Uploaded filename used directly (e.g. for the storage path) without sanitizing — path traversal / overwrite risk",
+                    "fix": "Generate a random filename (UUID/nanoid) instead of using user-supplied name",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -932,11 +1418,29 @@ Format findings as structured reports with severity, location, description, and 
         """Audit Socket.io/WebSocket connection handler auth."""
         findings = []
 
-        has_connection_handler = bool(re.search(r"\.on\(\s*[\"']connection[\"']|io\.use\(", code))
-        if has_connection_handler and not re.search(r"auth|token|jwt|verify", code, re.IGNORECASE):
-            findings.append({"severity": "CRITICAL", "issue": "WebSocket connection handler with no auth check visible — any client can connect and interact", "fix": "Add io.use((socket, next) => { if (!authenticate(socket.handshake)) next(error) })"})
-        if re.search(r"\.on\(\s*[\"']connection[\"']", code) and not re.search(r"disconnect", code, re.IGNORECASE):
-            findings.append({"severity": "LOW", "issue": "No disconnect handler visible — confirm any per-connection state (room membership, presence) is cleaned up on disconnect", "fix": "Add socket.on('disconnect', () => { cleanup state })"})
+        has_connection_handler = bool(
+            re.search(r"\.on\(\s*[\"']connection[\"']|io\.use\(", code)
+        )
+        if has_connection_handler and not re.search(
+            r"auth|token|jwt|verify", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "CRITICAL",
+                    "issue": "WebSocket connection handler with no auth check visible — any client can connect and interact",
+                    "fix": "Add io.use((socket, next) => { if (!authenticate(socket.handshake)) next(error) })",
+                }
+            )
+        if re.search(r"\.on\(\s*[\"']connection[\"']", code) and not re.search(
+            r"disconnect", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "LOW",
+                    "issue": "No disconnect handler visible — confirm any per-connection state (room membership, presence) is cleaned up on disconnect",
+                    "fix": "Add socket.on('disconnect', () => { cleanup state })",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -945,28 +1449,44 @@ Format findings as structured reports with severity, location, description, and 
     def _audit_hardcoded_secrets(self, code: str) -> Dict[str, Any]:
         """NEW: Scan code for hardcoded secrets with advanced pattern matching."""
         findings = []
-        ignore_re = re.compile(r"(?:CHANGE_ME|PLACEHOLDER|YOUR_KEY_HERE|EXAMPLE|DUMMY|REPLACE_ME)", re.IGNORECASE)
+        ignore_re = re.compile(
+            r"(?:CHANGE_ME|PLACEHOLDER|YOUR_KEY_HERE|EXAMPLE|DUMMY|REPLACE_ME)",
+            re.IGNORECASE,
+        )
         secret_patterns = [
             (r"api[_-]?key\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{20,})[\"']", "API Key"),
             (r"password\s*[:=]\s*[\"']([^\"']{10,})[\"']", "Password"),
             (r"secret\s*[:=]\s*[\"']([^\"']{20,})[\"']", "Secret"),
-            (r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=.]+\.eyJ[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_.=]*)[\"']", "JWT Token"),
-            (r"AWS[_-]?SECRET[_-]?ACCESS[_-]?KEY\s*[:=]\s*[\"']([A-Za-z0-9/+=]{40})[\"']", "AWS Secret"),
-            (r"(?:postgres|mysql|mongodb(?:\+srv)?|redis)://[^:@\s]+:([^@\s/]+)@", "Database URL with embedded credential"),
+            (
+                r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=.]+\.eyJ[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_.=]*)[\"']",
+                "JWT Token",
+            ),
+            (
+                r"AWS[_-]?SECRET[_-]?ACCESS[_-]?KEY\s*[:=]\s*[\"']([A-Za-z0-9/+=]{40})[\"']",
+                "AWS Secret",
+            ),
+            (
+                r"(?:postgres|mysql|mongodb(?:\+srv)?|redis)://[^:@\s]+:([^@\s/]+)@",
+                "Database URL with embedded credential",
+            ),
             (r"https?://([^:@/\s]{12,})@[\w.-]+", "URL-embedded credential"),
         ]
         for pattern, secret_type in secret_patterns:
             for match in re.finditer(pattern, code, re.IGNORECASE):
                 matched_text = match.group(0)
-                if ignore_re.search(matched_text) or re.search(r"\bappl_[A-Za-z0-9_]+\b", matched_text):
+                if ignore_re.search(matched_text) or re.search(
+                    r"\bappl_[A-Za-z0-9_]+\b", matched_text
+                ):
                     continue
                 line = code.count("\n", 0, match.start()) + 1
-                findings.append({
-                    "severity": "CRITICAL",
-                    "issue": f"Hardcoded {secret_type} detected",
-                    "line": line,
-                    "fix": "Move to environment variables or secret manager references.",
-                })
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": f"Hardcoded {secret_type} detected",
+                        "line": line,
+                        "fix": "Move to environment variables or secret manager references.",
+                    }
+                )
 
         for pem in (
             ("BEGIN RSA PRIVATE KEY", "RSA private key block"),
@@ -974,38 +1494,53 @@ Format findings as structured reports with severity, location, description, and 
             ("BEGIN EC PRIVATE KEY", "EC private key block"),
         ):
             if pem[0] in code:
-                findings.append({
-                    "severity": "CRITICAL",
-                    "issue": f"Multi-line secret detected: {pem[1]}",
-                    "fix": "Remove key material from source control and rotate affected credentials.",
-                })
+                findings.append(
+                    {
+                        "severity": "CRITICAL",
+                        "issue": f"Multi-line secret detected: {pem[1]}",
+                        "fix": "Remove key material from source control and rotate affected credentials.",
+                    }
+                )
 
-        for match in re.finditer(r"Bearer\s+(eyJ[A-Za-z0-9\-_=.]+\.[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_=.]+)", code):
+        for match in re.finditer(
+            r"Bearer\s+(eyJ[A-Za-z0-9\-_=.]+\.[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_=.]+)",
+            code,
+        ):
             token = match.group(1)
             if ignore_re.search(token):
                 continue
-            findings.append({
-                "severity": "HIGH",
-                "issue": "****** appears in code/comment/log text",
-                "line": code.count("\n", 0, match.start()) + 1,
-                "fix": "Remove logged tokens and redact authorization headers.",
-            })
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "****** appears in code/comment/log text",
+                    "line": code.count("\n", 0, match.start()) + 1,
+                    "fix": "Remove logged tokens and redact authorization headers.",
+                }
+            )
 
         for match in re.finditer(r"[\"']([A-Za-z0-9_\-./+=]{28,})[\"']", code):
             candidate = match.group(1)
             if ignore_re.search(candidate):
                 continue
-            if candidate.lower().startswith(("http", "npm", "node", "react", "typescript")):
+            if candidate.lower().startswith(
+                ("http", "application/", "npm", "node", "react", "typescript")
+            ):
                 continue
             entropy = _shannon_entropy(candidate)
-            if entropy >= 4.0 and re.search(r"[A-Za-z]", candidate) and re.search(r"\d", candidate):
-                findings.append({
-                    "severity": "MEDIUM",
-                    "issue": "High-entropy string may be a hardcoded secret",
-                    "line": code.count("\n", 0, match.start()) + 1,
-                    "fix": "Confirm this value is non-sensitive or move it to a secret store.",
-                    "entropy": round(entropy, 2),
-                })
+            if (
+                entropy >= 4.0
+                and re.search(r"[A-Za-z]", candidate)
+                and re.search(r"\d", candidate)
+            ):
+                findings.append(
+                    {
+                        "severity": "MEDIUM",
+                        "issue": "High-entropy string may be a hardcoded secret",
+                        "line": code.count("\n", 0, match.start()) + 1,
+                        "fix": "Confirm this value is non-sensitive or move it to a secret store.",
+                        "entropy": round(entropy, 2),
+                    }
+                )
         return {"findings": findings, "total_issues": len(findings)}
 
     def _audit_error_handling(self, code: str) -> Dict[str, Any]:
@@ -1013,20 +1548,32 @@ Format findings as structured reports with severity, location, description, and 
         findings = []
 
         # Check for stack trace exposure
-        if re.search(r"res\.send\(\s*err\)|response\.send\(\s*error\)|res\.json\(\s*err\)", code, re.IGNORECASE):
-            findings.append({
-                "severity": "HIGH",
-                "issue": "Error object sent directly in response — may expose stack traces, internal paths, or sensitive info",
-                "fix": "Return generic error message: res.json({ error: 'Something went wrong' }); log err server-side"
-            })
+        if re.search(
+            r"res\.send\(\s*err\)|response\.send\(\s*error\)|res\.json\(\s*err\)",
+            code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "HIGH",
+                    "issue": "Error object sent directly in response — may expose stack traces, internal paths, or sensitive info",
+                    "fix": "Return generic error message: res.json({ error: 'Something went wrong' }); log err server-side",
+                }
+            )
 
         # Check for debug mode left on
-        if re.search(r"\bDEBUG\s*=\s*(?:true|1)\b|\bdebug\s*:\s*true\b|app\.use\(\s*morgan\(['\"]dev['\"]\)\s*\)", code, re.IGNORECASE):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "Debug mode or verbose logging enabled — may leak internal details in production",
-                "fix": "Disable debugging in production; use environment checks: if (process.env.NODE_ENV === 'development')"
-            })
+        if re.search(
+            r"\bDEBUG\s*=\s*(?:true|1)\b|\bdebug\s*:\s*true\b|app\.use\(\s*morgan\(['\"]dev['\"]\)\s*\)",
+            code,
+            re.IGNORECASE,
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "Debug mode or verbose logging enabled — may leak internal details in production",
+                    "fix": "Disable debugging in production; use environment checks: if (process.env.NODE_ENV === 'development')",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}
 
@@ -1036,28 +1583,50 @@ Format findings as structured reports with severity, location, description, and 
 
         # Check what's being logged
         sensitive_patterns = [
-            (r"console\.log\([^)]*\b(password|secret|token|key|api[_-]?key)\b", "Password/Secret", "CRITICAL"),
-            (r"logger\.log\([^)]*\b(req\.body|request\.body|request\.headers)\b", "Request Body/Headers", "HIGH"),
-            (r"console\.log\([^)]*\b(user|email|phone|ssn|creditcard)\b", "Personal Info", "HIGH"),
-            (r"logger\.(info|debug|error)\([^)]*\b(process\.env)\b", "Environment Variables", "CRITICAL"),
+            (
+                r"console\.log\([^)]*\b(password|secret|token|key|api[_-]?key)\b",
+                "Password/Secret",
+                "CRITICAL",
+            ),
+            (
+                r"logger\.log\([^)]*\b(req\.body|request\.body|request\.headers)\b",
+                "Request Body/Headers",
+                "HIGH",
+            ),
+            (
+                r"console\.log\([^)]*\b(user|email|phone|ssn|creditcard)\b",
+                "Personal Info",
+                "HIGH",
+            ),
+            (
+                r"logger\.(info|debug|error)\([^)]*\b(process\.env)\b",
+                "Environment Variables",
+                "CRITICAL",
+            ),
         ]
 
         sensitive_log_found = False
         for pattern, data_type, severity in sensitive_patterns:
             if re.search(pattern, code, re.IGNORECASE):
                 sensitive_log_found = True
-                findings.append({
-                    "severity": severity,
-                    "issue": f"Potentially logging {data_type} — may expose sensitive information",
-                    "fix": f"Filter or redact {data_type.lower()} before logging; use structured logging with field redaction"
-                })
+                findings.append(
+                    {
+                        "severity": severity,
+                        "issue": f"Potentially logging {data_type} — may expose sensitive information",
+                        "fix": f"Filter or redact {data_type.lower()} before logging; use structured logging with field redaction",
+                    }
+                )
 
         # Check for proper PII redaction
-        if sensitive_log_found and not re.search(r"redact|mask|anonymize|sanitize.*log|\[Filtered\]", code, re.IGNORECASE):
-            findings.append({
-                "severity": "MEDIUM",
-                "issue": "No PII redaction/masking visible in logging code",
-                "fix": "Implement a logging filter that redacts sensitive fields (emails, tokens, SSNs, etc.)"
-            })
+        if sensitive_log_found and not re.search(
+            r"redact|mask|anonymize|sanitize.*log|\[Filtered\]", code, re.IGNORECASE
+        ):
+            findings.append(
+                {
+                    "severity": "MEDIUM",
+                    "issue": "No PII redaction/masking visible in logging code",
+                    "fix": "Implement a logging filter that redacts sensitive fields (emails, tokens, SSNs, etc.)",
+                }
+            )
 
         return {"findings": findings, "total_issues": len(findings)}

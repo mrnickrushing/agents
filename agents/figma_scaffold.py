@@ -40,7 +40,12 @@ _DEFAULT_TOKENS: Dict[str, Any] = {
     "typography": {
         "fontFamily": "System",
         "sizes": {"xs": 12, "sm": 14, "md": 16, "lg": 20, "xl": 28, "xxl": 34},
-        "weights": {"regular": "400", "medium": "500", "semibold": "600", "bold": "700"},
+        "weights": {
+            "regular": "400",
+            "medium": "500",
+            "semibold": "600",
+            "bold": "700",
+        },
     },
     "spacing": {2: 2, 4: 4, 8: 8, 12: 12, 16: 16, 24: 24, 32: 32, 48: 48, 64: 64},
     "borderRadius": {"sm": 4, "md": 8, "lg": 12, "xl": 16, "full": 9999},
@@ -65,7 +70,10 @@ class FigmaScaffoldAgent(BaseAgent):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "figma_json": {"type": "string", "description": "Raw Figma API file response"},
+                        "figma_json": {
+                            "type": "string",
+                            "description": "Raw Figma API file response",
+                        },
                     },
                     "required": ["figma_json"],
                 },
@@ -76,7 +84,10 @@ class FigmaScaffoldAgent(BaseAgent):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "tokens": {"type": "object", "description": "Design tokens dict"},
+                        "tokens": {
+                            "type": "object",
+                            "description": "Design tokens dict",
+                        },
                         "app_name": {"type": "string", "description": "App name"},
                         "payment_model": {
                             "type": "string",
@@ -94,7 +105,10 @@ class FigmaScaffoldAgent(BaseAgent):
                     "type": "object",
                     "properties": {
                         "app_name": {"type": "string"},
-                        "payment_model": {"type": "string", "enum": ["subscription", "one_time", "freemium"]},
+                        "payment_model": {
+                            "type": "string",
+                            "enum": ["subscription", "one_time", "freemium"],
+                        },
                     },
                     "required": ["app_name"],
                 },
@@ -119,17 +133,58 @@ class FigmaScaffoldAgent(BaseAgent):
 
         tokens: Dict[str, Any] = {"colors": {}, "typography": {}, "spacing": {}}
 
-        # Walk Figma document styles
+        def color_hex(fill: Dict[str, Any]) -> Optional[str]:
+            if fill.get("type") != "SOLID" or not fill.get("visible", True):
+                return None
+            color = fill.get("color") or {}
+            try:
+                channels = [
+                    round(float(color.get(k, 0)) * 255) for k in ("r", "g", "b")
+                ]
+            except (TypeError, ValueError):
+                return None
+            return "#" + "".join(f"{max(0, min(255, c)):02X}" for c in channels)
+
+        nodes_by_style: Dict[str, Dict[str, Any]] = {}
+
+        def walk(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            node_styles = node.get("styles") or {}
+            for style_type, style_id in node_styles.items():
+                nodes_by_style.setdefault(str(style_id), {})[str(style_type)] = node
+            for child in node.get("children") or []:
+                walk(child)
+
+        walk(data.get("document"))
+
+        # Resolve style metadata to the actual document node that uses it.
         styles = data.get("styles", {})
-        for _key, style in styles.items():
+        for style_id, style in styles.items():
             name = style.get("name", "")
             stype = style.get("styleType", "")
+            node = nodes_by_style.get(str(style_id), {}).get(stype.lower(), {})
             if stype == "FILL" and name:
                 token_name = re.sub(r"[^a-zA-Z0-9]", "_", name).strip("_").lower()
-                tokens["colors"][token_name] = "#000000"  # placeholder; real impl reads fill color
+                resolved = next(
+                    (
+                        color_hex(fill)
+                        for fill in node.get("fills", [])
+                        if color_hex(fill)
+                    ),
+                    None,
+                )
+                if resolved:
+                    tokens["colors"][token_name] = resolved
             elif stype == "TEXT" and name:
                 token_name = re.sub(r"[^a-zA-Z0-9]", "_", name).strip("_").lower()
-                tokens["typography"][token_name] = {"size": 16, "weight": "400"}
+                text_style = node.get("style") or {}
+                tokens["typography"][token_name] = {
+                    "fontFamily": text_style.get("fontFamily", "System"),
+                    "size": text_style.get("fontSize", 16),
+                    "weight": str(text_style.get("fontWeight", 400)),
+                    "lineHeight": text_style.get("lineHeightPx"),
+                }
 
         if not tokens["colors"]:
             tokens["colors"] = _DEFAULT_TOKENS["colors"]
@@ -171,6 +226,10 @@ class FigmaScaffoldAgent(BaseAgent):
         # Railway backend starter
         files["backend/src/index.ts"] = _render_backend(app_name, payment_model)
         files["backend/package.json"] = _render_backend_package(app_name)
+        files["backend/migrations/001_stripe_events.sql"] = (
+            "CREATE TABLE IF NOT EXISTS stripe_events ("
+            "event_id TEXT PRIMARY KEY, processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\n"
+        )
 
         return {
             "app_name": app_name,
@@ -194,12 +253,14 @@ class FigmaScaffoldAgent(BaseAgent):
 
 # ── Render helpers ─────────────────────────────────────────────────────────
 
+
 def _render_tokens_file(tokens: Dict[str, Any], app_name: str) -> str:
     colors = tokens.get("colors", _DEFAULT_TOKENS["colors"])
     spacing = tokens.get("spacing", _DEFAULT_TOKENS["spacing"])
-    typography = tokens.get("typography", _DEFAULT_TOKENS["typography"])
     color_lines = "\n".join(f"  {k}: '{v}'," for k, v in colors.items())
-    spacing_lines = "\n".join(f"  s{k}: {v}," for k, v in spacing.items() if isinstance(k, int))
+    spacing_lines = "\n".join(
+        f"  s{k}: {v}," for k, v in spacing.items() if isinstance(k, int)
+    )
     return f"""\
 // Auto-generated design tokens for {app_name}
 // Generated by agents FigmaScaffoldAgent
@@ -219,72 +280,79 @@ export const borderRadius = {{
 
 
 def _render_layout(app_name: str) -> str:
-    return f"""\
-import {{ Stack }} from 'expo-router';
+    return """\
+import { Stack } from 'expo-router';
 import * as Sentry from '@sentry/react-native';
-import {{ initSentry }} from '../src/lib/sentry';
+import { initSentry } from '../src/lib/sentry';
 
 initSentry();
 
-export default function RootLayout() {{
+export default function RootLayout() {
   return (
     <Stack>
-      <Stack.Screen name="(tabs)" options={{{{ headerShown: false }}}} />
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
     </Stack>
   );
-}}
+}
 """
 
 
 def _render_eas_config(app_name: str) -> str:
-    slug = re.sub(r"[^a-z0-9-]", "-", app_name.lower()).strip("-")
-    return json.dumps({
-        "cli": {"version": ">= 5.0.0"},
-        "build": {
-            "development": {
-                "developmentClient": True,
-                "distribution": "internal",
-                "env": {"APP_ENV": "development"},
+    return json.dumps(
+        {
+            "cli": {"version": ">= 5.0.0"},
+            "build": {
+                "development": {
+                    "developmentClient": True,
+                    "distribution": "internal",
+                    "env": {"APP_ENV": "development"},
+                },
+                "preview": {
+                    "distribution": "internal",
+                    "env": {"APP_ENV": "preview"},
+                },
+                "production": {
+                    "autoIncrement": True,
+                    "env": {"APP_ENV": "production"},
+                },
             },
-            "preview": {
-                "distribution": "internal",
-                "env": {"APP_ENV": "preview"},
-            },
-            "production": {
-                "autoIncrement": True,
-                "env": {"APP_ENV": "production"},
+            "submit": {
+                "production": {
+                    "ios": {
+                        "appleId": "your-apple-id@example.com",
+                        "ascAppId": "your-app-store-id",
+                    },
+                    "android": {
+                        "serviceAccountKeyPath": "./google-service-account.json"
+                    },
+                }
             },
         },
-        "submit": {
-            "production": {
-                "ios": {"appleId": "your-apple-id@example.com", "ascAppId": "your-app-store-id"},
-                "android": {"serviceAccountKeyPath": "./google-service-account.json"},
-            }
-        },
-    }, indent=2)
+        indent=2,
+    )
 
 
 def _render_sentry_init(app_name: str) -> str:
-    return f"""\
+    return """\
 import * as Sentry from '@sentry/react-native';
 
-export function initSentry() {{
-  Sentry.init({{
+export function initSentry() {
+  Sentry.init({
     dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
     environment: process.env.APP_ENV ?? 'development',
     // Never send PII to Sentry
     sendDefaultPii: false,
-    beforeSend(event) {{
+    beforeSend(event) {
       // Redact user emails and IDs
-      if (event.user) {{
+      if (event.user) {
         delete event.user.email;
         delete event.user.username;
-      }}
+      }
       return event;
-    }},
+    },
     tracesSampleRate: process.env.APP_ENV === 'production' ? 0.2 : 1.0,
-  }});
-}}
+  });
+}
 """
 
 
@@ -329,16 +397,29 @@ def _render_backend(app_name: str, payment_model: str) -> str:
     webhook_block = ""
     if payment_model in ("subscription", "one_time"):
         webhook_block = """
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'] as string;
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
   } catch (err) {
-    return res.status(400).send(`Webhook Error: ${err}`);
+    return res.status(400).json({ error: 'Invalid webhook signature' });
   }
-  // TODO: handle event types
-  res.json({ received: true });
+  const inserted = await pool.query(
+    'INSERT INTO stripe_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id',
+    [event.id],
+  );
+  if (inserted.rowCount === 0) return res.json({ received: true, duplicate: true });
+  switch (event.type) {
+    case 'checkout.session.completed':
+    case 'customer.subscription.updated':
+    case 'customer.subscription.deleted':
+      console.info('Stripe lifecycle event accepted', { eventId: event.id, type: event.type });
+      break;
+    default:
+      console.info('Unhandled Stripe event accepted', { eventId: event.id, type: event.type });
+  }
+  return res.json({ received: true });
 });
 """
     return f"""\
@@ -347,17 +428,26 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import Stripe from 'stripe';
+import {{ Pool }} from 'pg';
 
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const pool = new Pool({{ connectionString: process.env.DATABASE_URL }});
 
 app.use(helmet());
-app.use(cors({{ origin: process.env.ALLOWED_ORIGINS?.split(',') ?? [] }}));
+app.use(cors({{
+  origin: process.env.ALLOWED_ORIGINS?.split(',') ?? [],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Stripe-Signature'],
+}}));
 app.use(rateLimit({{ windowMs: 15 * 60 * 1000, max: 100 }}));
+{webhook_block}
 app.use(express.json());
 
-app.get('/health', (_req, res) => res.json({{ status: 'ok', app: '{app_name}' }}));
-{webhook_block}
+app.get('/health', async (_req, res) => {{
+  try {{ await pool.query('SELECT 1'); res.json({{ status: 'ok', app: '{app_name}' }}); }}
+  catch {{ res.status(503).json({{ status: 'unavailable' }}); }}
+}});
 const PORT = process.env.PORT ?? 3000;
 app.listen(PORT, () => console.log(`{app_name} backend listening on port ${{PORT}}`));
 """
@@ -365,25 +455,30 @@ app.listen(PORT, () => console.log(`{app_name} backend listening on port ${{PORT
 
 def _render_backend_package(app_name: str) -> str:
     slug = re.sub(r"[^a-z0-9-]", "-", app_name.lower()).strip("-")
-    return json.dumps({
-        "name": f"{slug}-backend",
-        "version": "1.0.0",
-        "scripts": {
-            "start": "node dist/index.js",
-            "dev": "ts-node-dev src/index.ts",
-            "build": "tsc",
+    return json.dumps(
+        {
+            "name": f"{slug}-backend",
+            "version": "1.0.0",
+            "scripts": {
+                "start": "node dist/index.js",
+                "dev": "ts-node-dev src/index.ts",
+                "build": "tsc",
+            },
+            "dependencies": {
+                "express": "^4.21.0",
+                "helmet": "^8.0.0",
+                "cors": "^2.8.5",
+                "express-rate-limit": "^7.4.0",
+                "stripe": "^17.0.0",
+                "pg": "^8.13.0",
+            },
+            "devDependencies": {
+                "@types/express": "^4.17.21",
+                "@types/cors": "^2.8.17",
+                "@types/pg": "^8.11.10",
+                "typescript": "^5.6.0",
+                "ts-node-dev": "^2.0.0",
+            },
         },
-        "dependencies": {
-            "express": "^4.21.0",
-            "helmet": "^8.0.0",
-            "cors": "^2.8.5",
-            "express-rate-limit": "^7.4.0",
-            "stripe": "^17.0.0",
-        },
-        "devDependencies": {
-            "@types/express": "^4.17.21",
-            "@types/cors": "^2.8.17",
-            "typescript": "^5.6.0",
-            "ts-node-dev": "^2.0.0",
-        },
-    }, indent=2)
+        indent=2,
+    )

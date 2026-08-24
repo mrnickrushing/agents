@@ -15,7 +15,6 @@ import pytest
 from agents.evolution import EvolutionStore
 from agents.incidents import fingerprint, normalize_line, salient_lines
 
-
 # Same failure, two different runs: different timestamps, runner paths, commit
 # hashes, and durations. A signature that doesn't survive this is useless.
 PYTEST_PATH_A = """
@@ -121,44 +120,81 @@ def test_record_then_match_across_projects(store):
 
 def test_unrelated_failure_does_not_match(store):
     store.record_incident(
-        log=PYTEST_PATH_A, project_key="aegisapparel", surface="ci",
-        summary="s", root_cause="r", fix="f",
+        log=PYTEST_PATH_A,
+        project_key="aegisapparel",
+        surface="ci",
+        summary="s",
+        root_cause="r",
+        fix="f",
     )
     assert store.match_incidents(ESLINT_PEER)["incidents"] == []
 
 
 def test_exclude_project_filters_own_history(store):
     store.record_incident(
-        log=PYTEST_PATH_A, project_key="aegisapparel", surface="ci",
-        summary="s", root_cause="r", fix="f",
+        log=PYTEST_PATH_A,
+        project_key="aegisapparel",
+        surface="ci",
+        summary="s",
+        root_cause="r",
+        fix="f",
     )
-    assert store.match_incidents(PYTEST_PATH_A, exclude_project="aegisapparel")["incidents"] == []
+    assert (
+        store.match_incidents(PYTEST_PATH_A, exclude_project="aegisapparel")[
+            "incidents"
+        ]
+        == []
+    )
     assert store.match_incidents(PYTEST_PATH_A, exclude_project="vitality")["incidents"]
 
 
 def test_matches_are_newest_first(store):
     for i, proj in enumerate(["a", "b", "c"]):
         store.record_incident(
-            log=PYTEST_PATH_A, project_key=proj, surface="ci",
-            summary=f"s{i}", root_cause="r", fix="f",
+            log=PYTEST_PATH_A,
+            project_key=proj,
+            surface="ci",
+            summary=f"s{i}",
+            root_cause="r",
+            fix="f",
         )
-    projects = [i["project_key"] for i in store.match_incidents(PYTEST_PATH_A)["incidents"]]
+    projects = [
+        i["project_key"] for i in store.match_incidents(PYTEST_PATH_A)["incidents"]
+    ]
     assert projects[0] == "c"
 
 
 def test_recent_incidents_can_filter_by_project(store):
-    store.record_incident(log=PYTEST_PATH_A, project_key="a", surface="ci",
-                          summary="s", root_cause="r", fix="f")
-    store.record_incident(log=ESLINT_PEER, project_key="b", surface="ci",
-                          summary="s", root_cause="r", fix="f")
+    store.record_incident(
+        log=PYTEST_PATH_A,
+        project_key="a",
+        surface="ci",
+        summary="s",
+        root_cause="r",
+        fix="f",
+    )
+    store.record_incident(
+        log=ESLINT_PEER,
+        project_key="b",
+        surface="ci",
+        summary="s",
+        root_cause="r",
+        fix="f",
+    )
     assert len(store.recent_incidents()) == 2
     assert len(store.recent_incidents(project="a")) == 1
 
 
 def test_invalid_surface_is_rejected(store):
     with pytest.raises(ValueError):
-        store.record_incident(log="x", project_key="a", surface="nonsense",
-                              summary="s", root_cause="r", fix="f")
+        store.record_incident(
+            log="x",
+            project_key="a",
+            surface="nonsense",
+            summary="s",
+            root_cause="r",
+            fix="f",
+        )
 
 
 def test_raw_log_is_not_persisted(store):
@@ -166,7 +202,11 @@ def test_raw_log_is_not_persisted(store):
     secret = "ghp_totallyrealtokenvalue1234567890"
     store.record_incident(
         log=f"Error: auth failed with {secret} at /a/b/c",
-        project_key="a", surface="ci", summary="s", root_cause="r", fix="f",
+        project_key="a",
+        surface="ci",
+        summary="s",
+        root_cause="r",
+        fix="f",
     )
     dumped = "\n".join(store.connection.iterdump())
     assert secret not in dumped

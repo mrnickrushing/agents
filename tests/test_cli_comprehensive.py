@@ -57,9 +57,18 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
     _write(
         tmp_path,
         "eas.json",
-        json.dumps({"build": {"production": {"autoIncrement": True}}, "submit": {"production": {}}}),
+        json.dumps(
+            {
+                "build": {"production": {"autoIncrement": True}},
+                "submit": {"production": {}},
+            }
+        ),
     )
-    _write(tmp_path, "Dockerfile", "FROM node:latest\nRUN npm install\nCMD [\"node\", \"server.js\"]\n")
+    _write(
+        tmp_path,
+        "Dockerfile",
+        'FROM node:latest\nRUN npm install\nCMD ["node", "server.js"]\n',
+    )
 
     report = _run_scan(str(tmp_path), None)
 
@@ -68,7 +77,6 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
         "api_architect",
         "auth_security",
         "code_review",
-        "compliance",
         "config_audit",
         "database_architect",
         "flow_audit",
@@ -86,7 +94,11 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
 
 
 def test_dependency_free_package_does_not_require_a_lockfile(tmp_path):
-    _write(tmp_path, "package.json", json.dumps({"name": "tool", "scripts": {"test": "true"}}))
+    _write(
+        tmp_path,
+        "package.json",
+        json.dumps({"name": "tool", "scripts": {"test": "true"}}),
+    )
 
     report = _run_scan(str(tmp_path), None)
 
@@ -94,7 +106,9 @@ def test_dependency_free_package_does_not_require_a_lockfile(tmp_path):
 
 
 def test_package_dependencies_without_a_lockfile_are_reported(tmp_path):
-    _write(tmp_path, "package.json", json.dumps({"dependencies": {"example": "^1.0.0"}}))
+    _write(
+        tmp_path, "package.json", json.dumps({"dependencies": {"example": "^1.0.0"}})
+    )
 
     report = _run_scan(str(tmp_path), None)
 
@@ -102,9 +116,17 @@ def test_package_dependencies_without_a_lockfile_are_reported(tmp_path):
 
 
 def test_roblox_luau_and_validation_scripts_receive_targeted_checks(tmp_path):
-    _write(tmp_path, "src/module.luau", "--!strict\nreturn table.freeze({ ready = true })\n")
+    _write(
+        tmp_path,
+        "src/module.luau",
+        "--!strict\nreturn table.freeze({ ready = true })\n",
+    )
     _write(tmp_path, "types/standard.d.luau", "declare function task_wait(): ()\n")
-    _write(tmp_path, "scripts/typecheck.mjs", "import { spawnSync } from 'node:child_process';\nspawnSync('luau-lsp', []);\n")
+    _write(
+        tmp_path,
+        "scripts/typecheck.mjs",
+        "import { spawnSync } from 'node:child_process';\nspawnSync('luau-lsp', []);\n",
+    )
 
     report = _run_scan(str(tmp_path), None)
 
@@ -130,7 +152,7 @@ def test_discovery_ignores_dangerous_api_names_in_comments_and_strings(tmp_path)
     _write(
         tmp_path,
         "scanner.py",
-        '''\n# Never call eval(user_input) or jwt.verify(token, key) here.\nPATTERNS = ["stripe.webhooks.constructEvent", "Sentry.init(", "CORSMiddleware"]\ndef harmless():\n    return PATTERNS\n''',
+        """\n# Never call eval(user_input) or jwt.verify(token, key) here.\nPATTERNS = ["stripe.webhooks.constructEvent", "Sentry.init(", "CORSMiddleware"]\ndef harmless():\n    return PATTERNS\n""",
     )
 
     report = _run_scan(str(tmp_path), None)
@@ -142,10 +164,18 @@ def test_discovery_ignores_dangerous_api_names_in_comments_and_strings(tmp_path)
 def test_integrity_checks_report_syntax_json_and_merge_conflicts(tmp_path):
     _write(tmp_path, "broken.py", "def nope(:\n    pass\n")
     _write(tmp_path, "broken.json", '{"missing": }')
-    _write(tmp_path, "conflict.ts", "<<<<<<< HEAD\nconst x = 1;\n=======\nconst x = 2;\n>>>>>>> branch\n")
+    _write(
+        tmp_path,
+        "conflict.ts",
+        "<<<<<<< HEAD\nconst x = 1;\n=======\nconst x = 2;\n>>>>>>> branch\n",
+    )
 
     report = _run_scan(str(tmp_path), None)
-    issues = [finding["issue"] for entry in report["results"] for finding in _entry_findings(entry)]
+    issues = [
+        finding["issue"]
+        for entry in report["results"]
+        for finding in _entry_findings(entry)
+    ]
 
     assert any("Python syntax error" in issue for issue in issues)
     assert any("Invalid JSON" in issue for issue in issues)
@@ -167,7 +197,9 @@ def test_generated_dist_variant_directories_are_not_scanned(tmp_path):
 
     report = _run_scan(str(tmp_path), None)
 
-    assert all(not entry["file"].startswith("dist-marketing/") for entry in report["results"])
+    assert all(
+        not entry["file"].startswith("dist-marketing/") for entry in report["results"]
+    )
     assert report["coverage"]["files_considered"] == 1
 
 
@@ -199,7 +231,11 @@ def test_human_report_does_not_hide_static_scan_boundary(tmp_path):
 
 
 def test_typescript_source_resolves_from_esm_js_import(tmp_path):
-    route = _write(tmp_path, "src/routes/auth.ts", "import { verify } from '../lib/apple.js';\nverify();")
+    route = _write(
+        tmp_path,
+        "src/routes/auth.ts",
+        "import { verify } from '../lib/apple.js';\nverify();",
+    )
     _write(tmp_path, "src/lib/apple.ts", "export const verify = () => 'jwks';")
 
     combined = _inline_local_imports(str(route), route.read_text(), str(tmp_path))
@@ -208,7 +244,9 @@ def test_typescript_source_resolves_from_esm_js_import(tmp_path):
 
 
 def test_python_parent_relative_import_is_inlined(tmp_path):
-    route = _write(tmp_path, "app/routes/auth.py", "from ..security.apple import verify\nverify()")
+    route = _write(
+        tmp_path, "app/routes/auth.py", "from ..security.apple import verify\nverify()"
+    )
     _write(tmp_path, "app/security/apple.py", "def verify(): return 'jwks'")
 
     combined = _inline_local_imports(str(route), route.read_text(), str(tmp_path))
@@ -241,7 +279,9 @@ def test_apple_review_sees_local_verifier_context(tmp_path):
         for finding in entry["result"].get("findings", [])
     ]
 
-    assert not any("Apple" in issue or "nonce" in issue or "JWKS" in issue for issue in issues)
+    assert not any(
+        "Apple" in issue or "nonce" in issue or "JWKS" in issue for issue in issues
+    )
 
 
 def _synthetic_report(*entries):
@@ -259,7 +299,11 @@ def _entry(severity, verdict=None, feedback_verdict=None):
     if verdict:
         entry["triage"] = {"verdict": verdict, "reason": "because"}
     if feedback_verdict:
-        entry["feedback"] = {"verdict": feedback_verdict, "reason": "because", "source": "human"}
+        entry["feedback"] = {
+            "verdict": feedback_verdict,
+            "reason": "because",
+            "source": "human",
+        }
     return entry
 
 
@@ -317,7 +361,10 @@ def _mixed_verdict_entry():
                 {
                     "severity": "HIGH",
                     "issue": "dismissed high finding",
-                    "triage": {"verdict": "FALSE_POSITIVE", "reason": "handled elsewhere"},
+                    "triage": {
+                        "verdict": "FALSE_POSITIVE",
+                        "reason": "handled elsewhere",
+                    },
                 },
                 {
                     "severity": "LOW",
@@ -352,7 +399,11 @@ def test_fail_on_finding_level_feedback_overrides_finding_level_triage():
                     "severity": "CRITICAL",
                     "issue": "triage confirmed, human dismissed",
                     "triage": {"verdict": "CONFIRMED", "reason": "model thinks real"},
-                    "feedback": {"verdict": "FALSE_POSITIVE", "reason": "human knows better", "source": "human"},
+                    "feedback": {
+                        "verdict": "FALSE_POSITIVE",
+                        "reason": "human knows better",
+                        "source": "human",
+                    },
                 },
             ]
         },

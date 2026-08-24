@@ -17,11 +17,12 @@ class ConversationStore:
     def __init__(self, database_path: str) -> None:
         self.database_path = database_path
         if self.database_path != ":memory:":
-            os.makedirs(os.path.dirname(os.path.abspath(self.database_path)), exist_ok=True)
+            os.makedirs(
+                os.path.dirname(os.path.abspath(self.database_path)), exist_ok=True
+            )
         self.connection = sqlite3.connect(self.database_path)
         self.connection.row_factory = sqlite3.Row
-        self.connection.execute(
-            """
+        self.connection.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 namespace TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
@@ -29,11 +30,12 @@ class ConversationStore:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (namespace, conversation_id)
             )
-            """
-        )
+            """)
         self.connection.commit()
 
-    def load_conversation(self, namespace: str, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
+    def load_conversation(
+        self, namespace: str, conversation_id: str
+    ) -> Optional[List[Dict[str, Any]]]:
         row = self.connection.execute(
             """
             SELECT messages_json

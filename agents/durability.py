@@ -35,9 +35,8 @@ import logging
 import random
 import sqlite3
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +209,7 @@ def _deserialize(text: Optional[str]) -> Any:
 def _compute_backoff(attempt: int, backoff: str, base: float = 1.0) -> float:
     """Return the number of seconds to wait before the next attempt."""
     if backoff == "exponential":
-        delay = base * (2 ** attempt) + random.uniform(0, 0.5)
+        delay = base * (2**attempt) + random.uniform(0, 0.5)
     elif backoff == "linear":
         delay = base * (attempt + 1)
     else:  # "none" or unknown
@@ -226,7 +225,9 @@ _current_workflow: Dict[int, "_WorkflowContext"] = {}
 
 
 class _WorkflowContext:
-    def __init__(self, workflow_id: str, db: DurabilityDB, resume_from: Optional[str] = None) -> None:
+    def __init__(
+        self, workflow_id: str, db: DurabilityDB, resume_from: Optional[str] = None
+    ) -> None:
         self.workflow_id = workflow_id
         self.db = db
         self.resume_from = resume_from  # step name to resume *at*
@@ -291,7 +292,9 @@ def durable_step(
             ctx.step_counters[step_name] = ctx.step_counters.get(step_name, 0)
             call_index = ctx.step_counters[step_name]
             ctx.step_counters[step_name] += 1
-            unique_step_id = f"{step_name}#{call_index}" if call_index > 0 else step_name
+            unique_step_id = (
+                f"{step_name}#{call_index}" if call_index > 0 else step_name
+            )
 
             # Check for existing completed result (checkpoint resume)
             existing = _db.get_step(unique_step_id, workflow_id)
@@ -336,7 +339,11 @@ def durable_step(
                         completed_at=time.time(),
                         attempt=attempt,
                     )
-                    logger.info("durable_step: %s completed (attempt %d)", unique_step_id, attempt)
+                    logger.info(
+                        "durable_step: %s completed (attempt %d)",
+                        unique_step_id,
+                        attempt,
+                    )
                     return result
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
@@ -364,7 +371,9 @@ def durable_step(
                         raise
 
             # Should not reach here.
-            raise RuntimeError(f"durable_step {unique_step_id} exhausted retries: {last_error}")
+            raise RuntimeError(
+                f"durable_step {unique_step_id} exhausted retries: {last_error}"
+            )
 
         @functools.wraps(fn)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -436,7 +445,9 @@ def durable_workflow(
 # ── Convenience helpers ───────────────────────────────────────────────────────
 
 
-def list_workflow_steps(workflow_id: str, db: Optional[DurabilityDB] = None) -> List[Dict[str, Any]]:
+def list_workflow_steps(
+    workflow_id: str, db: Optional[DurabilityDB] = None
+) -> List[Dict[str, Any]]:
     """Return all persisted steps for a workflow, ordered by start time."""
     _db = db or DurabilityDB()
     return _db.list_steps(workflow_id)
