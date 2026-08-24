@@ -7,6 +7,12 @@
 #   GITHUB_TOKEN           fetch PR diffs + post summary comments
 #   RAILWAY_RUN_UID=0      required because the image runs as a non-root user
 #                          and Railway mounts volumes as root
+#   PORT=8000              Railway injects its own PORT otherwise; the service
+#                          domains target 8000
+#   RAILWAY_DOCKERFILE_PATH=Dockerfile.server
+#                          also set the service's Dockerfile path setting —
+#                          this file's dockerfilePath was not honored on the
+#                          first API-created build
 # Volume: mount at /data (XDG_STATE_HOME) so evolution.db survives deploys.
 
 [build]

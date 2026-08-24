@@ -31,9 +31,12 @@ Routes: `/` dashboard · `/api/summary` · `/api/findings` · `/api/events` (SSE
 | `GITHUB_TOKEN` | Lets the receiver fetch PR diffs and post the summary comment. Without it the webhook scans the PR *body* only and posts nothing. Fine-grained PAT: Pull requests **read**, Issues **write** on the repos you point webhooks at. |
 | `RAILWAY_RUN_UID=0` | Railway mounts volumes as root; the image runs as a non-root user. Railway's documented fix. |
 | `XDG_STATE_HOME` | Already `/data` in the image; only override if the volume is mounted elsewhere. |
+| `PORT=8000` | **Set it explicitly.** Railway otherwise injects its own value (8080 on first deploy) while the service domains target port 8000 — the result is a healthy container behind a 502. |
+| `RAILWAY_DOCKERFILE_PATH=Dockerfile.server` | Belt and braces with the service's *Dockerfile path* setting. `railway.toml`'s `dockerfilePath` alone was **not** honored on the first build from the API — it built the CLI `Dockerfile` and the container exited after printing `--help`. |
 
-`PORT` is injected by Railway; the image defaults to 8000 and `agents serve`
-reads `$PORT`.
+Current production service: Railway project `agents` → service `agents-server`
+(`agents-server-production-5f19.up.railway.app`, custom domain
+`agents.rushingtechnologies.com`, volume `agents-server-data` at `/data`).
 
 ### Recreating it from scratch
 
@@ -41,13 +44,14 @@ reads `$PORT`.
 railway login
 railway init --name agents                       # or: railway link
 railway volume add --mount-path /data
-railway variables set RAILWAY_RUN_UID=0 GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+railway variables set RAILWAY_RUN_UID=0 PORT=8000 RAILWAY_DOCKERFILE_PATH=Dockerfile.server \
+  GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
 railway up                                       # or connect the GitHub repo in the dashboard
 railway domain agents.rushingtechnologies.com    # prints the CNAME target
 ```
 
 Then in Cloudflare (zone `rushingtechnologies.com`) add a **proxied** CNAME
-`agents` → the target Railway printed. Railway issues the certificate once
+`agents` → the target Railway printed (`cname.railway.app` for the current service). Railway issues the certificate once
 the record resolves; Cloudflare SSL mode must be *Full* (it is for the other
 `*.rushingtechnologies.com` services).
 
