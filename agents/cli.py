@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -45,12 +46,16 @@ from agents.code_review import CodeReviewAgent
 from agents.config_audit import ConfigAuditAgent
 from agents import autofix
 from agents.database_architect import DatabaseArchitectAgent
+from agents.flow_audit import FlowAuditAgent
+from agents.frontend_performance import FrontendPerformanceAgent
+from agents.iac_security import IACSecurityAgent
 from agents.infra_monitor import InfraMonitorAgent
 from agents.mobile_deploy import MobileDeployAgent
 from agents.railway_deploy import RailwayDeployAgent
 from agents.roblox_audit import RobloxAuditAgent
 from agents.scaffolder import ScaffolderAgent
 from agents.security_audit import SecurityAuditAgent
+from agents.supply_chain_audit import SupplyChainAuditAgent
 from agents.stripe_billing import StripeBillingAgent
 from agents.ui_generation import UIGenerationAgent
 from agents import __version__
@@ -68,8 +73,12 @@ AGENTS: Dict[str, type] = {
     "mobile_deploy": MobileDeployAgent,
     "api_architect": APIArchitectAgent,
     "database_architect": DatabaseArchitectAgent,
+    "flow_audit": FlowAuditAgent,
+    "frontend_performance": FrontendPerformanceAgent,
+    "iac_security": IACSecurityAgent,
     "infra_monitor": InfraMonitorAgent,
     "roblox_audit": RobloxAuditAgent,
+    "supply_chain_audit": SupplyChainAuditAgent,
 }
 
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
@@ -90,7 +99,10 @@ MAX_FILE_BYTES = 1_000_000
 # matched the same regexes as real jwt.verify()/webhook-handler code and
 # produced nonsense findings against files that have no logic to review.
 CODE_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".vue", ".svelte", ".lua", ".luau"}
-NON_CODE_BASENAMES = {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
+NON_CODE_BASENAMES = {
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "cargo.lock",
+    "pipfile.lock", "poetry.lock", "mix.lock", "package.resolved", "go.mod", "gemfile",
+}
 TEXT_EXTENSIONS = CODE_EXTENSIONS | {
     ".json", ".jsonc", ".yaml", ".yml", ".toml", ".sql", ".md", ".txt",
     ".env", ".cfg", ".ini", ".sh", ".bash", ".zsh", ".fish", ".dockerfile",
@@ -103,7 +115,9 @@ TEXT_BASENAMES = {
     "Dockerfile", "Procfile", "Gemfile", "Makefile", "requirements.txt",
     "package.json", "eas.json", "codemagic.yaml", "codemagic.yml",
     ".env.example", "AndroidManifest.xml", "Info.plist", "wrangler.toml",
-    "railway.toml", "railway.json",
+    "railway.toml", "railway.json", "go.mod", "setup.py", "setup.cfg",
+    "Pipfile.lock", "poetry.lock", "mix.lock", "Package.swift", "Package.resolved",
+    "Cargo.lock", "nginx.conf", "httpd.conf",
 }
 
 RAW_DISCOVERY_TOOLS = {
@@ -423,6 +437,7 @@ TOOL_EXTENSION_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "audit_admin_backdoor": (".lua", ".luau"),
     "review_validation_script": (".mjs", ".cjs", ".js"),
     "review_luau_module": (".lua", ".luau"),
+    "audit_frontend_performance": (".ts", ".tsx", ".js", ".jsx"),
 }
 
 # Each rule: (file_glob_or_None, content_regex_or_None, agent_key, tool_name, arg_builder)
@@ -458,9 +473,55 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"content": c, "path": p}),
     (".env.example", None, "config_audit", "audit_env_example",
      lambda p, c: {"content": c, "path": p}),
+    ("next.config.js", None, "config_audit", "audit_framework_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("next.config.mjs", None, "config_audit", "audit_framework_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("nuxt.config.ts", None, "config_audit", "audit_framework_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("astro.config.mjs", None, "config_audit", "audit_framework_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("vite.config.ts", None, "config_audit", "audit_framework_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("tsconfig.json", None, "config_audit", "audit_tsconfig",
+     lambda p, c: {"content": c, "path": p}),
+    ("jsconfig.json", None, "config_audit", "audit_tsconfig",
+     lambda p, c: {"content": c, "path": p}),
+    ("build.gradle", None, "config_audit", "audit_gradle_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("gradle.properties", None, "config_audit", "audit_gradle_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("setup.py", None, "config_audit", "audit_python_packaging",
+     lambda p, c: {"content": c, "path": p}),
+    ("setup.cfg", None, "config_audit", "audit_python_packaging",
+     lambda p, c: {"content": c, "path": p}),
+    ("Gemfile", None, "config_audit", "audit_ruby_gemfile",
+     lambda p, c: {"content": c, "path": p}),
+    ("go.mod", None, "config_audit", "audit_go_mod",
+     lambda p, c: {"content": c, "path": p}),
+    (".env.local", None, "config_audit", "audit_env_local",
+     lambda p, c: {"content": c, "path": p}),
+    ("nginx.conf", None, "config_audit", "audit_webserver_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("httpd.conf", None, "config_audit", "audit_webserver_config",
+     lambda p, c: {"content": c, "path": p}),
+    ("*.conf", r"ssl_protocols|proxy_set_header|SetEnv", "config_audit", "audit_webserver_config",
+     lambda p, c: {"content": c, "path": p}),
     ("package.json", None, "security_audit", "scan_dependencies",
      lambda p, c: {"package_json": c}),
     ("requirements*.txt", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("pnpm-lock.yaml", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("Cargo.lock", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("Pipfile.lock", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("poetry.lock", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("mix.lock", None, "security_audit", "scan_dependencies",
+     lambda p, c: {"package_json": c}),
+    ("Package.resolved", None, "security_audit", "scan_dependencies",
      lambda p, c: {"package_json": c}),
     (None, r"\bhelmet\s*\(", "security_audit", "analyze_helmet_config",
      lambda p, c: {"config_json": c, "framework": "express"}),
@@ -536,6 +597,12 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"code": c}),
     (None, r"router\.(post|delete)\(|app\.(post|delete)\(|@(?:router|app)\.(?:post|delete)\(", "api_architect", "audit_status_codes",
      lambda p, c: {"code": c}),
+    (None, r"429|Retry-After|X-RateLimit-", "api_architect", "review_rate_limit_contract",
+     lambda p, c: {"code": c}),
+    (None, r"errors\s*:|extensions\s*:", "api_architect", "review_graphql_error_contract",
+     lambda p, c: {"code": c}),
+    (None, r"webhook|constructEvent|svix|signature", "api_architect", "review_webhook_reliability",
+     lambda p, c: {"code": c}),
     (None, r"pgTable\(|sqliteTable\(|from ['\"]drizzle-orm|ForeignKey\(", "database_architect", "review_index_coverage",
      lambda p, c: {"schema_code": c, "database": "sqlite" if "sqliteTable(" in c else "postgresql"}),
     (None, r"pgTable\(|sqliteTable\(|from ['\"]drizzle-orm|ForeignKey\(", "database_architect", "review_constraints",
@@ -544,6 +611,32 @@ RULES: List[Tuple[Optional[str], Optional[str], str, str, Callable[[str, str], D
      lambda p, c: {"migration_code": c}),
     (None, r"\.map\(|\.forEach\(|for\s*\([^)]*\)\s*\{", "database_architect", "review_n_plus_one",
      lambda p, c: {"code": c}),
+    (None, r"\.sql`|queryRaw|executeRaw|literal_column\(|text\(|\.raw\(", "database_architect", "review_escape_hatches",
+     lambda p, c: {"code": c}),
+    (None, r"oauth|subscription|payment|webhook|upload|Promise\.all|asyncio\.gather", "flow_audit", "audit_flow_logic",
+     lambda p, c: {"code": c}),
+    (None, r"<img|<button|useEffect|requestAnimationFrame|import .* from ['\"]lodash['\"]", "frontend_performance", "audit_frontend_performance",
+     lambda p, c: {"code": c}),
+    ("*.tf", None, "iac_security", "audit_iac_security",
+     lambda p, c: {"content": c, "path": p}),
+    ("*.yaml", r"kind:|apiVersion:|resource|ClusterRoleBinding", "iac_security", "audit_iac_security",
+     lambda p, c: {"content": c, "path": p}),
+    ("*.yml", r"kind:|apiVersion:|resource|ClusterRoleBinding", "iac_security", "audit_iac_security",
+     lambda p, c: {"content": c, "path": p}),
+    ("Dockerfile*", None, "iac_security", "audit_iac_security",
+     lambda p, c: {"content": c, "path": p}),
+    ("docker-compose*.y*ml", None, "iac_security", "audit_iac_security",
+     lambda p, c: {"content": c, "path": p}),
+    ("package.json", None, "supply_chain_audit", "audit_supply_chain",
+     lambda p, c: {"content": c, "path": p}),
+    ("pnpm-lock.yaml", None, "supply_chain_audit", "audit_supply_chain",
+     lambda p, c: {"content": c, "path": p}),
+    ("requirements*.txt", None, "supply_chain_audit", "audit_supply_chain",
+     lambda p, c: {"content": c, "path": p}),
+    ("Cargo.lock", None, "supply_chain_audit", "audit_supply_chain",
+     lambda p, c: {"content": c, "path": p}),
+    ("go.mod", None, "supply_chain_audit", "audit_supply_chain",
+     lambda p, c: {"content": c, "path": p}),
     (None, r"sentry_sdk\.init\(|Sentry\.init\(", "infra_monitor", "review_sentry_setup",
      lambda p, c: {"code": c}),
     (None, r"[\"']\/health(z)?[\"']|[\"']\/ping[\"']|[\"']\/status[\"']", "infra_monitor", "audit_health_check_endpoint",
@@ -709,16 +802,42 @@ def _project_handles_async_route_errors(path: str, root: str) -> bool:
 
 def _project_runtime_command(root: str) -> Optional[List[str]]:
     """Return a safe default project verification command when one is declared."""
+    commands = _project_runtime_commands(root)
+    return commands[0] if commands else None
+
+
+def _project_runtime_commands(root: str) -> List[List[str]]:
+    """Return autodetected runtime verification commands."""
+    commands: List[List[str]] = []
     package_path = os.path.join(root, "package.json")
     try:
         with open(package_path, encoding="utf-8") as fh:
             package = json.load(fh)
     except (OSError, ValueError, TypeError):
-        return None
+        package = None
     scripts = package.get("scripts") if isinstance(package, dict) else None
-    if isinstance(scripts, dict) and isinstance(scripts.get("test"), str):
-        return ["npm", "test"]
-    return None
+    if isinstance(scripts, dict):
+        if isinstance(scripts.get("test"), str):
+            commands.append(["npm", "test"])
+        if isinstance(scripts.get("build"), str):
+            commands.append(["npm", "run", "build"])
+        if isinstance(scripts.get("lint"), str):
+            commands.append(["npm", "run", "lint"])
+        if os.path.isfile(os.path.join(root, "tsconfig.json")) and (
+            "typescript" in str(package.get("devDependencies", {})).lower()
+            or "typescript" in str(package.get("dependencies", {})).lower()
+        ):
+            commands.append(["npx", "tsc", "--noEmit"])
+        if isinstance(scripts.get("audit"), str):
+            commands.append(["npm", "run", "audit"])
+
+    if os.path.isfile(os.path.join(root, "requirements.txt")) and shutil.which("pytest"):
+        commands.append(["pytest", "-q"])
+    if os.path.isfile(os.path.join(root, "pyproject.toml")) and shutil.which("pylint"):
+        commands.append(["pylint", "."])
+    if os.path.isfile(os.path.join(root, "Cargo.lock")) and shutil.which("cargo"):
+        commands.append(["cargo", "audit"])
+    return commands
 
 
 def _run_runtime_verification(
@@ -726,44 +845,61 @@ def _run_runtime_verification(
     command: Optional[List[str]],
     timeout_seconds: int,
 ) -> Dict[str, Any]:
-    if not command:
+    commands = [command] if command else _project_runtime_commands(root)
+    if not commands:
         return {
             "status": "not_configured",
-            "reason": "No project test script or explicit runtime command was found.",
+            "reason": "No project test/build/lint/typecheck runtime command was found.",
         }
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = "\n".join(part for part in (exc.stdout, exc.stderr) if part)
-        return {
-            "status": "failed",
-            "reason": f"Runtime verification timed out after {timeout_seconds}s.",
-            "command": command,
+    checks = []
+    started_all = time.monotonic()
+    for check_command in commands:
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                check_command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = "\n".join(part for part in (exc.stdout, exc.stderr) if part)
+            checks.append({
+                "status": "failed",
+                "reason": f"Runtime verification timed out after {timeout_seconds}s.",
+                "command": check_command,
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "output_tail": output[-4000:],
+            })
+            continue
+        except OSError as exc:
+            checks.append({
+                "status": "failed",
+                "reason": f"Could not start runtime verification: {exc}",
+                "command": check_command,
+                "duration_seconds": round(time.monotonic() - started, 3),
+            })
+            continue
+        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        checks.append({
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "command": check_command,
+            "exit_code": completed.returncode,
             "duration_seconds": round(time.monotonic() - started, 3),
             "output_tail": output[-4000:],
-        }
-    except OSError as exc:
-        return {
-            "status": "failed",
-            "reason": f"Could not start runtime verification: {exc}",
-            "command": command,
-            "duration_seconds": round(time.monotonic() - started, 3),
-        }
-    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        })
+
+    failed = [c for c in checks if c.get("status") != "passed"]
+    output_tail = "\n".join((c.get("output_tail") or "") for c in checks if c.get("output_tail"))[-4000:]
     return {
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "command": command,
-        "exit_code": completed.returncode,
-        "duration_seconds": round(time.monotonic() - started, 3),
-        "output_tail": output[-4000:],
+        "status": "failed" if failed else "passed",
+        "command": commands[0],
+        "commands_run": commands,
+        "checks": checks,
+        "duration_seconds": round(time.monotonic() - started_all, 3),
+        "output_tail": output_tail,
     }
 
 

@@ -142,6 +142,17 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                     "required": ["schema_code"],
                 },
             },
+            {
+                "name": "review_escape_hatches",
+                "description": "Detect ORM/query-builder raw SQL escape hatches that bypass safe parameterization.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Application data-access code"},
+                    },
+                    "required": ["code"],
+                },
+            },
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -150,6 +161,7 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
             "review_migration_safety": self._review_migration_safety,
             "review_n_plus_one": self._review_n_plus_one,
             "review_constraints": self._review_constraints,
+            "review_escape_hatches": self._review_escape_hatches,
         }
 
     def _review_index_coverage(self, schema_code: str, database: str = "postgresql") -> Dict[str, Any]:
@@ -350,4 +362,37 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
                 "fix": "Add .references(...)/ForeignKey(...) if this points to an internal table; otherwise document or rename the external identifier",
             })
 
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _review_escape_hatches(self, code: str) -> Dict[str, Any]:
+        """Detect raw query escape hatches across common ORMs/builders."""
+        findings = []
+        patterns = [
+            (r"\.sql\s*`[^`]*\$\{", "Drizzle sql`` query interpolates runtime values"),
+            (r"prisma\.\$(?:queryRaw|executeRaw)\s*\(\s*`[^`]*\$\{", "Prisma $queryRaw/$executeRaw template interpolation can inject SQL"),
+            (r"\.query\s*\(\s*[\"'`][^\"'`]*\+\s*\w", "TypeORM/raw query built via string concatenation"),
+            (r"\btext\s*\(\s*f[\"'][^\"']*\{", "SQLAlchemy text() built from f-string"),
+            (r"\bliteral_column\s*\(\s*f?[\"'][^\"']*\{", "SQLAlchemy literal_column() receives interpolated expression"),
+            (r"\.(?:findRaw|aggregate)\s*\(\s*\{[\s\S]{0,300}\$(?:where|match)\s*:\s*(?:req|request|ctx)\.", "Mongoose raw query pipeline uses request-controlled object directly"),
+            (r"\.raw\s*\(\s*`[^`]*\$\{", "Knex raw() query uses template interpolation"),
+        ]
+        for pattern, issue in patterns:
+            if re.search(pattern, code, re.IGNORECASE | re.DOTALL):
+                findings.append({
+                    "severity": "HIGH",
+                    "issue": issue,
+                    "fix": "Use bound parameters/placeholders and pass user values separately from SQL text.",
+                })
+        if re.search(r"rename_column|ALTER\s+TABLE\s+\S+\s+RENAME\s+COLUMN", code, re.IGNORECASE) and re.search(r"BEGIN|transaction", code, re.IGNORECASE):
+            findings.append({
+                "severity": "MEDIUM",
+                "issue": "Column rename appears inside a transaction block; mixed app versions can fail during rollout",
+                "fix": "Use expand/contract migrations with backward-compatible reads before renaming/dropping columns.",
+            })
+        if re.search(r"add_column|ADD\s+COLUMN", code, re.IGNORECASE) and re.search(r"NOT\s+NULL", code, re.IGNORECASE) and not re.search(r"default|server_default", code, re.IGNORECASE):
+            findings.append({
+                "severity": "HIGH",
+                "issue": "Adds NOT NULL column without default/backfill",
+                "fix": "Add nullable column first, backfill existing rows, then enforce NOT NULL.",
+            })
         return {"findings": findings, "total_issues": len(findings)}

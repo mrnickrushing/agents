@@ -22,6 +22,7 @@ because it cost $40 of Actions minutes polling a 404 every 15 minutes.
 from __future__ import annotations
 
 import os
+import json
 import re
 from typing import Any, Callable, Dict, List
 
@@ -112,6 +113,14 @@ class ConfigAuditAgent(BaseAgent):
             tool("audit_wrangler", "Audit wrangler.toml for secrets committed as [vars] and stale compatibility dates."),
             tool("audit_railway_config", "Audit railway.toml / railway.json: a healthcheck path that no route in the service serves."),
             tool("audit_env_example", "Audit .env.example: real-looking secret values committed, and env vars the code reads that the example never documents."),
+            tool("audit_framework_config", "Audit framework config files (Next/Nuxt/Astro/Vite) for redirect/auth/build exposure pitfalls."),
+            tool("audit_tsconfig", "Audit tsconfig/jsconfig safety settings that can hide type errors."),
+            tool("audit_gradle_config", "Audit Gradle build/properties config for insecure signing and dependency precision."),
+            tool("audit_python_packaging", "Audit setup.py/setup.cfg for dependency pinning and unsafe setup execution patterns."),
+            tool("audit_ruby_gemfile", "Audit Gemfile dependency sourcing and version precision."),
+            tool("audit_go_mod", "Audit go.mod dependency replacement and version precision."),
+            tool("audit_env_local", "Audit .env.local for committed real-looking secrets."),
+            tool("audit_webserver_config", "Audit Apache/Nginx config for TLS downgrades and inline credential leaks."),
         ]
 
     def _bind_tool_handlers(self) -> Dict[str, Callable]:
@@ -124,6 +133,14 @@ class ConfigAuditAgent(BaseAgent):
             "audit_wrangler": self._audit_wrangler,
             "audit_railway_config": self._audit_railway_config,
             "audit_env_example": self._audit_env_example,
+            "audit_framework_config": self._audit_framework_config,
+            "audit_tsconfig": self._audit_tsconfig,
+            "audit_gradle_config": self._audit_gradle_config,
+            "audit_python_packaging": self._audit_python_packaging,
+            "audit_ruby_gemfile": self._audit_ruby_gemfile,
+            "audit_go_mod": self._audit_go_mod,
+            "audit_env_local": self._audit_env_local,
+            "audit_webserver_config": self._audit_webserver_config,
         }
 
     # --- Dockerfile ------------------------------------------------------------
@@ -480,5 +497,187 @@ class ConfigAuditAgent(BaseAgent):
                 None,
                 f"Document each one (first seen in {used[missing[0]]}). A new deploy set up from the example will be missing them and fail at runtime, not at build.",
                 undocumented=missing,
+            ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    # --- framework and package-manager configs ------------------------------------------
+
+    def _audit_framework_config(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        basename = os.path.basename(path).lower()
+        if basename.startswith("next.config") or basename.startswith("nuxt.config"):
+            for m in re.finditer(r"destination\s*:\s*['\"]([^'\"]+)['\"][\s\S]{0,160}?source\s*:\s*['\"]\1['\"]", content, re.IGNORECASE):
+                findings.append(_finding(
+                    "HIGH",
+                    "Redirect source and destination are the same path — redirect loop risk",
+                    _line_of(content, m.start()),
+                    "Change destination to a distinct route or add a guard condition.",
+                ))
+            if re.search(r"\bmiddleware\b", content, re.IGNORECASE) and not re.search(r"\b(auth|session|jwt|token|clerk|nextauth)\b", content, re.IGNORECASE):
+                findings.append(_finding(
+                    "MEDIUM",
+                    "Middleware is configured with no visible auth/session check",
+                    None,
+                    "Ensure middleware enforces auth for protected routes before calling next().",
+                ))
+        if basename.startswith("astro.config"):
+            if re.search(r"output\s*:\s*['\"]static['\"]", content, re.IGNORECASE) and re.search(r"(adapter|ssr)\s*[:=]", content, re.IGNORECASE):
+                findings.append(_finding(
+                    "MEDIUM",
+                    "Astro config mixes static output with SSR adapter settings",
+                    None,
+                    "Use output: 'server' for SSR adapters, or remove adapter config for pure static builds.",
+                ))
+        if basename.startswith("vite.config"):
+            if re.search(r"outDir\s*:\s*['\"](?:/|\.{2}/)", content):
+                findings.append(_finding(
+                    "HIGH",
+                    "Vite outDir points outside the project tree",
+                    None,
+                    "Set build.outDir to a project-local directory (e.g., dist).",
+                ))
+            if re.search(r"optimizeDeps\s*:\s*\{[\s\S]{0,200}?exclude\s*:\s*\[[^\]]{0,250}['\"](?:crypto|jsonwebtoken|bcrypt)['\"]", content, re.IGNORECASE):
+                findings.append(_finding(
+                    "LOW",
+                    "Security-sensitive dependency is excluded from optimizeDeps",
+                    None,
+                    "Confirm this exclusion is intentional and pinned to a known-safe version.",
+                ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_tsconfig(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return {"findings": findings, "total_issues": 0}
+        compiler = parsed.get("compilerOptions") if isinstance(parsed, dict) else {}
+        if isinstance(compiler, dict):
+            if compiler.get("skipLibCheck") is True:
+                findings.append(_finding(
+                    "MEDIUM",
+                    "skipLibCheck=true can hide type incompatibilities in dependency contracts",
+                    None,
+                    "Set skipLibCheck to false for stricter type-safety in CI.",
+                ))
+            if compiler.get("noImplicitAny") is False:
+                findings.append(_finding(
+                    "HIGH",
+                    "noImplicitAny=false allows implicit any and weakens type guarantees",
+                    None,
+                    "Set noImplicitAny to true (or enable strict mode).",
+                ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_gradle_config(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        if re.search(r"storePassword\s+[\"'][^\"']+[\"']|keyPassword\s+[\"'][^\"']+[\"']", content):
+            findings.append(_finding(
+                "CRITICAL",
+                "Gradle signing password is hardcoded in build configuration",
+                None,
+                "Load signing credentials from environment variables or encrypted Gradle properties.",
+            ))
+        if re.search(r"implementation\s+['\"][^:'\"]+:[^:'\"]+:[+*]['\"]", content):
+            findings.append(_finding(
+                "MEDIUM",
+                "Gradle dependency uses wildcard/dynamic version",
+                None,
+                "Pin to an explicit version to ensure reproducible builds.",
+            ))
+        if os.path.basename(path) == "gradle.properties" and re.search(r"(?m)^\s*(?:KEYSTORE_|SIGNING_).+=.+$", content):
+            findings.append(_finding(
+                "HIGH",
+                "Signing-related value appears in gradle.properties",
+                None,
+                "Move sensitive signing values to local-only properties or CI secrets.",
+            ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_python_packaging(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        if os.path.basename(path) == "setup.py" and re.search(r"\bexec\s*\(", content):
+            findings.append(_finding(
+                "HIGH",
+                "setup.py executes dynamic code via exec()",
+                None,
+                "Avoid exec in packaging metadata; use static metadata or pyproject.toml fields.",
+            ))
+        if re.search(r"install_requires\s*=\s*\[[\s\S]*['\"][A-Za-z0-9_.-]+['\"]", content) and not re.search(r"(==|~=|>=|<=)", content):
+            findings.append(_finding(
+                "LOW",
+                "Python dependency appears without a version constraint in setup metadata",
+                None,
+                "Pin or bound install_requires versions for reproducible dependency resolution.",
+            ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_ruby_gemfile(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        if re.search(r"source\s+['\"]http://", content):
+            findings.append(_finding(
+                "HIGH",
+                "Gem source uses http:// instead of https://",
+                None,
+                "Use HTTPS gem sources only.",
+            ))
+        if re.search(r"gem\s+['\"][^'\"]+['\"]\s*$", content, re.MULTILINE):
+            findings.append(_finding(
+                "LOW",
+                "Gem dependency declared without an explicit version requirement",
+                None,
+                "Add a pessimistic or exact version constraint in Gemfile.",
+            ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_go_mod(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        for m in re.finditer(r"(?m)^\s*replace\s+\S+\s*=>\s*(\.\.?/|/)", content):
+            findings.append(_finding(
+                "MEDIUM",
+                "go.mod replace points to a local path",
+                _line_of(content, m.start()),
+                "Avoid local-path replacements in committed go.mod; use module versions.",
+            ))
+        if re.search(r"(?m)^\s*require\s+\S+\s+latest\s*$", content):
+            findings.append(_finding(
+                "MEDIUM",
+                "go.mod requires dependency at latest",
+                None,
+                "Pin a concrete semantic version for reproducibility.",
+            ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_env_local(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        for i, line in enumerate(content.splitlines(), 1):
+            m = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$", line)
+            if not m:
+                continue
+            key, value = m.group(1), m.group(2).strip().strip("'\"")
+            if _SECRET_NAME.search(key) and _REAL_LOOKING_VALUE.match(value) and not _PLACEHOLDER.search(value):
+                findings.append(_finding(
+                    "CRITICAL",
+                    f"`.env.local` contains a real-looking secret value for {key}",
+                    i,
+                    "Do not commit .env.local; move this value to local untracked env files and rotate if exposed.",
+                ))
+        return {"findings": findings, "total_issues": len(findings)}
+
+    def _audit_webserver_config(self, content: str, path: str = "") -> Dict[str, Any]:
+        findings: List[Finding] = []
+        if re.search(r"\bssl_protocols\b[^;\n]*(TLSv1(?:\.0)?|TLSv1\.1)", content, re.IGNORECASE):
+            findings.append(_finding(
+                "HIGH",
+                "Webserver config allows deprecated TLS versions (TLSv1.0/1.1)",
+                None,
+                "Restrict TLS to modern versions (TLSv1.2/TLSv1.3).",
+            ))
+        if re.search(r"(?im)^\s*(?:setenv|set\s+\$?\w*(?:secret|token|password)|proxy_set_header\s+authorization)\b[^\n]*\S", content):
+            findings.append(_finding(
+                "HIGH",
+                "Potential secret-like value appears inline in Apache/Nginx configuration",
+                None,
+                "Move secrets to environment/secret stores and inject at runtime, not in committed config.",
             ))
         return {"findings": findings, "total_issues": len(findings)}
