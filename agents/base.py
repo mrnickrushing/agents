@@ -32,6 +32,23 @@ _RETRYABLE_ERROR_NAMES = {
 }
 
 
+def _anthropic_accepts_temperature() -> bool:
+    """Whether the installed anthropic SDK's Messages.create() takes
+    `temperature`. Introspected once at import: 1.0 removed it, older
+    versions require it, and this package supports both."""
+    try:
+        import inspect
+
+        from anthropic.resources.messages import Messages
+
+        return "temperature" in inspect.signature(Messages.create).parameters
+    except Exception:  # noqa: BLE001 - absent SDK is handled at call time
+        return True
+
+
+_ANTHROPIC_ACCEPTS_TEMPERATURE = _anthropic_accepts_temperature()
+
+
 class BaseAgent:
     """
     Multi-provider agent base class (OpenAI + Anthropic).
@@ -385,9 +402,15 @@ class BaseAgent:
                 "model": self.model,
                 "system": system_prompt,
                 "messages": messages + turn_messages,
-                "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
+            # anthropic SDK 1.0 dropped `temperature` from Messages.create();
+            # passing it raises TypeError, which every caller here saw as a
+            # generic "LLM triage failed". Send it only where it is accepted
+            # rather than pinning an old SDK — the parameter is a nicety,
+            # the call is not.
+            if _ANTHROPIC_ACCEPTS_TEMPERATURE:
+                payload["temperature"] = self.temperature
             allow_tools = bool(tools) and round_num < self.max_tool_rounds
             if allow_tools:
                 payload["tools"] = tools
