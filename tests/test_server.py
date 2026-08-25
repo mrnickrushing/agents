@@ -414,6 +414,7 @@ def test_scan_job_clones_scans_and_records(run_app, tmp_path, monkeypatch):
         _time.sleep(0.1)
     assert job["status"] == "done", job
     assert job["result"]["findings"] >= 1
+    assert job["result"]["files_scanned"] >= 1
     assert job["result"]["head_sha"] == "deadbeefcafe"
 
     findings = client.get("/api/findings").get_json()["findings"]
