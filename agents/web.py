@@ -62,6 +62,7 @@ _HTML = """\
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { background: var(--ink); -webkit-text-size-adjust: 100%; }
+html, body { overflow-x: hidden; max-width: 100%; }
 button, summary, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 body {
   min-height: 100vh; color: var(--text);
@@ -80,7 +81,7 @@ header {
   background: color-mix(in srgb, var(--ink) 80%, transparent); border-bottom: 1px solid var(--line);
   padding-top: env(safe-area-inset-top);
 }
-.bar { max-width: 1080px; margin: 0 auto; padding: 12px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left)); display: flex; align-items: center; gap: 12px; min-height: 56px; }
+.bar { max-width: 1080px; margin: 0 auto; padding: 12px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left)); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 56px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
 .brand .mark { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--violet)); display: grid; place-items: center; color: #0b0f17; font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 13px; }
 .brand small { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 4px; }
@@ -147,9 +148,18 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .switch input { width: 20px; height: 20px; accent-color: var(--accent); }
 .switch small { color: var(--muted); font-weight: 500; }
 [hidden] { display: none !important; }
-.account { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
-.account img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); }
-.account .login { font-weight: 600; }
+.account { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.account img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); flex: 0 0 auto; }
+.account .login { font-weight: 600; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .btn { white-space: nowrap; }
+@media (max-width: 720px) {
+  /* Second header row for the account so nothing pushes past the edge. */
+  .account { order: 10; flex-basis: 100%; justify-content: flex-end; }
+  .account:empty { display: none; }
+  .live { margin-left: auto; }
+  .bar .spacer { display: none; }
+  .brand small { display: none; }
+}
 .signin { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .field .signin { min-height: 40px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; }
@@ -424,6 +434,33 @@ function whereHtml(f) {
   return parts.join('');
 }
 
+function rescanTarget(f) {
+  if (f.repository && f.repository.repo) return { repo: f.repository.repo, ref: f.repository.ref };
+  if (f.pull_request && f.pull_request.repo) return { repo: f.pull_request.repo, ref: '' };
+  if (f.project && f.project.startsWith('/github/')) return { repo: f.project.slice(8), ref: '' };
+  return null;
+}
+async function rescan(repo, ref, button) {
+  button.disabled = true; button.textContent = 'Queued…';
+  try {
+    const r = await fetch('/api/scan', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ repo, ref, agents: [] }) });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || r.statusText); button.disabled = false; button.textContent = 'Re-scan repo'; return; }
+    log(`re-scan queued for ${repo}${ref ? '@' + ref : ''} — the board refreshes when it finishes`);
+    const poll = async () => {
+      const j = (await (await fetch('/api/jobs/' + d.job.id)).json()).job;
+      if (j.status === 'done') { state.lastPayload = ''; loadSummary(); loadFindings(); }
+      else if (j.status === 'failed') { log(`re-scan failed: ${j.error}`, 'err'); button.disabled = false; button.textContent = 'Re-scan repo'; }
+      else setTimeout(poll, 2000);
+    };
+    poll();
+  } catch (err) { alert(String(err)); button.disabled = false; button.textContent = 'Re-scan repo'; }
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-rescan]'); if (!b) return;
+  rescan(b.dataset.rescan, b.dataset.ref, b);
+});
+
 function card(f) {
   const id = esc(f.finding_id || '');
   const dismiss = `agents feedback ${f.finding_id} dismiss --reason "…"`;
@@ -450,6 +487,7 @@ function card(f) {
         ${id && f.verdict !== 'FALSE_POSITIVE' ? `<button class="btn copy" type="button" data-verdict="dismiss" data-id="${id}" title="Mark this a false positive; it leaves the board and future scans remember">Dismiss…</button>` : ''}
         ${id && f.verdict !== 'CONFIRMED' ? `<button class="btn" type="button" data-verdict="confirm" data-id="${id}" title="Mark this real">Confirm…</button>` : ''}
         ${id ? `<button class="btn" type="button" data-copy="${esc(dismiss)}" title="Copy the CLI command instead">Copy command</button>` : ''}
+        ${rescanTarget(f) ? `<button class="btn" type="button" data-rescan="${esc(rescanTarget(f).repo)}" data-ref="${esc(rescanTarget(f).ref || '')}" title="Scan this repository again; the board shows the latest scan, so fixed findings drop off">Re-scan repo</button>` : ''}
       </div>
     </div>
   </details>`;
