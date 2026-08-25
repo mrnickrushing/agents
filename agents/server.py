@@ -113,15 +113,113 @@ def scan_pull_request_diff(diff: str) -> List[Dict[str, Any]]:
     ]
     findings: List[Dict[str, Any]] = []
     for section in sections:
+        source_lines = section["text"].split("\n")
         for finding in handler(section["text"]).get("findings", []):
             finding = dict(finding)
             finding["file"] = section["path"]
             local = finding.get("line")
-            if section["lines"] is not None and isinstance(local, int):
-                if 1 <= local <= len(section["lines"]):
+            if isinstance(local, int) and 1 <= local <= len(source_lines):
+                finding["snippet"] = mask_secrets(source_lines[local - 1].strip())
+                if section["lines"] is not None:
                     finding["line"] = section["lines"][local - 1]
+            finding.setdefault("why", explain_finding(WEBHOOK_TOOL, finding))
             findings.append(finding)
-    return findings
+    return _dedupe_entropy(findings)
+
+
+def _dedupe_entropy(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The entropy heuristic fires on the same line as a typed secret match;
+    keep only the typed (CRITICAL) finding for that file:line."""
+    typed = {
+        (f.get("file"), f.get("line"))
+        for f in findings
+        if not str(f.get("issue", "")).startswith("High-entropy")
+    }
+    return [
+        f
+        for f in findings
+        if not (
+            str(f.get("issue", "")).startswith("High-entropy")
+            and (f.get("file"), f.get("line")) in typed
+        )
+    ]
+
+
+_LONG_TOKEN = re.compile(r"[A-Za-z0-9_\-/+=]{16,}")
+
+
+def mask_secrets(text: str) -> str:
+    """Keep the shape of a line but never echo a credential back out.
+
+    Any run of 16+ token characters (keys, JWT segments, passwords) is
+    reduced to its first four and last two characters.
+    """
+
+    def _mask(match: "re.Match[str]") -> str:
+        value = match.group(0)
+        return f"{value[:4]}…{value[-2:]}"
+
+    return _LONG_TOKEN.sub(_mask, text)[:240]
+
+
+# Plain-language rationale per detector, so a finding says *why* it is a
+# problem and not only what pattern matched. Keyed by tool name; a more
+# specific entry keyed by "tool:issue-prefix" wins when present.
+RATIONALE: Dict[str, str] = {
+    "audit_hardcoded_secrets": (
+        "A credential in source is readable by anyone with repository access, "
+        "every CI runner, and every fork — and it stays in git history after "
+        "the line is removed. Treat it as leaked: rotate it, then load it from "
+        "an environment variable or secret manager."
+    ),
+    "audit_hardcoded_secrets:High-entropy": (
+        "This string has the randomness profile of a generated key or token. "
+        "If it is one, it is now in git history; if it is not (a hash, an "
+        "asset id), dismiss the finding so it stops being reported."
+    ),
+    "audit_hardcoded_secrets:******": (
+        "A token that appears in a log line or comment ends up in log storage "
+        "and error trackers, which usually have wider access than the code."
+    ),
+    "check_jwt_implementation": (
+        "A JWT that is decoded without verification, signed with a weak or "
+        "shared secret, or never expires lets anyone mint or replay sessions."
+    ),
+    "audit_cors_config": (
+        "A permissive CORS policy lets any website make credentialed requests "
+        "to this API from a victim's browser."
+    ),
+    "analyze_helmet_config": (
+        "Missing security headers leave the browser to defaults that allow "
+        "clickjacking, MIME sniffing, and inline script injection."
+    ),
+    "audit_sql_injection": (
+        "Request input interpolated into a query lets an attacker change the "
+        "query's meaning — reading, altering, or deleting data."
+    ),
+    "audit_xss_patterns": (
+        "Untrusted HTML rendered without escaping runs attacker JavaScript in "
+        "every visitor's session."
+    ),
+    "review_webhook_handler": (
+        "A webhook that skips signature verification or idempotency accepts "
+        "forged or replayed events — money and entitlements follow."
+    ),
+    "audit_railway_config": (
+        "Railway probes the healthcheck path before routing traffic; a path no "
+        "route serves fails every deploy."
+    ),
+}
+
+
+def explain_finding(tool: str, finding: Dict[str, Any]) -> str:
+    issue = str(finding.get("issue") or "")
+    for key, text in RATIONALE.items():
+        if ":" in key:
+            k_tool, prefix = key.split(":", 1)
+            if k_tool == tool and issue.startswith(prefix):
+                return text
+    return RATIONALE.get(tool, "")
 
 
 def record_webhook_result(

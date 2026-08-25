@@ -122,6 +122,10 @@ def test_webhook_scan_lands_in_dashboard(app):
     # No diff could be fetched (no diff_url), so the PR body was scanned.
     assert findings[0]["file_path"] == PR_BODY_FILE
     assert findings[0]["line"] == 1
+    # The offending line is shown, but never the credential itself.
+    assert findings[0]["snippet"].startswith("api_key")
+    assert LEAKED_KEY not in findings[0]["snippet"]
+    assert "git history" in findings[0]["why"]
     assert findings[0]["detector"] == "security_audit.audit_hardcoded_secrets"
     assert findings[0]["project"] == "/github/mrnickrushing/example"
     assert findings[0]["project_label"] == "mrnickrushing/example"
@@ -224,6 +228,15 @@ def test_scan_pull_request_diff_attributes_file_and_line():
     assert {f["line"] for f in findings} == {12}
 
 
+def test_mask_secrets_keeps_shape_but_hides_value():
+    from agents.server import mask_secrets
+
+    masked = mask_secrets(f'api_key: "{LEAKED_KEY}",')
+    assert LEAKED_KEY not in masked
+    assert masked.startswith('api_key: "q7Xv…aE"')
+    assert mask_secrets("retries: 3") == "retries: 3"
+
+
 def test_scan_pull_request_diff_falls_back_to_body_pseudo_file():
     findings = scan_pull_request_diff(f'api_key = "{LEAKED_KEY}"')
     assert findings and findings[0]["file"] == PR_BODY_FILE
@@ -247,3 +260,24 @@ def test_record_webhook_result_groups_findings_by_file(tmp_path):
     assert {r["file_path"] for r in rows} == {"src/config.ts"}
     assert rows[0]["line"] == 12
     assert rows[0]["pull_request"]["url"] == "https://github.com/o/r/pull/3"
+    assert rows[0]["snippet"] and LEAKED_KEY not in rows[0]["snippet"]
+    assert rows[0]["why"]
+
+
+def test_dashboard_page_renders_the_review_layout(app):
+    html = app.test_client().get("/").get_data(as_text=True)
+    for marker in (
+        "Needs attention",
+        "Why this matters",
+        "How to fix",
+        "/api/findings",
+    ):
+        assert marker in html
+    summary = app.test_client().get("/api/summary").get_json()
+    assert set(summary) >= {
+        "total_scans",
+        "total_findings",
+        "by_severity",
+        "last_scan_at",
+        "projects",
+    }
