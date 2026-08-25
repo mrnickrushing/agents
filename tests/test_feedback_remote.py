@@ -77,6 +77,32 @@ def test_dismissing_hides_the_finding_and_fixes_the_counts(app):
     assert dismissed["verdict_source"] == "human"
 
 
+def test_board_shows_each_projects_latest_scan_only(tmp_path):
+    """A finding fixed in the code disappears from the board once the
+    project is re-scanned; the earlier scan stays in the store."""
+    db = str(tmp_path / "evolution.db")
+    _seed(db)  # scan 1: two findings on nick/app
+    record_webhook_result(  # scan 2 of the same project: clean
+        db, {"action": "scanned", "repo": "nick/app", "pr_number": 2, "findings": []}
+    )
+    record_webhook_result(  # another project still has one
+        db,
+        {
+            "action": "scanned",
+            "repo": "nick/site",
+            "pr_number": 1,
+            "findings": [{"severity": "LOW", "issue": "x", "fix": "y", "file": "a"}],
+        },
+    )
+    app = create_app(db_path=db, webhook_secret="", dashboard_token=TOKEN)
+    client = app.test_client()
+    rows = client.get("/api/findings", headers=AUTH).get_json()["findings"]
+    assert [r["project_label"] for r in rows] == ["nick/site"]
+    summary = client.get("/api/summary", headers=AUTH).get_json()
+    assert summary["by_severity"] == {"LOW": 1}
+    assert summary["total_scans"] == 3 and summary["total_findings"] == 3
+
+
 def test_feedback_validation(app):
     client = app.test_client()
     assert client.post("/api/feedback", json={}, headers=AUTH).status_code == 400

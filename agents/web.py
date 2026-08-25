@@ -932,7 +932,12 @@ _LATEST_VERDICT_CTE = (
     "WITH latest_verdict AS ("
     "SELECT fb.*, ROW_NUMBER() OVER (PARTITION BY finding_id "
     "ORDER BY CASE source WHEN 'human' THEN 0 ELSE 1 END, created_at DESC, "
-    "feedback_id DESC) AS rank FROM feedback fb) "
+    "feedback_id DESC) AS rank FROM feedback fb), "
+    # The board shows each project's *current* state: findings from its most
+    # recent scan. Earlier scans stay in the store for history/feedback.
+    "latest_scan AS ("
+    "SELECT scan_id FROM (SELECT scan_id, ROW_NUMBER() OVER (PARTITION BY "
+    "project_key ORDER BY created_at DESC) AS rank FROM scan_runs) WHERE rank = 1) "
 )
 
 
@@ -974,7 +979,8 @@ class AgentsDashboard:
             cur.execute(
                 _LATEST_VERDICT_CTE + "SELECT f.severity, COUNT(*) FROM findings f "
                 "LEFT JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1 "
-                "WHERE v.verdict IS NULL OR v.verdict != 'FALSE_POSITIVE' "
+                "WHERE f.scan_id IN (SELECT scan_id FROM latest_scan) "
+                "AND (v.verdict IS NULL OR v.verdict != 'FALSE_POSITIVE') "
                 "GROUP BY f.severity"
             )
             by_severity: Dict[str, int] = {}
@@ -983,7 +989,8 @@ class AgentsDashboard:
             cur.execute(
                 _LATEST_VERDICT_CTE + "SELECT COUNT(*) FROM findings f "
                 "JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1 "
-                "WHERE v.verdict = 'FALSE_POSITIVE'"
+                "WHERE f.scan_id IN (SELECT scan_id FROM latest_scan) "
+                "AND v.verdict = 'FALSE_POSITIVE'"
             )
             dismissed = cur.fetchone()[0]
             cur.execute("SELECT MAX(created_at) FROM scan_runs")
@@ -1027,10 +1034,10 @@ class AgentsDashboard:
             return {"findings": []}
         try:
             cur = conn.cursor()
-            where = ""
+            where = "WHERE r.scan_id IN (SELECT scan_id FROM latest_scan) "
             params: List[Any] = []
             if project:
-                where = "WHERE r.project_path IN (?, ?) "
+                where += "AND r.project_path IN (?, ?) "
                 params = [f"/github/{project.strip('/')}", project]
             cur.execute(
                 _LATEST_VERDICT_CTE

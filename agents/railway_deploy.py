@@ -301,14 +301,42 @@ When helping with deployment issues:
                         "fix": "Pin a major/minor image tag, or ideally an immutable digest",
                     }
                 )
-            if re.search(
-                r"(?im)^\s*RUN\s+npm\s+install(?:\s|$)", config_text
-            ) and not re.search(r"(?im)^\s*RUN\s+npm\s+ci(?:\s|$)", config_text):
+            # Dependency installs that ignore the lockfile. A global tool
+            # install (`npm install -g pnpm`) is not a dependency install.
+            loose_install = re.search(
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?npm\s+install(?!\s+(?:-g|--global)\b)(?:\s|$)",
+                config_text,
+            ) and not re.search(
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?npm\s+ci(?:\s|$)", config_text
+            )
+            loose_pnpm = re.search(
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?pnpm\s+(?:install|i)\b(?![^\n]*--frozen-lockfile)",
+                config_text,
+            )
+            loose_yarn = re.search(
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?yarn(?:\s+install)?\b(?![^\n]*(?:--frozen-lockfile|--immutable))(?:\s|$)",
+                config_text,
+            )
+            if loose_install or loose_pnpm or loose_yarn:
+                tool = (
+                    "npm install"
+                    if loose_install
+                    else ("pnpm install" if loose_pnpm else "yarn install")
+                )
+                strict = (
+                    "npm ci"
+                    if loose_install
+                    else (
+                        "pnpm install --frozen-lockfile"
+                        if loose_pnpm
+                        else "yarn install --immutable"
+                    )
+                )
                 findings.append(
                     {
                         "severity": "MEDIUM",
-                        "issue": "Docker build uses npm install instead of the lockfile-strict npm ci",
-                        "fix": "Copy package.json plus the lockfile first, then run npm ci for reproducible installs",
+                        "issue": f"Docker build uses {tool} instead of the lockfile-strict {strict}",
+                        "fix": f"Copy package.json plus the lockfile first, then run {strict} for reproducible installs",
                     }
                 )
             if not re.search(r"(?im)^\s*USER\s+\S+", config_text) and re.search(
