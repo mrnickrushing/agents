@@ -355,7 +355,9 @@ function when(iso) {
 
 async function loadSummary() {
   try {
-    const d = await (await fetch('/api/summary')).json();
+    const r = await fetch('/api/summary');
+    if (r.status === 401) { location.href = '/login'; return; }
+    const d = await r.json();
     const s = d.by_severity || {};
     const hot = (s.CRITICAL || 0) + (s.HIGH || 0);
     const attn = $('#attention'); const big = $('#attn-count');
@@ -478,8 +480,8 @@ async function loadMe() {
     runner.signedIn = !!me.signed_in;
     const account = $('#account');
     if (me.signed_in) {
-      account.innerHTML = `<img src="${esc(me.avatar_url)}" alt=""><span class="login">${esc(me.login)}</span><button class="btn" type="button" id="signout">Sign out</button>`;
-      $('#signout').addEventListener('click', async () => { await fetch('/auth/logout', { method: 'POST', headers: authHeaders() }); location.reload(); });
+      account.innerHTML = `${me.avatar_url ? `<img src="${esc(me.avatar_url)}" alt="">` : ''}<span class="login">${esc(me.login)}</span><button class="btn" type="button" id="signout">Sign out</button>`;
+      $('#signout').addEventListener('click', async () => { await fetch('/auth/logout', { method: 'POST', headers: authHeaders() }); location.href = '/login'; });
     } else if (me.sign_in_enabled) {
       account.innerHTML = `<a class="btn primary signin" href="/auth/login">Sign in with GitHub</a>`;
     } else {
@@ -659,6 +661,174 @@ setInterval(() => { loadSummary(); loadFindings(); }, 30000);
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# Sign-in page
+# ---------------------------------------------------------------------------
+_LOGIN_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0b0f17" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)" />
+<meta name="robots" content="noindex" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" href="/apple-touch-icon.png" type="image/png" />
+<title>Sign in — agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #0b0f17; --panel: #121826; --line: #212b45; --text: #e8edf7; --muted: #8b96b0;
+  --accent: #22d3ee; --accent-ink: #062b33; --violet: #a78bfa; --critical: #fb7185; --low: #4ade80;
+}
+@media (prefers-color-scheme: light) {
+  :root { --ink: #f4f6fb; --panel: #ffffff; --line: #dfe5f0; --text: #0f172a; --muted: #5b6478;
+    --accent: #0891b2; --accent-ink: #ffffff; --violet: #6d28d9; --critical: #e11d48; --low: #15803d; }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--ink); -webkit-text-size-adjust: 100%; }
+body {
+  min-height: 100vh; min-height: 100dvh; color: var(--text); display: grid; place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.5;
+  background:
+    radial-gradient(900px 520px at 15% -10%, rgba(34,211,238,.16), transparent 60%),
+    radial-gradient(700px 420px at 100% 10%, rgba(167,139,250,.14), transparent 60%),
+    var(--ink);
+}
+.display { font-family: "Space Grotesk", Inter, sans-serif; letter-spacing: -.02em; }
+.mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+.card {
+  width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 22px;
+  padding: 30px 28px 24px; box-shadow: 0 30px 80px rgba(0,0,0,.35); position: relative; overflow: hidden;
+}
+.card::before {
+  content: ""; position: absolute; inset: -1px; border-radius: 22px; padding: 1px; pointer-events: none;
+  background: linear-gradient(135deg, rgba(34,211,238,.6), transparent 40%, transparent 60%, rgba(167,139,250,.6));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+}
+.mark {
+  width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; margin-bottom: 18px;
+  background: linear-gradient(135deg, var(--accent), var(--violet)); color: #0b0f17; font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 26px;
+  box-shadow: 0 0 0 0 rgba(34,211,238,.35); animation: breathe 4s ease-in-out infinite;
+}
+@keyframes breathe { 0%,100% { box-shadow: 0 0 0 0 rgba(34,211,238,.35); } 50% { box-shadow: 0 0 0 14px rgba(34,211,238,0); } }
+h1 { font-size: 30px; font-weight: 700; line-height: 1.1; }
+h1 small { display: block; font-size: 13px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.lede { color: var(--muted); margin: 10px 0 24px; font-size: 15px; }
+.btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 48px;
+  border-radius: 12px; border: 1px solid transparent; background: var(--accent); color: var(--accent-ink);
+  font: inherit; font-weight: 600; font-size: 15px; text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.btn:hover { filter: brightness(1.06); } .btn:active { transform: scale(.985); }
+.btn:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.btn.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+.btn svg { width: 20px; height: 20px; fill: currentColor; }
+.note { margin-top: 14px; font-size: 13px; color: var(--muted); text-align: center; }
+.alert { margin: 0 0 18px; padding: 10px 12px; border-radius: 10px; font-size: 14px; border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent); background: color-mix(in srgb, var(--critical) 12%, transparent); color: var(--text); }
+details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+summary { cursor: pointer; list-style: none; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+summary::-webkit-details-marker { display: none; }
+summary .caret { transition: transform .2s; } details[open] .caret { transform: rotate(180deg); }
+form.token { display: grid; gap: 10px; margin-top: 12px; }
+input[type=password] {
+  width: 100%; min-height: 46px; background: var(--ink); border: 1px solid var(--line); color: var(--text); border-radius: 12px;
+  padding: 10px 14px; font: inherit; font-size: 16px; -webkit-appearance: none; appearance: none;
+}
+input::placeholder { color: var(--muted); }
+footer { margin-top: 22px; display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+footer a { color: inherit; text-decoration: none; }
+.status { display: inline-flex; align-items: center; gap: 6px; }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--low); }
+@media (prefers-reduced-motion: reduce) { .mark { animation: none; } }
+</style>
+</head>
+<body>
+<main class="card" role="main">
+  <div class="mark" aria-hidden="true">&gt;_</div>
+  <h1 class="display"><small>Rushing Technologies</small>agents</h1>
+  <p class="lede">Security findings for every repository — the line, the reason, and the fix. Sign in to see them and to run scans.</p>
+  %%ERROR%%
+  %%GITHUB_BUTTON%%
+  <p class="note">%%ALLOW_NOTE%%</p>
+  %%TOKEN_FORM%%
+  <footer>
+    <span class="status"><span class="dot"></span>service online</span>
+    <span class="mono">v%%VERSION%%</span>
+  </footer>
+</main>
+</body>
+</html>
+"""
+
+_GITHUB_MARK = (
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 '
+    "5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-"
+    ".82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87"
+    ".51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 "
+    "2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 "
+    "2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 "
+    '2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
+)
+
+
+def render_login(
+    *,
+    version: str,
+    sign_in_enabled: bool,
+    token_enabled: bool,
+    error: str = "",
+) -> str:
+    """The sign-in page. No template engine: a handful of placeholders."""
+    from html import escape
+
+    if sign_in_enabled:
+        button = (
+            '<a class="btn" href="/auth/login">'
+            + _GITHUB_MARK
+            + "Sign in with GitHub</a>"
+        )
+        allow_note = "Only approved GitHub accounts can sign in."
+    elif token_enabled:
+        button = ""
+        allow_note = "Sign in with the access token set on the service."
+    else:
+        button = ""
+        allow_note = (
+            "Sign-in is not configured yet — set GITHUB_OAUTH_CLIENT_ID and "
+            "GITHUB_OAUTH_CLIENT_SECRET (or DASHBOARD_TOKEN) on the service."
+        )
+    token_form = ""
+    if token_enabled:
+        form = (
+            '<form class="token" method="post" action="/auth/token">'
+            '<input type="password" name="token" placeholder="Access token" '
+            'autocomplete="current-password" required>'
+            '<button class="btn ghost" type="submit">Continue with token</button></form>'
+        )
+        token_form = (
+            (
+                '<details><summary><span class="caret">▾</span>Use an access token '
+                "instead</summary>" + form + "</details>"
+            )
+            if sign_in_enabled
+            else form
+        )
+    alert = f'<div class="alert" role="alert">{escape(error)}</div>' if error else ""
+    return (
+        _LOGIN_HTML.replace("%%ERROR%%", alert)
+        .replace("%%GITHUB_BUTTON%%", button)
+        .replace("%%ALLOW_NOTE%%", allow_note)
+        .replace("%%TOKEN_FORM%%", token_form)
+        .replace("%%VERSION%%", escape(version))
+    )
 
 
 # ---------------------------------------------------------------------------

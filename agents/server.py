@@ -46,7 +46,7 @@ from typing import Any, Dict, List, Optional
 from agents import __version__, webauth
 from agents.evolution import EvolutionStore
 from agents.github_integration import GitHubIntegration, register_webhook_routes
-from agents.web import AgentsDashboard, _default_db_path
+from agents.web import AgentsDashboard, _default_db_path, render_login
 from agents.webauth import SESSION_COOKIE, OAuthConfig, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -569,11 +569,18 @@ def create_app(
     dashboard_token: Optional[str] = None,
     oauth: Optional[OAuthConfig] = None,
     session_db_path: Optional[str] = None,
+    public: Optional[bool] = None,
 ):
     """Build the WSGI app. `webhook_secret=None` reads GITHUB_WEBHOOK_SECRET
     and `dashboard_token=None` reads DASHBOARD_TOKEN; an empty string
     disables that feature explicitly. `oauth=None` reads the GitHub OAuth
-    App settings from the environment."""
+    App settings from the environment.
+
+    Once any sign-in method is configured the whole dashboard requires it;
+    `public=True` (or DASHBOARD_PUBLIC=1) keeps the findings readable by
+    anyone while still gating the run/scan endpoints."""
+    from urllib.parse import quote
+
     try:
         from flask import g, jsonify, redirect, request, session
         from werkzeug.middleware.proxy_fix import ProxyFix
@@ -670,6 +677,39 @@ def create_app(
     app.config["SCAN_JOBS"] = jobs
     runs_enabled = bool(token) or oauth_config.enabled
     repo_cache: Dict[str, Any] = {}
+    if public is None:
+        public = os.environ.get("DASHBOARD_PUBLIC", "").lower() in ("1", "true", "yes")
+    require_sign_in = runs_enabled and not public
+    app.config["REQUIRE_SIGN_IN"] = require_sign_in
+
+    # Reachable without signing in: probes, the GitHub webhook, the sign-in
+    # flow itself, and the home-screen assets the sign-in page references.
+    public_paths = {
+        "/health",
+        "/ready",
+        "/webhook",
+        "/login",
+        "/auth/login",
+        "/auth/callback",
+        "/auth/token",
+        "/auth/logout",
+        "/api/me",
+        "/manifest.webmanifest",
+        "/apple-touch-icon.png",
+    }
+
+    @app.before_request
+    def gate():
+        if not require_sign_in or request.path in public_paths:
+            return None
+        if principal() is not None:
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "sign in first"}), 401
+        return redirect("/login")
+
+    def login_redirect(message: str):
+        return redirect("/login?error=" + quote(message))
 
     # ── who is asking? ──────────────────────────────────────────────
     def principal() -> Optional[Dict[str, Any]]:
@@ -731,7 +771,52 @@ def create_app(
     def callback_url() -> str:
         return request.host_url.rstrip("/") + "/auth/callback"
 
-    # ── sign in with GitHub ─────────────────────────────────────────
+    # ── sign in ─────────────────────────────────────────────────────
+    def start_session(user: Dict[str, Any], tokens: Any):
+        session_id = sessions.create(user, tokens)
+        response = redirect("/")
+        response.set_cookie(
+            SESSION_COOKIE,
+            session_id,
+            max_age=webauth.SESSION_TTL,
+            httponly=True,
+            secure=request.scheme == "https",
+            samesite="Lax",
+            path="/",
+        )
+        return response
+
+    @app.get("/login")
+    def login_page():
+        if sessions.get(request.cookies.get(SESSION_COOKIE)):
+            return redirect("/")
+        from flask import Response
+
+        return Response(
+            render_login(
+                version=__version__,
+                sign_in_enabled=oauth_config.enabled,
+                token_enabled=bool(token),
+                error=request.args.get("error", "")[:300],
+            ),
+            mimetype="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/auth/token")
+    def auth_token():
+        """Access-token sign-in from the page's form: a session for the
+        browser instead of an Authorization header on every request."""
+        if not token:
+            return login_redirect("Access-token sign-in is not enabled")
+        supplied = (request.form.get("token") or "").strip()
+        if not supplied or not hmac.compare_digest(supplied, token):
+            return login_redirect("That access token is not right")
+        return start_session(
+            {"login": "token", "name": "Access token", "avatar_url": ""},
+            os.environ.get("GITHUB_TOKEN") or "",
+        )
+
     @app.get("/auth/login")
     def auth_login():
         if not oauth_config.enabled:
@@ -746,12 +831,14 @@ def create_app(
     @app.get("/auth/callback")
     def auth_callback():
         if not oauth_config.enabled:
-            return jsonify({"error": "sign-in is not configured"}), 503
+            return login_redirect("Sign-in is not configured on this service")
         expected = session.pop("oauth_state", None)
         state = request.args.get("state", "")
         code = request.args.get("code", "")
         if not expected or not code or not hmac.compare_digest(expected, state):
-            return jsonify({"error": "sign-in state mismatch; try again"}), 400
+            return login_redirect(
+                "The sign-in link expired or was tampered with — try again"
+            )
         try:
             tokens = webauth.normalize_tokens(
                 webauth.exchange_code(oauth_config, code, callback_url())
@@ -759,29 +846,12 @@ def create_app(
             user = webauth.fetch_user(tokens["access_token"])
         except (OSError, ValueError, PermissionError) as exc:
             logger.warning("GitHub sign-in failed: %s", exc)
-            return jsonify({"error": "GitHub sign-in failed; try again"}), 502
+            return login_redirect("GitHub did not complete the sign-in — try again")
         if not oauth_config.allows(user.get("login", "")):
-            return (
-                jsonify(
-                    {
-                        "error": f"@{user.get('login')} is not on this dashboard's "
-                        "allow list (DASHBOARD_ALLOWED_LOGINS)"
-                    }
-                ),
-                403,
+            return login_redirect(
+                f"@{user.get('login')} is not on this dashboard's allow list"
             )
-        session_id = sessions.create(user, tokens)
-        response = redirect("/")
-        response.set_cookie(
-            SESSION_COOKIE,
-            session_id,
-            max_age=webauth.SESSION_TTL,
-            httponly=True,
-            secure=request.scheme == "https",
-            samesite="Lax",
-            path="/",
-        )
-        return response
+        return start_session(user, tokens)
 
     @app.post("/auth/logout")
     def auth_logout():
@@ -801,6 +871,7 @@ def create_app(
                 "avatar_url": who["avatar_url"] if who else None,
                 "sign_in_enabled": oauth_config.enabled,
                 "token_enabled": bool(token),
+                "sign_in_required": require_sign_in,
             }
         )
 
