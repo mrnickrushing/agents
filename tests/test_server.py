@@ -403,6 +403,25 @@ def test_run_one_check_from_the_web(run_app):
     assert unknown.status_code == 400
 
 
+def test_clone_errors_say_what_to_do():
+    from agents.server import friendly_clone_error
+
+    prompt = "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+    assert "private" in friendly_clone_error(prompt, "u", "u", None)
+    assert "cannot read it" in friendly_clone_error(prompt, "u", "u", "tok")
+    assert "branch or tag" in friendly_clone_error(
+        "fatal: Remote branch nope not found in upstream origin", "u", "u", None
+    )
+    secret_url = "https://x-access-token:SECRET@github.com/o/r.git"
+    out = friendly_clone_error(
+        f"weird failure at {secret_url}",
+        secret_url,
+        "https://github.com/o/r.git",
+        "SECRET",
+    )
+    assert "SECRET" not in out and "github.com/o/r.git" in out
+
+
 def test_normalize_repo_accepts_urls_and_rejects_junk():
     from agents.server import normalize_repo
 

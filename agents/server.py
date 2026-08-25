@@ -375,6 +375,32 @@ def normalize_repo(value: str) -> str:
     return slug
 
 
+def friendly_clone_error(
+    stderr: str, url: str, public_url: str, token: Optional[str]
+) -> str:
+    """Turn git's clone failure into a sentence that says what to do."""
+    text = (stderr or "").strip().replace(url, public_url)
+    lowered = text.lower()
+    if "could not read username" in lowered or "authentication failed" in lowered:
+        if token:
+            return (
+                "GitHub refused the credentials for this repository — the signed-in "
+                "account (or GITHUB_TOKEN) cannot read it, or the GitHub App is not "
+                "installed on it."
+            )
+        return (
+            "This repository is private (or does not exist). Sign in with GitHub so "
+            "the scan can use your access, or set GITHUB_TOKEN on the service."
+        )
+    if "remote branch" in lowered and "not found" in lowered:
+        return "That branch or tag does not exist in the repository."
+    if "repository not found" in lowered or "not found" in lowered:
+        return (
+            "Repository not found — check the owner/name, or sign in if it is private."
+        )
+    return text[-400:] or "git clone failed"
+
+
 def _clone_repository(
     repo: str, ref: Optional[str], destination: str, token: Optional[str] = None
 ) -> str:
@@ -398,8 +424,7 @@ def _clone_repository(
         command, capture_output=True, text=True, timeout=180, env=env, check=False
     )
     if proc.returncode != 0:
-        message = proc.stderr.strip().replace(url, public_url)
-        raise RuntimeError(message[-400:] or "git clone failed")
+        raise RuntimeError(friendly_clone_error(proc.stderr, url, public_url, token))
     head = subprocess.run(
         ["git", "-C", destination, "rev-parse", "HEAD"],
         capture_output=True,
