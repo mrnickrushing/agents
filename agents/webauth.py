@@ -105,8 +105,22 @@ def authorize_url(config: OAuthConfig, redirect_uri: str, state: str) -> str:
     return f"{GITHUB_AUTHORIZE}?{query}"
 
 
-def exchange_code(config: OAuthConfig, code: str, redirect_uri: str) -> str:
-    """Trade the callback `code` for an access token."""
+def _token_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    token = payload.get("access_token")
+    if not token:
+        raise PermissionError(payload.get("error_description") or "no access token")
+    expires_in = payload.get("expires_in")
+    return {
+        "access_token": str(token),
+        # GitHub Apps issue expiring user tokens plus a refresh token; classic
+        # OAuth Apps issue neither, and these stay empty.
+        "refresh_token": str(payload.get("refresh_token") or ""),
+        "token_expires_at": (time.time() + float(expires_in) if expires_in else 0.0),
+    }
+
+
+def exchange_code(config: OAuthConfig, code: str, redirect_uri: str) -> Dict[str, Any]:
+    """Trade the callback `code` for tokens."""
     payload = _github_json(
         GITHUB_TOKEN_URL,
         data={
@@ -117,10 +131,38 @@ def exchange_code(config: OAuthConfig, code: str, redirect_uri: str) -> str:
         },
         accept="application/json",
     )
-    token = payload.get("access_token")
-    if not token:
-        raise PermissionError(payload.get("error_description") or "no access token")
-    return str(token)
+    return _token_response(payload)
+
+
+def refresh_access_token(config: OAuthConfig, refresh_token: str) -> Dict[str, Any]:
+    """Swap a GitHub App refresh token for a new access token."""
+    payload = _github_json(
+        GITHUB_TOKEN_URL,
+        data={
+            "client_id": config.client_id,
+            "client_secret": config.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        accept="application/json",
+    )
+    return _token_response(payload)
+
+
+def normalize_tokens(tokens: Any) -> Dict[str, Any]:
+    """Accept a bare access token or a token dict."""
+    if isinstance(tokens, dict):
+        return {
+            "access_token": str(tokens.get("access_token", "")),
+            "refresh_token": str(tokens.get("refresh_token") or ""),
+            "token_expires_at": float(tokens.get("token_expires_at") or 0.0),
+        }
+    return {"access_token": str(tokens), "refresh_token": "", "token_expires_at": 0.0}
+
+
+def token_needs_refresh(session: Dict[str, Any], leeway: float = 120.0) -> bool:
+    expires_at = float(session.get("token_expires_at") or 0.0)
+    return bool(session.get("refresh_token")) and 0 < expires_at < time.time() + leeway
 
 
 def fetch_user(token: str) -> Dict[str, Any]:
@@ -191,9 +233,16 @@ class SessionStore:
             avatar_url TEXT NOT NULL,
             github_token TEXT NOT NULL,
             created_at REAL NOT NULL,
-            expires_at REAL NOT NULL
+            expires_at REAL NOT NULL,
+            refresh_token TEXT NOT NULL DEFAULT '',
+            token_expires_at REAL NOT NULL DEFAULT 0
         )
     """
+    # Columns added after the first release; applied to existing databases.
+    MIGRATIONS = (
+        "ALTER TABLE web_sessions ADD COLUMN refresh_token TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE web_sessions ADD COLUMN token_expires_at REAL NOT NULL DEFAULT 0",
+    )
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -217,6 +266,11 @@ class SessionStore:
         conn = self._connect()
         with conn:
             conn.execute(self.SCHEMA)
+            for statement in self.MIGRATIONS:
+                try:
+                    conn.execute(statement)
+                except sqlite3.OperationalError:
+                    pass  # column already present
         if self._memory is None:
             conn.close()
         self._ready = True
@@ -230,28 +284,51 @@ class SessionStore:
     def _hash(session_id: str) -> str:
         return hashlib.sha256(session_id.encode()).hexdigest()
 
-    def create(self, user: Dict[str, Any], github_token: str) -> str:
+    def create(self, user: Dict[str, Any], github_token: Any) -> str:
         self._prepare()
+        tokens = normalize_tokens(github_token)
         session_id = secrets.token_urlsafe(32)
         now = time.time()
         conn = self._connect()
         with conn:
             conn.execute(
-                "INSERT INTO web_sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO web_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._hash(session_id),
                     user.get("login", ""),
                     user.get("name", ""),
                     user.get("avatar_url", ""),
-                    github_token,
+                    tokens["access_token"],
                     now,
                     now + SESSION_TTL,
+                    tokens["refresh_token"],
+                    tokens["token_expires_at"],
                 ),
             )
             conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
         if self._memory is None:
             conn.close()
         return session_id
+
+    def update_tokens(self, session_id: Optional[str], tokens: Any) -> None:
+        if not session_id:
+            return
+        self._prepare()
+        fresh = normalize_tokens(tokens)
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                "UPDATE web_sessions SET github_token = ?, refresh_token = ?, "
+                "token_expires_at = ? WHERE id_hash = ?",
+                (
+                    fresh["access_token"],
+                    fresh["refresh_token"],
+                    fresh["token_expires_at"],
+                    self._hash(session_id),
+                ),
+            )
+        if self._memory is None:
+            conn.close()
 
     def get(self, session_id: Optional[str]) -> Optional[Dict[str, Any]]:
         if not session_id:
@@ -263,7 +340,8 @@ class SessionStore:
             return None
         try:
             row = conn.execute(
-                "SELECT login, name, avatar_url, github_token, expires_at "
+                "SELECT login, name, avatar_url, github_token, expires_at, "
+                "refresh_token, token_expires_at "
                 "FROM web_sessions WHERE id_hash = ?",
                 (self._hash(session_id),),
             ).fetchone()
@@ -279,6 +357,8 @@ class SessionStore:
             "name": row[1],
             "avatar_url": row[2],
             "github_token": row[3],
+            "refresh_token": row[5],
+            "token_expires_at": row[6],
         }
 
     def delete(self, session_id: Optional[str]) -> None:
