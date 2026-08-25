@@ -538,7 +538,7 @@ class ScanJobs:
                 result={
                     "scan_id": scan_id,
                     "head_sha": head,
-                    "files_scanned": report.get("coverage", {}).get("files_scanned"),
+                    "files_scanned": report.get("files_scanned"),
                     "findings": total,
                     "by_severity": counts,
                 },
