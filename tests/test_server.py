@@ -281,3 +281,17 @@ def test_dashboard_page_renders_the_review_layout(app):
         "last_scan_at",
         "projects",
     }
+
+
+def test_home_screen_assets_for_iphone(app):
+    client = app.test_client()
+    page = client.get("/").get_data(as_text=True)
+    assert "viewport-fit=cover" in page
+    assert 'rel="apple-touch-icon"' in page and 'rel="manifest"' in page
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.get_json()["display"] == "standalone"
+    icon = client.get("/apple-touch-icon.png")
+    assert icon.status_code == 200
+    assert icon.mimetype == "image/png"
+    assert icon.data.startswith(b"\x89PNG")

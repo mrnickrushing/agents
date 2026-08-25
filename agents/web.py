@@ -32,7 +32,16 @@ _HTML = """\
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0b0f17" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="agents" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" href="/apple-touch-icon.png" type="image/png" />
 <title>agents — findings</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -52,7 +61,8 @@ _HTML = """\
   --shadow: 0 16px 40px rgba(15,23,42,.10);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { background: var(--ink); }
+html { background: var(--ink); -webkit-text-size-adjust: 100%; }
+button, summary, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 body {
   min-height: 100vh; color: var(--text);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.5;
@@ -66,10 +76,11 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo
 .display { font-family: "Space Grotesk", Inter, sans-serif; letter-spacing: -.02em; }
 
 header {
-  position: sticky; top: 0; z-index: 5; backdrop-filter: blur(14px);
+  position: sticky; top: 0; z-index: 5; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   background: color-mix(in srgb, var(--ink) 80%, transparent); border-bottom: 1px solid var(--line);
+  padding-top: env(safe-area-inset-top);
 }
-.bar { max-width: 1080px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: center; gap: 14px; }
+.bar { max-width: 1080px; margin: 0 auto; padding: 12px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left)); display: flex; align-items: center; gap: 12px; min-height: 56px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
 .brand .mark { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--violet)); display: grid; place-items: center; color: #0b0f17; font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 13px; }
 .brand small { color: var(--muted); font-weight: 500; font-size: 12px; margin-left: 4px; }
@@ -79,11 +90,12 @@ header {
 .live[data-state="live"] .dot { background: var(--low); box-shadow: 0 0 0 0 rgba(74,222,128,.6); animation: pulse 2s infinite; }
 .live[data-state="lost"] .dot { background: var(--critical); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(74,222,128,.5);} 70% { box-shadow: 0 0 0 8px rgba(74,222,128,0);} 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0);} }
-.btn { cursor: pointer; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 13px; }
+.btn { cursor: pointer; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 12px; min-height: 40px; font: inherit; font-size: 13px; }
 .btn:hover { border-color: var(--accent); }
+.btn:active, .chip:active { transform: scale(.97); }
 .btn:focus-visible, .chip:focus-visible, .card summary:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-inset-right)) calc(64px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
 
 /* Attention hero */
 .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; margin-bottom: 26px; }
@@ -103,12 +115,13 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
 
 /* Filters */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
-.chip { cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 8px 13px; min-height: 40px; font: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .chip .n { font-family: "JetBrains Mono", monospace; font-weight: 600; }
 .chip[aria-pressed="true"] { color: var(--text); border-color: var(--sev, var(--accent)); box-shadow: inset 0 0 0 1px var(--sev, var(--accent)); }
 .chip[data-sev="CRITICAL"] { --sev: var(--critical); } .chip[data-sev="HIGH"] { --sev: var(--high); }
 .chip[data-sev="MEDIUM"] { --sev: var(--medium); } .chip[data-sev="LOW"] { --sev: var(--low); } .chip[data-sev="INFO"] { --sev: var(--info); }
-.search { flex: 1; min-width: 180px; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px; }
+.search { flex: 1; min-width: 180px; min-height: 40px; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .search::placeholder { color: var(--muted); }
 
 /* Finding cards — styled as code-review annotations */
@@ -117,7 +130,8 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
 .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--sev); }
 .card[data-sev="CRITICAL"] { --sev: var(--critical); } .card[data-sev="HIGH"] { --sev: var(--high); }
 .card[data-sev="MEDIUM"] { --sev: var(--medium); } .card[data-sev="LOW"] { --sev: var(--low); } .card[data-sev="INFO"] { --sev: var(--info); }
-.card summary { list-style: none; cursor: pointer; padding: 14px 16px 14px 20px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 12px; align-items: start; }
+.card summary { list-style: none; cursor: pointer; padding: 14px 16px 14px 20px; min-height: 56px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 12px; align-items: start; }
+.card summary::marker { display: none; content: ""; }
 .card summary::-webkit-details-marker { display: none; }
 .badge { font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--sev); border: 1px solid color-mix(in srgb, var(--sev) 50%, transparent); background: color-mix(in srgb, var(--sev) 12%, transparent); border-radius: 6px; padding: 3px 7px; white-space: nowrap; margin-top: 2px; }
 .title { font-weight: 600; font-size: 15px; }
@@ -149,11 +163,38 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
 .feed .err { color: var(--critical); }
 
 @media (max-width: 720px) {
-  .hero { grid-template-columns: 1fr; }
-  .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .card summary { grid-template-columns: auto minmax(0,1fr); }
+  body { font-size: 16px; }
+  main { padding-top: 18px; }
+  .hero { grid-template-columns: 1fr; gap: 10px; margin-bottom: 14px; }
+  .attention { padding: 14px 16px; border-radius: 16px; display: grid; grid-template-columns: auto minmax(0,1fr); column-gap: 16px; align-items: center; }
+  .attention .eyebrow { grid-column: 2; font-size: 11px; }
+  .attention .big { grid-column: 1; grid-row: 1 / span 2; font-size: 56px; margin: 0; }
+  .attention .sub { grid-column: 2; font-size: 13px; }
+  .attention .glow { width: 160px; height: 160px; inset: auto -50px -70px auto; }
+  .stats { grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+  .stat { padding: 10px 10px; border-radius: 12px; }
+  .stat .label { font-size: 10px; letter-spacing: .06em; }
+  .stat .value { font-size: 20px; }
+  .stat .hint { display: none; }
+  .toolbar { gap: 8px; }
+  .chips { flex-wrap: nowrap; overflow-x: auto; width: 100%; padding-bottom: 2px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: 0 0 auto; }
+  .toolbar .search { flex-basis: 100%; }
+  .card summary { grid-template-columns: minmax(0,1fr); gap: 8px; padding: 14px 14px 14px 18px; }
+  .badge { justify-self: start; }
   .caret { display: none; }
+  .body { padding: 0 14px 14px 18px; }
+  .snippet { font-size: 12px; }
+  .meta { row-gap: 10px; }
+  .copy { margin-left: 0; width: 100%; justify-content: center; }
+  .feed { max-height: 140px; }
 }
+@media (pointer: coarse) {
+  .card summary:hover { background: transparent; }
+  .live { min-height: 36px; }
+}
+@media (hover: hover) { .card summary:hover { background: color-mix(in srgb, var(--panel-2) 60%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .live .dot, .caret { animation: none; transition: none; } }
 </style>
 </head>
@@ -179,16 +220,18 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
       <div class="stat"><div class="label">Scans</div><div class="value display" id="s-scans">–</div><div class="hint" id="s-last">no scans yet</div></div>
       <div class="stat"><div class="label">Findings</div><div class="value display" id="s-findings">–</div><div class="hint" id="s-projects"></div></div>
       <div class="stat"><div class="label">Medium</div><div class="value display" style="color:var(--medium)" id="s-medium">–</div><div class="hint">worth a look</div></div>
-      <div class="stat"><div class="label">Low / info</div><div class="value display" style="color:var(--low)" id="s-low">–</div><div class="hint">housekeeping</div></div>
+      <div class="stat"><div class="label">Minor</div><div class="value display" style="color:var(--low)" id="s-low">–</div><div class="hint">housekeeping</div></div>
     </div>
   </section>
 
-  <div class="toolbar" id="filters" role="group" aria-label="Filter by severity">
-    <button class="chip" data-sev="CRITICAL" aria-pressed="false" type="button">Critical <span class="n">0</span></button>
-    <button class="chip" data-sev="HIGH" aria-pressed="false" type="button">High <span class="n">0</span></button>
-    <button class="chip" data-sev="MEDIUM" aria-pressed="false" type="button">Medium <span class="n">0</span></button>
-    <button class="chip" data-sev="LOW" aria-pressed="false" type="button">Low <span class="n">0</span></button>
-    <button class="chip" data-sev="INFO" aria-pressed="false" type="button">Info <span class="n">0</span></button>
+  <div class="toolbar" id="filters">
+    <div class="chips" role="group" aria-label="Filter by severity">
+      <button class="chip" data-sev="CRITICAL" aria-pressed="false" type="button">Critical <span class="n">0</span></button>
+      <button class="chip" data-sev="HIGH" aria-pressed="false" type="button">High <span class="n">0</span></button>
+      <button class="chip" data-sev="MEDIUM" aria-pressed="false" type="button">Medium <span class="n">0</span></button>
+      <button class="chip" data-sev="LOW" aria-pressed="false" type="button">Low <span class="n">0</span></button>
+      <button class="chip" data-sev="INFO" aria-pressed="false" type="button">Info <span class="n">0</span></button>
+    </div>
     <input class="search" id="search" type="search" placeholder="Filter by file, repo, issue, detector…" aria-label="Filter findings">
   </div>
 
@@ -201,7 +244,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
 
 <script>
 const $ = (s) => document.querySelector(s);
-const state = { findings: [], sev: new Set(), q: '' };
+const state = { findings: [], sev: new Set(), q: '', open: new Set(), lastPayload: '' };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function when(iso) {
@@ -235,8 +278,10 @@ async function loadSummary() {
 
 async function loadFindings() {
   try {
-    const d = await (await fetch('/api/findings?limit=200')).json();
-    state.findings = d.findings || [];
+    const text = await (await fetch('/api/findings?limit=200')).text();
+    if (text === state.lastPayload) return;   // nothing changed: keep open cards and scroll position
+    state.lastPayload = text;
+    state.findings = (JSON.parse(text).findings) || [];
     render();
   } catch (e) { console.warn('findings', e); }
 }
@@ -255,7 +300,7 @@ function card(f) {
   const id = esc(f.finding_id || '');
   const dismiss = `agents feedback ${f.finding_id} dismiss --reason "…"`;
   return `
-  <details class="card" data-sev="${esc(f.severity)}">
+  <details class="card" data-sev="${esc(f.severity)}" data-id="${id}"${state.open.has(f.finding_id) ? ' open' : ''}>
     <summary>
       <span class="badge">${esc(f.severity)}</span>
       <span>
@@ -297,6 +342,10 @@ document.querySelectorAll('.chip[data-sev]').forEach(c => c.addEventListener('cl
   on ? state.sev.add(s) : state.sev.delete(s); c.setAttribute('aria-pressed', on); render();
 }));
 $('#search').addEventListener('input', e => { state.q = e.target.value; render(); });
+$('#list').addEventListener('toggle', e => {
+  const card = e.target.closest('.card'); if (!card) return;
+  card.open ? state.open.add(card.dataset.id) : state.open.delete(card.dataset.id);
+}, true);
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-copy]'); if (!b) return;
   try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy dismiss command', 1500); }
@@ -550,6 +599,39 @@ class AgentsDashboard:
         def api_events():
             return Response(dashboard.sse_stream(), mimetype="text/event-stream")
 
+        @app.route("/manifest.webmanifest")
+        def manifest():
+            body = json.dumps(
+                {
+                    "name": "agents — findings",
+                    "short_name": "agents",
+                    "start_url": "/",
+                    "display": "standalone",
+                    "background_color": "#0b0f17",
+                    "theme_color": "#0b0f17",
+                    "icons": [
+                        {
+                            "src": "/apple-touch-icon.png",
+                            "sizes": "180x180",
+                            "type": "image/png",
+                        }
+                    ],
+                }
+            )
+            return Response(
+                body,
+                mimetype="application/manifest+json",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+
+        @app.route("/apple-touch-icon.png")
+        def touch_icon():
+            return Response(
+                _icon_png(),
+                mimetype="image/png",
+                headers={"Cache-Control": "public, max-age=604800"},
+            )
+
         return app
 
     # ── Helpers ───────────────────────────────────────────────────────
@@ -558,6 +640,56 @@ class AgentsDashboard:
         if not self._db_path or not os.path.isfile(self._db_path):
             return None
         return sqlite3.connect(self._db_path)
+
+
+_ICON_CACHE: Dict[str, bytes] = {}
+
+
+def _icon_png(size: int = 180) -> bytes:
+    """Home-screen icon: the header mark (cyan→violet square with a `>_`
+    prompt), rendered without an imaging library so the web extra stays
+    Flask-only."""
+    if "png" in _ICON_CACHE:
+        return _ICON_CACHE["png"]
+    import struct
+    import zlib
+
+    cyan, violet, ink = (34, 211, 238), (167, 139, 250), (11, 15, 23)
+    s = size
+    # `>` and `_` drawn as thick strokes on a 12x12 design grid.
+    cell = s / 12
+    prompt = {(2, 2), (3, 3), (4, 4), (5, 5)}  # upper arm of `>`
+    prompt |= {(2, 8), (3, 7), (4, 6)}  # lower arm meets the tip at (5, 5)
+    prompt |= {(7, 8), (8, 8), (9, 8)}  # the `_`
+    rows = []
+    for y in range(s):
+        row = bytearray([0])
+        for x in range(s):
+            t_ = (x + y) / (2 * s)
+            r = int(cyan[0] + (violet[0] - cyan[0]) * t_)
+            g = int(cyan[1] + (violet[1] - cyan[1]) * t_)
+            b = int(cyan[2] + (violet[2] - cyan[2]) * t_)
+            gx, gy = int(x / cell), int(y / cell)
+            if (gx, gy) in prompt:
+                r, g, b = ink
+            row += bytes((r, g, b))
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", s, s, 8, 2, 0, 0, 0))
+    png += chunk(b"IDAT", zlib.compress(raw, 9))
+    png += chunk(b"IEND", b"")
+    _ICON_CACHE["png"] = png
+    return png
 
 
 def _rationale(tool: str, issue: str) -> str:
