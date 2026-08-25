@@ -43,10 +43,11 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from agents import __version__
+from agents import __version__, webauth
 from agents.evolution import EvolutionStore
 from agents.github_integration import GitHubIntegration, register_webhook_routes
 from agents.web import AgentsDashboard, _default_db_path
+from agents.webauth import SESSION_COOKIE, OAuthConfig, SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -374,14 +375,17 @@ def normalize_repo(value: str) -> str:
     return slug
 
 
-def _clone_repository(repo: str, ref: Optional[str], destination: str) -> str:
+def _clone_repository(
+    repo: str, ref: Optional[str], destination: str, token: Optional[str] = None
+) -> str:
     """Shallow-clone `repo` at `ref` into `destination`; returns the head SHA.
 
-    GITHUB_TOKEN, when set, is passed as the HTTPS credential so private
-    repositories work; it never reaches the recorded report (the evolution
-    store strips credentials from remote URLs)."""
+    The signed-in person's GitHub token (or GITHUB_TOKEN as a fallback) is
+    passed as the HTTPS credential so private repositories work; it never
+    reaches the recorded report (the evolution store strips credentials from
+    remote URLs)."""
     public_url = f"https://github.com/{repo}.git"
-    token = os.environ.get("GITHUB_TOKEN")
+    token = token or os.environ.get("GITHUB_TOKEN")
     url = public_url
     if token:
         url = public_url.replace("https://", f"https://x-access-token:{token}@", 1)
@@ -417,13 +421,19 @@ class ScanJobs:
         self._db_path = db_path
         self._publish = publish
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._tokens: Dict[str, str] = {}  # never exposed through the API
         self._order: List[str] = []
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._lock = threading.Lock()
         self._worker: Optional[threading.Thread] = None
 
     def submit(
-        self, repo: str, ref: Optional[str], agents: List[str]
+        self,
+        repo: str,
+        ref: Optional[str],
+        agents: List[str],
+        token: Optional[str] = None,
+        requested_by: str = "",
     ) -> Dict[str, Any]:
         from agents.cli import AGENTS
 
@@ -444,6 +454,7 @@ class ScanJobs:
                 "ref": ref,
                 "agents": list(agents),
                 "status": "queued",
+                "requested_by": requested_by,
                 "submitted_at": time.time(),
                 "started_at": None,
                 "finished_at": None,
@@ -452,9 +463,12 @@ class ScanJobs:
                 "error": None,
             }
             self._jobs[job["id"]] = job
+            if token:
+                self._tokens[job["id"]] = token
             self._order.append(job["id"])
             for stale in self._order[: -self.KEEP]:
                 self._jobs.pop(stale, None)
+                self._tokens.pop(stale, None)
             self._order = self._order[-self.KEEP :]
             self._ensure_worker()
         self._queue.put(job["id"])
@@ -502,9 +516,10 @@ class ScanJobs:
         job.update(status="running", started_at=time.time(), progress="cloning")
         self._publish(f"scan_started {job['repo']}")
         workdir = tempfile.mkdtemp(prefix="agents-scan-")
+        token = self._tokens.pop(job["id"], None)
         try:
             clone_dir = os.path.join(workdir, "repo")
-            head = _clone_repository(job["repo"], job["ref"], clone_dir)
+            head = _clone_repository(job["repo"], job["ref"], clone_dir, token=token)
             job["progress"] = "scanning"
             report = _run_scan(clone_dir, job["agents"] or None)
             attach_finding_ids(report)
@@ -552,21 +567,35 @@ def create_app(
     db_path: Optional[str] = None,
     webhook_secret: Optional[str] = None,
     dashboard_token: Optional[str] = None,
+    oauth: Optional[OAuthConfig] = None,
+    session_db_path: Optional[str] = None,
 ):
     """Build the WSGI app. `webhook_secret=None` reads GITHUB_WEBHOOK_SECRET
     and `dashboard_token=None` reads DASHBOARD_TOKEN; an empty string
-    disables that feature explicitly."""
+    disables that feature explicitly. `oauth=None` reads the GitHub OAuth
+    App settings from the environment."""
     try:
-        from flask import jsonify, request
+        from flask import g, jsonify, redirect, request, session
+        from werkzeug.middleware.proxy_fix import ProxyFix
     except ImportError as exc:  # pragma: no cover - exercised by the import guard
         raise ImportError(
             "Install the web extra: pip install 'rushingtech-agents[web]'"
         ) from exc
+    import secrets as _secrets
 
     resolved_db = resolve_db_path(db_path)
     dashboard = AgentsDashboard(db_path=resolved_db)
     app = dashboard.create_flask_app()
     app.config["AGENTS_DB"] = resolved_db
+    # Railway/Cloudflare terminate TLS; trust their forwarded scheme/host so
+    # the OAuth callback URL and Secure cookies are built for https.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.secret_key = os.environ.get("SESSION_SECRET") or _secrets.token_hex(32)
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_NAME="agents_oauth",
+    )
 
     @app.get("/health")
     def health():
@@ -632,29 +661,181 @@ def create_app(
         if dashboard_token is None
         else dashboard_token
     )
+    oauth_config = OAuthConfig() if oauth is None else oauth
+    sessions = SessionStore(
+        session_db_path or webauth.default_session_db_path(resolved_db)
+    )
+    app.config["SESSIONS"] = sessions
     jobs = ScanJobs(resolved_db, dashboard.publish_event)
     app.config["SCAN_JOBS"] = jobs
+    runs_enabled = bool(token) or oauth_config.enabled
+    repo_cache: Dict[str, Any] = {}
+
+    # ── who is asking? ──────────────────────────────────────────────
+    def principal() -> Optional[Dict[str, Any]]:
+        """The signed-in person (cookie session) or the bearer token."""
+        current = sessions.get(request.cookies.get(SESSION_COOKIE))
+        if current:
+            return {"kind": "session", **current}
+        header = request.headers.get("Authorization", "")
+        supplied = header[7:] if header.startswith("Bearer ") else ""
+        if token and supplied and hmac.compare_digest(supplied, token):
+            return {
+                "kind": "bearer",
+                "login": "token",
+                "github_token": os.environ.get("GITHUB_TOKEN") or "",
+            }
+        return None
 
     def denied():
-        if not token:
+        if not runs_enabled:
             return (
                 jsonify(
                     {
-                        "error": "running checks from the web is disabled: "
-                        "DASHBOARD_TOKEN is not configured"
+                        "error": "running checks from the web is disabled: set "
+                        "GITHUB_OAUTH_CLIENT_ID/SECRET (sign in) or DASHBOARD_TOKEN"
                     }
                 ),
                 503,
             )
-        header = request.headers.get("Authorization", "")
-        supplied = header[7:] if header.startswith("Bearer ") else ""
-        if not supplied or not hmac.compare_digest(supplied, token):
-            return jsonify({"error": "invalid token"}), 401
+        who = principal()
+        if who is None:
+            return jsonify({"error": "sign in first"}), 401
+        if who["kind"] == "session" and request.method == "POST":
+            # Cookie-authenticated writes must come from this page: a custom
+            # header (never sent by a plain form) and a same-site origin.
+            origin = request.headers.get("Origin") or ""
+            if request.headers.get("X-Requested-With") != "fetch" or (
+                origin and origin.rstrip("/") != request.host_url.rstrip("/")
+            ):
+                return jsonify({"error": "cross-site request refused"}), 403
+        g.principal = who
         return None
+
+    def callback_url() -> str:
+        return request.host_url.rstrip("/") + "/auth/callback"
+
+    # ── sign in with GitHub ─────────────────────────────────────────
+    @app.get("/auth/login")
+    def auth_login():
+        if not oauth_config.enabled:
+            return (
+                jsonify({"error": "sign-in is not configured on this service"}),
+                503,
+            )
+        state = _secrets.token_urlsafe(24)
+        session["oauth_state"] = state
+        return redirect(webauth.authorize_url(oauth_config, callback_url(), state))
+
+    @app.get("/auth/callback")
+    def auth_callback():
+        if not oauth_config.enabled:
+            return jsonify({"error": "sign-in is not configured"}), 503
+        expected = session.pop("oauth_state", None)
+        state = request.args.get("state", "")
+        code = request.args.get("code", "")
+        if not expected or not code or not hmac.compare_digest(expected, state):
+            return jsonify({"error": "sign-in state mismatch; try again"}), 400
+        try:
+            access_token = webauth.exchange_code(oauth_config, code, callback_url())
+            user = webauth.fetch_user(access_token)
+        except (OSError, ValueError, PermissionError) as exc:
+            logger.warning("GitHub sign-in failed: %s", exc)
+            return jsonify({"error": "GitHub sign-in failed; try again"}), 502
+        if not oauth_config.allows(user.get("login", "")):
+            return (
+                jsonify(
+                    {
+                        "error": f"@{user.get('login')} is not on this dashboard's "
+                        "allow list (DASHBOARD_ALLOWED_LOGINS)"
+                    }
+                ),
+                403,
+            )
+        session_id = sessions.create(user, access_token)
+        response = redirect("/")
+        response.set_cookie(
+            SESSION_COOKIE,
+            session_id,
+            max_age=webauth.SESSION_TTL,
+            httponly=True,
+            secure=request.scheme == "https",
+            samesite="Lax",
+            path="/",
+        )
+        return response
+
+    @app.post("/auth/logout")
+    def auth_logout():
+        sessions.delete(request.cookies.get(SESSION_COOKIE))
+        response = jsonify({"signed_in": False})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
+
+    @app.get("/api/me")
+    def api_me():
+        who = sessions.get(request.cookies.get(SESSION_COOKIE))
+        return jsonify(
+            {
+                "signed_in": bool(who),
+                "login": who["login"] if who else None,
+                "name": who["name"] if who else None,
+                "avatar_url": who["avatar_url"] if who else None,
+                "sign_in_enabled": oauth_config.enabled,
+                "token_enabled": bool(token),
+            }
+        )
+
+    @app.get("/api/repos")
+    def api_repos():
+        refusal = denied()
+        if refusal:
+            return refusal
+        github_token = g.principal.get("github_token")
+        if not github_token:
+            return (
+                jsonify(
+                    {
+                        "error": "no GitHub access: sign in with GitHub, or set "
+                        "GITHUB_TOKEN on the service"
+                    }
+                ),
+                503,
+            )
+        cache_key = g.principal["login"]
+        cached = repo_cache.get(cache_key)
+        if cached and cached["at"] > time.time() - 120:
+            return jsonify({"repos": cached["repos"], "cached": True})
+        try:
+            repos = webauth.list_repositories(github_token)
+        except (OSError, ValueError) as exc:
+            return jsonify({"error": f"GitHub did not answer: {exc}"}), 502
+        repo_cache[cache_key] = {"at": time.time(), "repos": repos}
+        return jsonify({"repos": repos, "cached": False})
+
+    @app.get("/api/branches")
+    def api_branches():
+        refusal = denied()
+        if refusal:
+            return refusal
+        try:
+            repo = normalize_repo(request.args.get("repo", ""))
+            branches = webauth.list_branches(g.principal.get("github_token"), repo)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"error": f"GitHub did not answer: {exc}"}), 502
+        return jsonify({"repo": repo, "branches": branches})
 
     @app.get("/api/agents")
     def api_agents():
-        return jsonify({"agents": agent_catalog(), "runs_enabled": bool(token)})
+        return jsonify(
+            {
+                "agents": agent_catalog(),
+                "runs_enabled": runs_enabled,
+                "sign_in_enabled": oauth_config.enabled,
+            }
+        )
 
     @app.post("/api/run")
     def api_run():
@@ -685,6 +866,8 @@ def create_app(
                 str(body.get("repo", "")),
                 body.get("ref"),
                 [str(a) for a in (body.get("agents") or [])],
+                token=g.principal.get("github_token") or None,
+                requested_by=str(g.principal.get("login", "")),
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
