@@ -143,6 +143,9 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .status.err { color: var(--critical); }
 .status.ok { color: var(--low); }
 .mode-form[hidden] { display: none; }
+.switch { display: inline-flex; align-items: center; gap: 10px; min-height: 40px; cursor: pointer; font-size: 15px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.switch input { width: 20px; height: 20px; accent-color: var(--accent); }
+.switch small { color: var(--muted); font-weight: 500; }
 [hidden] { display: none !important; }
 .account { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
 .account img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); }
@@ -190,6 +193,11 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .note p { font-size: 14px; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 12px; color: var(--muted); }
 .tag { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 40%, transparent); border-radius: 6px; padding: 2px 6px; }
+.verdict { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; border-radius: 6px; padding: 2px 7px; vertical-align: middle; margin-left: 6px; }
+.verdict.dismissed { color: var(--muted); border: 1px solid var(--line); }
+.verdict.confirmed { color: var(--low); border: 1px solid color-mix(in srgb, var(--low) 50%, transparent); }
+.reason { color: var(--muted); font-style: italic; }
+.card[data-verdict="FALSE_POSITIVE"] { opacity: .72; }
 .copy { margin-left: auto; }
 .empty { border: 1px dashed var(--line); border-radius: 14px; padding: 28px 20px; text-align: center; color: var(--muted); }
 .empty code { color: var(--text); }
@@ -296,9 +304,18 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
             <input id="ref" placeholder="default branch" autocapitalize="none" autocorrect="off" spellcheck="false">
           </label>
         </div>
-        <label class="field"><span>Agents <small>(none selected = all of them)</small></span>
-          <select id="scan-agents" multiple size="6"></select>
-        </label>
+        <div class="field">
+          <span>Agents</span>
+          <label class="switch"><input type="checkbox" id="all-agents" checked> <span>All agents</span> <small id="all-agents-count"></small></label>
+          <div id="pick-agents" hidden>
+            <div class="row" style="margin-bottom:6px">
+              <button class="btn" type="button" id="agents-select-all">Select all</button>
+              <button class="btn" type="button" id="agents-clear">Clear</button>
+              <span class="status" id="agents-picked"></span>
+            </div>
+            <select id="scan-agents" multiple size="6"></select>
+          </div>
+        </div>
         <div class="actions">
           <button class="btn primary" type="submit" id="scan-btn">Scan repository</button>
           <span class="status" id="scan-status"></span>
@@ -328,8 +345,10 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
       <button class="chip" data-sev="MEDIUM" aria-pressed="false" type="button">Medium <span class="n">0</span></button>
       <button class="chip" data-sev="LOW" aria-pressed="false" type="button">Low <span class="n">0</span></button>
       <button class="chip" data-sev="INFO" aria-pressed="false" type="button">Info <span class="n">0</span></button>
+      <button class="chip" id="chip-dismissed" aria-pressed="false" type="button" title="Show findings a person dismissed as false positives">Dismissed <span class="n">0</span></button>
     </div>
     <input class="search" id="search" type="search" placeholder="Filter by file, repo, issue, detector…" aria-label="Filter findings">
+    <button class="btn" type="button" id="copy-claude" title="Copy the findings shown below as Markdown to paste into Claude">Copy for Claude</button>
   </div>
 
   <section class="list" id="list" aria-live="polite">
@@ -341,7 +360,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 
 <script>
 const $ = (s) => document.querySelector(s);
-const state = { findings: [], sev: new Set(), q: '', open: new Set(), lastPayload: '' };
+const state = { findings: [], sev: new Set(), q: '', open: new Set(), lastPayload: '', showDismissed: false };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function when(iso) {
@@ -372,6 +391,7 @@ async function loadSummary() {
     $('#s-medium').textContent = s.MEDIUM || 0;
     $('#s-low').textContent = (s.LOW || 0) + (s.INFO || 0);
     document.querySelectorAll('.chip[data-sev]').forEach(c => c.querySelector('.n').textContent = s[c.dataset.sev] || 0);
+    $('#chip-dismissed .n').textContent = d.dismissed || 0;
   } catch (e) { console.warn('summary', e); }
 }
 
@@ -409,11 +429,11 @@ function card(f) {
   const dismiss = `agents feedback ${f.finding_id} dismiss --reason "…"`;
   const sha = (f.pull_request && f.pull_request.head_sha) || (f.repository && f.repository.head_sha) || '';
   return `
-  <details class="card" data-sev="${esc(f.severity)}" data-id="${id}"${state.open.has(f.finding_id) ? ' open' : ''}>
+  <details class="card" data-sev="${esc(f.severity)}" data-id="${id}" data-verdict="${esc(f.verdict || '')}"${state.open.has(f.finding_id) ? ' open' : ''}>
     <summary>
       <span class="badge">${esc(f.severity)}</span>
       <span>
-        <div class="title">${esc(f.issue)}</div>
+        <div class="title">${esc(f.issue)}${f.verdict ? ` <span class="verdict ${f.verdict === 'FALSE_POSITIVE' ? 'dismissed' : 'confirmed'}" title="${esc(f.verdict_reason || '')}">${f.verdict === 'FALSE_POSITIVE' ? 'dismissed' : 'confirmed'}</span>` : ''}</div>
         <div class="where">${whereHtml(f)}</div>
       </span>
       <span class="caret" aria-hidden="true">▾</span>
@@ -426,17 +446,17 @@ function card(f) {
         <span class="tag">${esc(f.detector)}</span>
         ${sha ? `<span class="mono">${esc(String(sha).slice(0, 7))}</span>` : ''}
         ${id ? `<span class="mono">${id}</span>` : ''}
-        ${id ? `<button class="btn copy" type="button" data-copy="${esc(dismiss)}" title="Copy the command that marks this finding a false positive">Copy dismiss command</button>` : ''}
+        ${f.verdict_reason ? `<span class="reason">“${esc(f.verdict_reason)}”</span>` : ''}
+        ${id && f.verdict !== 'FALSE_POSITIVE' ? `<button class="btn copy" type="button" data-verdict="dismiss" data-id="${id}" title="Mark this a false positive; it leaves the board and future scans remember">Dismiss…</button>` : ''}
+        ${id && f.verdict !== 'CONFIRMED' ? `<button class="btn" type="button" data-verdict="confirm" data-id="${id}" title="Mark this real">Confirm…</button>` : ''}
+        ${id ? `<button class="btn" type="button" data-copy="${esc(dismiss)}" title="Copy the CLI command instead">Copy command</button>` : ''}
       </div>
     </div>
   </details>`;
 }
 
 function render() {
-  const q = state.q.toLowerCase();
-  const rows = state.findings.filter(f =>
-    (!state.sev.size || state.sev.has(f.severity)) &&
-    (!q || [f.issue, f.file_path, f.project_label, f.detector, f.pull_request && f.pull_request.title].join(' ').toLowerCase().includes(q)));
+  const rows = visibleFindings();
   const list = $('#list');
   if (!state.findings.length) {
     list.innerHTML = `<div class="empty">Nothing recorded yet. Open a pull request on a connected repository, or run <code>agents scan --path . </code> locally with recording on, and findings land here.</div>`;
@@ -455,6 +475,64 @@ $('#list').addEventListener('toggle', e => {
   const card = e.target.closest('.card'); if (!card) return;
   card.open ? state.open.add(card.dataset.id) : state.open.delete(card.dataset.id);
 }, true);
+// Markdown hand-off: the findings currently shown, ready to paste to Claude.
+function visibleFindings() {
+  const q = state.q.toLowerCase();
+  return state.findings.filter(f =>
+    (state.showDismissed ? f.verdict === 'FALSE_POSITIVE' : f.verdict !== 'FALSE_POSITIVE') &&
+    (!state.sev.size || state.sev.has(f.severity)) &&
+    (!q || [f.issue, f.file_path, f.project_label, f.detector, f.pull_request && f.pull_request.title].join(' ').toLowerCase().includes(q)));
+}
+$('#chip-dismissed').addEventListener('click', () => {
+  state.showDismissed = !state.showDismissed;
+  $('#chip-dismissed').setAttribute('aria-pressed', state.showDismissed);
+  render();
+});
+async function sendVerdict(id, verdict) {
+  const reason = prompt(verdict === 'dismiss' ? 'Why is this a false positive?' : 'Confirm — what makes it real?');
+  if (reason === null || !reason.trim()) return;
+  const r = await fetch('/api/feedback', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ finding_id: id, verdict, reason: reason.trim() }) });
+  const d = await r.json();
+  if (!r.ok) { alert(d.error || r.statusText); return; }
+  state.lastPayload = ''; loadSummary(); loadFindings();
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-verdict]'); if (!b) return;
+  sendVerdict(b.dataset.id, b.dataset.verdict);
+});
+function findingsMarkdown(rows) {
+  const groups = new Map();
+  for (const f of rows) {
+    const key = f.project_label || f.project || 'unknown';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const lines = [`# agents findings — ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, '',
+    `Please fix these ${rows.length} finding(s). For each: change the code, keep behaviour, and say what you changed. Dismiss with \`agents feedback <id> dismiss --reason "..."\` if it is a false positive.`, ''];
+  for (const [repo, list] of groups) {
+    const first = list[0];
+    const where = first.pull_request && first.pull_request.url ? ` (PR #${first.pull_request.number}: ${first.pull_request.url})`
+      : first.repository && first.repository.head_sha ? ` (@ ${first.repository.ref || 'default'} ${String(first.repository.head_sha).slice(0, 7)})` : '';
+    lines.push(`## ${repo}${where}`, '');
+    for (const f of list) {
+      lines.push(`- **${f.severity}** \`${f.file_path || '?'}${f.line ? ':' + f.line : ''}\` — ${f.issue}`);
+      if (f.snippet) lines.push(`  - line: \`${f.snippet}\``);
+      if (f.why) lines.push(`  - why: ${f.why}`);
+      if (f.fix) lines.push(`  - fix: ${f.fix}`);
+      lines.push(`  - detector: ${f.detector}${f.finding_id ? ` · id: ${f.finding_id}` : ''}`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+$('#copy-claude').addEventListener('click', async () => {
+  const rows = visibleFindings(); const b = $('#copy-claude');
+  if (!rows.length) { b.textContent = 'Nothing to copy'; setTimeout(() => b.textContent = 'Copy for Claude', 1500); return; }
+  const text = findingsMarkdown(rows);
+  try { await navigator.clipboard.writeText(text); b.textContent = `Copied ${rows.length}`; setTimeout(() => b.textContent = 'Copy for Claude', 1500); }
+  catch { prompt('Copy this', text); }
+});
+
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-copy]'); if (!b) return;
   try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy dismiss command', 1500); }
@@ -535,6 +613,7 @@ async function loadCatalog() {
     const opts = runner.catalog.map(a => `<option value="${esc(a.key)}">${esc(a.key)} — ${esc(a.description || a.name)}</option>`).join('');
     $('#scan-agents').innerHTML = opts;
     $('#agent').innerHTML = opts;
+    $('#all-agents-count').textContent = `(all ${runner.catalog.length})`;
     fillTools();
   } catch (e) { console.warn('catalog', e); }
 }
@@ -599,10 +678,20 @@ $('#check-form').addEventListener('submit', async e => {
   finally { btn.disabled = false; }
 });
 
+// All agents by default; choosing specific ones is the exception.
+const allAgents = $('#all-agents'), pickAgents = $('#pick-agents'), agentSelect = $('#scan-agents');
+const pickedCount = () => { const n = agentSelect.selectedOptions.length; $('#agents-picked').textContent = n ? `${n} selected` : 'none selected'; };
+allAgents.addEventListener('change', () => { pickAgents.hidden = allAgents.checked; if (!allAgents.checked) pickedCount(); });
+agentSelect.addEventListener('change', pickedCount);
+$('#agents-select-all').addEventListener('click', () => { for (const o of agentSelect.options) o.selected = true; pickedCount(); });
+$('#agents-clear').addEventListener('click', () => { for (const o of agentSelect.options) o.selected = false; pickedCount(); });
+const chosenAgents = () => allAgents.checked ? [] : Array.from(agentSelect.selectedOptions).map(o => o.value);
+
 $('#repo-form').addEventListener('submit', async e => {
   e.preventDefault();
   const status = $('#scan-status'), btn = $('#scan-btn');
-  const agents = Array.from($('#scan-agents').selectedOptions).map(o => o.value);
+  const agents = chosenAgents();
+  if (!allAgents.checked && !agents.length) { setStatus(status, 'pick at least one agent, or switch All agents back on', 'err'); return; }
   btn.disabled = true; setStatus(status, 'submitting…');
   try {
     if (!chosenRepo()) { setStatus(status, 'choose a repository first', 'err'); btn.disabled = false; return; }
@@ -837,6 +926,15 @@ def render_login(
 
 _DEFAULT_DATABASE = object()
 
+# The newest verdict per finding, humans outranking triage — the same rule
+# the CLI's `latest_findings`/`evaluate` use.
+_LATEST_VERDICT_CTE = (
+    "WITH latest_verdict AS ("
+    "SELECT fb.*, ROW_NUMBER() OVER (PARTITION BY finding_id "
+    "ORDER BY CASE source WHEN 'human' THEN 0 ELSE 1 END, created_at DESC, "
+    "feedback_id DESC) AS rank FROM feedback fb) "
+)
+
 
 class AgentsDashboard:
     """
@@ -871,10 +969,23 @@ class AgentsDashboard:
             total_scans = cur.fetchone()[0]
             cur.execute("SELECT COUNT(*) FROM findings")
             total_findings = cur.fetchone()[0]
-            cur.execute("SELECT severity, COUNT(*) FROM findings GROUP BY severity")
+            # Severity counts exclude findings a person dismissed; those are
+            # reported separately so the board's "needs attention" is honest.
+            cur.execute(
+                _LATEST_VERDICT_CTE + "SELECT f.severity, COUNT(*) FROM findings f "
+                "LEFT JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1 "
+                "WHERE v.verdict IS NULL OR v.verdict != 'FALSE_POSITIVE' "
+                "GROUP BY f.severity"
+            )
             by_severity: Dict[str, int] = {}
             for row in cur.fetchall():
                 by_severity[row[0]] = row[1]
+            cur.execute(
+                _LATEST_VERDICT_CTE + "SELECT COUNT(*) FROM findings f "
+                "JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1 "
+                "WHERE v.verdict = 'FALSE_POSITIVE'"
+            )
+            dismissed = cur.fetchone()[0]
             cur.execute("SELECT MAX(created_at) FROM scan_runs")
             last_scan_at = cur.fetchone()[0]
             cur.execute("SELECT COUNT(DISTINCT project_key) FROM scan_runs")
@@ -883,6 +994,7 @@ class AgentsDashboard:
                 "total_scans": total_scans,
                 "total_findings": total_findings,
                 "by_severity": by_severity,
+                "dismissed": dismissed,
                 "last_scan_at": last_scan_at,
                 "projects": projects,
             }
@@ -897,8 +1009,13 @@ class AgentsDashboard:
         finally:
             conn.close()
 
-    def get_findings(self, limit: int = 50) -> Dict[str, Any]:
+    def get_findings(
+        self, limit: int = 50, project: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Return the most recent findings, newest scan first.
+
+        `project` narrows to one repository (`owner/name`) or one local
+        project path.
 
         Reads the evolution store's own schema (findings joined to scan_runs
         for the timestamp and project). Line numbers and the originating
@@ -910,14 +1027,23 @@ class AgentsDashboard:
             return {"findings": []}
         try:
             cur = conn.cursor()
+            where = ""
+            params: List[Any] = []
+            if project:
+                where = "WHERE r.project_path IN (?, ?) "
+                params = [f"/github/{project.strip('/')}", project]
             cur.execute(
-                "SELECT f.severity, f.issue, f.file, f.agent, f.tool, f.fix, "
-                "f.finding_id, r.created_at, r.project_path, r.scan_id "
+                _LATEST_VERDICT_CTE
+                + "SELECT f.severity, f.issue, f.file, f.agent, f.tool, f.fix, "
+                "f.finding_id, r.created_at, r.project_path, r.scan_id, "
+                "v.verdict, v.reason, v.source "
                 "FROM findings f JOIN scan_runs r ON r.scan_id = f.scan_id "
-                "ORDER BY r.created_at DESC, CASE f.severity WHEN 'CRITICAL' THEN 0 "
+                "LEFT JOIN latest_verdict v ON v.finding_id = f.finding_id AND v.rank = 1 "
+                + where
+                + "ORDER BY r.created_at DESC, CASE f.severity WHEN 'CRITICAL' THEN 0 "
                 "WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END, "
                 "f.file, f.rowid LIMIT ?",
-                (limit,),
+                [*params, limit],
             )
             rows = cur.fetchall()
             extras = self._report_extras(cur, {row[9] for row in rows})
@@ -943,6 +1069,9 @@ class AgentsDashboard:
                         "repository": scan_extra.get("repository"),
                         "source": scan_extra.get("source"),
                         "scan_id": row[9],
+                        "verdict": row[10],
+                        "verdict_reason": row[11],
+                        "verdict_source": row[12],
                     }
                 )
             return {"findings": findings}
@@ -1038,8 +1167,9 @@ class AgentsDashboard:
 
         @app.route("/api/findings")
         def api_findings():
-            limit = int(request.args.get("limit", 50))
-            return jsonify(dashboard.get_findings(limit=limit))
+            limit = min(int(request.args.get("limit", 50)), 500)
+            project = request.args.get("project") or None
+            return jsonify(dashboard.get_findings(limit=limit, project=project))
 
         @app.route("/api/events")
         def api_events():
@@ -1144,6 +1274,59 @@ def _rationale(tool: str, issue: str) -> str:
     except Exception:  # noqa: BLE001 - dashboard must render without the server extra
         return ""
     return explain_finding(tool or "", {"issue": issue})
+
+
+def findings_markdown(findings: List[Dict[str, Any]], title: str = "") -> str:
+    """The hand-off format: findings grouped by repository, each with the
+    line, the reason, the fix and its id — what a person (or Claude) needs
+    to go fix them. Mirrors the dashboard's *Copy for Claude* button."""
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        title or f"# agents findings — {stamp}",
+        "",
+        f"Please fix these {len(findings)} finding(s). For each: change the code, "
+        "keep behaviour, and say what you changed. Dismiss with "
+        '`agents feedback <id> dismiss --reason "..."` if it is a false positive.',
+        "",
+    ]
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for finding in findings:
+        key = finding.get("project_label") or finding.get("project") or "unknown"
+        groups.setdefault(key, []).append(finding)
+    for repo, rows in groups.items():
+        first = rows[0]
+        where = ""
+        pr = first.get("pull_request") or {}
+        repository = first.get("repository") or {}
+        if pr.get("url"):
+            where = f" (PR #{pr.get('number')}: {pr['url']})"
+        elif repository.get("head_sha"):
+            where = (
+                f" (@ {repository.get('ref') or 'default'} "
+                f"{str(repository['head_sha'])[:7]})"
+            )
+        lines += [f"## {repo}{where}", ""]
+        for f in rows:
+            loc = f"{f.get('file_path') or '?'}"
+            if f.get("line"):
+                loc += f":{f['line']}"
+            lines.append(
+                f"- **{f.get('severity', 'INFO')}** `{loc}` — {f.get('issue', '')}"
+            )
+            if f.get("snippet"):
+                lines.append(f"  - line: `{f['snippet']}`")
+            if f.get("why"):
+                lines.append(f"  - why: {f['why']}")
+            if f.get("fix"):
+                lines.append(f"  - fix: {f['fix']}")
+            tail = f"  - detector: {f.get('detector', '')}"
+            if f.get("finding_id"):
+                tail += f" · id: {f['finding_id']}"
+            lines.append(tail)
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _project_label(project_path: str) -> str:

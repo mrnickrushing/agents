@@ -31,7 +31,14 @@ class FlowAuditAgent(BaseAgent):
 
     def _audit_flow_logic(self, code: str) -> Dict[str, Any]:
         findings = []
-        if re.search(r"oauth|authorize|callback", code, re.IGNORECASE):
+        # An OAuth flow, not React's useCallback or any function named
+        # `callback`: the protocol's own vocabulary has to be present.
+        if re.search(
+            r"\boauth\b|redirect_uri|\bauthoriz(?:e|ation)[_ ]?(?:url|endpoint|code)"
+            r"|['\"][^'\"]*/callback['\"]|client_secret",
+            code,
+            re.IGNORECASE,
+        ):
             if not re.search(r"\bstate\b", code):
                 findings.append(
                     {
@@ -58,7 +65,13 @@ class FlowAuditAgent(BaseAgent):
                     "fix": "Persist event/request IDs and skip duplicate processing.",
                 }
             )
-        if re.search(r"upload|multipart|file", code, re.IGNORECASE):
+        # A server accepting uploads — not a mobile app reading its own files
+        # through expo-file-system or a `File` type annotation.
+        if re.search(
+            r"multer|formidable|busboy|multipart/form-data|req\.files?\b"
+            r"|UploadFile|FileField|upload_to\s*=|\.upload\(|putObject|put_object",
+            code,
+        ):
             if not re.search(r"cleanup|finally|unlink|delete", code, re.IGNORECASE):
                 findings.append(
                     {
@@ -85,9 +98,17 @@ class FlowAuditAgent(BaseAgent):
                     "fix": "Use bounded exponential backoff with jitter to avoid retry storms.",
                 }
             )
-        if re.search(
-            r"Promise\.all|asyncio\.gather|Thread|concurrent", code
-        ) and not re.search(r"lock|mutex|transaction|FOR UPDATE", code, re.IGNORECASE):
+        # Parallel *writes* without a guard; parallel reads (the common
+        # `Promise.all([load(), load()])`) are fine.
+        if (
+            re.search(r"Promise\.all|asyncio\.gather|Thread|concurrent", code)
+            and re.search(
+                r"\.(?:update|upsert|insert|save|write|delete|destroy|increment)\w*\("
+                r"|\bUPDATE\s+\w+\s+SET\b|\bINSERT\s+INTO\b",
+                code,
+            )
+            and not re.search(r"lock|mutex|transaction|FOR UPDATE", code, re.IGNORECASE)
+        ):
             findings.append(
                 {
                     "severity": "LOW",
@@ -95,8 +116,10 @@ class FlowAuditAgent(BaseAgent):
                     "fix": "Protect critical state transitions with row locks, mutexes, or transactional checks.",
                 }
             )
+        # JavaScript `try {` / `catch (` count as handling too, not only
+        # Python's `try:`/`except` and promise `.catch(`.
         if re.search(r"new Promise|async ", code) and not re.search(
-            r"\.catch\(|except|try\s*:", code
+            r"\.catch\(|\bexcept\b|\btry\s*[:{]|\bcatch\s*\(", code
         ):
             findings.append(
                 {

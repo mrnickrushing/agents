@@ -2597,6 +2597,88 @@ def cmd_serve(args: argparse.Namespace) -> None:
     serve(host=args.host, port=args.port, db_path=args.db, threads=args.threads)
 
 
+def fetch_remote_findings(
+    url: str, token: str, project: Optional[str] = None, limit: int = 200
+) -> List[Dict[str, Any]]:
+    """Pull findings from a hosted dashboard (`agents serve`) over its API."""
+    import urllib.parse
+    import urllib.request
+
+    query = {"limit": str(limit)}
+    if project:
+        query["project"] = project
+    endpoint = url.rstrip("/") + "/api/findings?" + urllib.parse.urlencode(query)
+    request = urllib.request.Request(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            # Cloudflare's browser check rejects the default urllib agent.
+            "User-Agent": f"rushingtech-agents/{__version__}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    return list(payload.get("findings", []))
+
+
+def cmd_remote_findings(args: argparse.Namespace) -> None:
+    """Print findings recorded on the hosted dashboard, as Markdown or JSON."""
+    from agents.web import findings_markdown
+
+    token = args.token or os.environ.get("AGENTS_DASHBOARD_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "A token is required: --token or AGENTS_DASHBOARD_TOKEN (the service's "
+            "DASHBOARD_TOKEN)."
+        )
+    try:
+        findings = fetch_remote_findings(
+            args.url, token, project=args.project, limit=args.limit
+        )
+    except OSError as exc:
+        raise SystemExit(f"Could not reach {args.url}: {exc}") from exc
+    if args.json:
+        print(json.dumps(findings, indent=2))
+        return
+    print(findings_markdown(findings))
+
+
+def cmd_remote_feedback(args: argparse.Namespace) -> None:
+    """Record a verdict on the hosted dashboard (POST /api/feedback)."""
+    import urllib.error
+    import urllib.request
+
+    token = args.token or os.environ.get("AGENTS_DASHBOARD_TOKEN", "")
+    if not token:
+        raise SystemExit("A token is required: --token or AGENTS_DASHBOARD_TOKEN.")
+    body = json.dumps(
+        {"finding_id": args.finding_id, "verdict": args.verdict, "reason": args.reason}
+    ).encode()
+    request = urllib.request.Request(
+        args.url.rstrip("/") + "/api/feedback",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": f"rushingtech-agents/{__version__}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        raise SystemExit(f"{exc.code}: {detail}") from exc
+    except OSError as exc:
+        raise SystemExit(f"Could not reach {args.url}: {exc}") from exc
+    print(
+        f"{result['verdict']} {result['finding_id']} ({result['detector']} on "
+        f"{result['file']})"
+    )
+
+
 def cmd_prospect_report(args: argparse.Namespace) -> None:
     """Delegate to agents.prospect_report's own argument parser."""
     from agents.prospect_report import main as prospect_main
@@ -2818,6 +2900,45 @@ def main() -> None:
     )
     p_serve.add_argument("--threads", type=int, default=8)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_remote = sub.add_parser(
+        "remote-findings",
+        help="Pull findings from a hosted dashboard (agents serve) as Markdown or JSON",
+    )
+    p_remote.add_argument(
+        "--url",
+        default=os.environ.get(
+            "AGENTS_DASHBOARD_URL", "https://agents.rushingtechnologies.com"
+        ),
+        help="Dashboard base URL (default: $AGENTS_DASHBOARD_URL)",
+    )
+    p_remote.add_argument(
+        "--token", help="Bearer token (default: $AGENTS_DASHBOARD_TOKEN)"
+    )
+    p_remote.add_argument(
+        "--project", help="Only one repository, as owner/name (or a local path)"
+    )
+    p_remote.add_argument("--limit", type=int, default=200)
+    p_remote.add_argument("--json", action="store_true", help="Raw JSON instead")
+    p_remote.set_defaults(func=cmd_remote_findings)
+
+    p_rfb = sub.add_parser(
+        "remote-feedback",
+        help="Confirm or dismiss a finding on a hosted dashboard (agents serve)",
+    )
+    p_rfb.add_argument("finding_id")
+    p_rfb.add_argument("verdict", choices=["confirm", "dismiss"])
+    p_rfb.add_argument("--reason", required=True)
+    p_rfb.add_argument(
+        "--url",
+        default=os.environ.get(
+            "AGENTS_DASHBOARD_URL", "https://agents.rushingtechnologies.com"
+        ),
+    )
+    p_rfb.add_argument(
+        "--token", help="Bearer token (default: $AGENTS_DASHBOARD_TOKEN)"
+    )
+    p_rfb.set_defaults(func=cmd_remote_feedback)
 
     p_prospect = sub.add_parser(
         "prospect-report",

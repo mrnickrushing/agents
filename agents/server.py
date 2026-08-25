@@ -972,6 +972,36 @@ def create_app(
             return jsonify({"error": str(exc)}), 429
         return jsonify({"job": job}), 202
 
+    @app.post("/api/feedback")
+    def api_feedback():
+        """Record a human verdict on a finding — the web form of
+        `agents feedback <id> confirm|dismiss --reason ...`. Human verdicts
+        outrank triage and hide dismissed findings from the board."""
+        refusal = denied()
+        if refusal:
+            return refusal
+        body = request.get_json(silent=True) or {}
+        finding_id = str(body.get("finding_id", "")).strip()
+        verdict = str(body.get("verdict", "")).strip()
+        reason = str(body.get("reason", "")).strip()[:500]
+        if not finding_id or not verdict or not reason:
+            return (
+                jsonify({"error": "finding_id, verdict and reason are required"}),
+                400,
+            )
+        try:
+            with EvolutionStore(resolved_db) as store:
+                result = store.add_feedback(finding_id, verdict, reason)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except KeyError:
+            return jsonify({"error": f"unknown finding id {finding_id}"}), 404
+        result["by"] = g.principal.get("login", "")
+        dashboard.publish_event(
+            f"feedback {finding_id}: {result['verdict'].lower()} by {result['by']}"
+        )
+        return jsonify(result)
+
     @app.get("/api/jobs")
     def api_jobs():
         return jsonify({"jobs": jobs.recent()})
