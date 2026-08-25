@@ -36,6 +36,52 @@ def _shannon_entropy(value: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in freq.values())
 
 
+_PLACEHOLDER_CREDENTIALS = frozenset(
+    {
+        "secret",
+        "password",
+        "passwd",
+        "pwd",
+        "pass",
+        "user",
+        "username",
+        "token",
+        "apikey",
+        "api_key",
+        "key",
+        "xxx",
+        "xxxx",
+        "xxxxx",
+        "changeme",
+        "redacted",
+        "hunter2",
+        "example",
+        "sample",
+        "test",
+        "dummy",
+        "none",
+    }
+)
+
+
+def _is_placeholder_credential(value: str) -> bool:
+    """The credential part of a match is documentation, not a secret: the
+    literal word ``secret`` in ``postgres://user:secret@host/db`` from a
+    docstring, a ``<password>`` / ``${DB_PASSWORD}`` / ``{{ pass }}`` template
+    slot, or a run of asterisks."""
+    value = (value or "").strip()
+    if not value:
+        return False
+    lowered = value.lower()
+    if lowered in _PLACEHOLDER_CREDENTIALS:
+        return True
+    if lowered.startswith(("<", "${", "{{", "%(", "$(", "{")) or lowered.startswith(
+        "$"
+    ):
+        return True
+    return set(value) <= {"*", "x", "X", "."}
+
+
 class SecurityAuditAgent(BaseAgent):
     """
     Security hardening and audit agent for Node/Express, React, and React Native apps.
@@ -1455,8 +1501,10 @@ Format findings as structured reports with severity, location, description, and 
         )
         secret_patterns = [
             (r"api[_-]?key\s*[:=]\s*[\"']([a-zA-Z0-9\-_]{20,})[\"']", "API Key"),
-            (r"password\s*[:=]\s*[\"']([^\"']{10,})[\"']", "Password"),
-            (r"secret\s*[:=]\s*[\"']([^\"']{20,})[\"']", "Secret"),
+            # No newlines inside the value: a string that merely ends with the
+            # word "secret:" must not pair up with a quote on a later line.
+            (r"password\s*[:=]\s*[\"']([^\"'\n]{10,})[\"']", "Password"),
+            (r"secret\s*[:=]\s*[\"']([^\"'\n]{20,})[\"']", "Secret"),
             (
                 r"token\s*[:=]\s*[\"'](eyJ[A-Za-z0-9\-_=.]+\.eyJ[A-Za-z0-9\-_=.]+\.?[A-Za-z0-9\-_.=]*)[\"']",
                 "JWT Token",
@@ -1476,6 +1524,10 @@ Format findings as structured reports with severity, location, description, and 
                 matched_text = match.group(0)
                 if ignore_re.search(matched_text) or re.search(
                     r"\bappl_[A-Za-z0-9_]+\b", matched_text
+                ):
+                    continue
+                if _is_placeholder_credential(
+                    match.group(1) if match.lastindex else ""
                 ):
                     continue
                 line = code.count("\n", 0, match.start()) + 1
