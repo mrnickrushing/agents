@@ -674,8 +674,24 @@ def create_app(
     # ── who is asking? ──────────────────────────────────────────────
     def principal() -> Optional[Dict[str, Any]]:
         """The signed-in person (cookie session) or the bearer token."""
-        current = sessions.get(request.cookies.get(SESSION_COOKIE))
+        session_id = request.cookies.get(SESSION_COOKIE)
+        current = sessions.get(session_id)
         if current:
+            if webauth.token_needs_refresh(current):
+                # GitHub App user tokens expire in 8 hours; the session is
+                # good for 30 days, so renew quietly with the refresh token.
+                try:
+                    fresh = webauth.refresh_access_token(
+                        oauth_config, current["refresh_token"]
+                    )
+                    sessions.update_tokens(session_id, fresh)
+                    current = {
+                        **current,
+                        **fresh,
+                        "github_token": fresh["access_token"],
+                    }
+                except (OSError, ValueError, PermissionError) as exc:
+                    logger.warning("GitHub token refresh failed: %s", exc)
             return {"kind": "session", **current}
         header = request.headers.get("Authorization", "")
         supplied = header[7:] if header.startswith("Bearer ") else ""
@@ -737,8 +753,10 @@ def create_app(
         if not expected or not code or not hmac.compare_digest(expected, state):
             return jsonify({"error": "sign-in state mismatch; try again"}), 400
         try:
-            access_token = webauth.exchange_code(oauth_config, code, callback_url())
-            user = webauth.fetch_user(access_token)
+            tokens = webauth.normalize_tokens(
+                webauth.exchange_code(oauth_config, code, callback_url())
+            )
+            user = webauth.fetch_user(tokens["access_token"])
         except (OSError, ValueError, PermissionError) as exc:
             logger.warning("GitHub sign-in failed: %s", exc)
             return jsonify({"error": "GitHub sign-in failed; try again"}), 502
@@ -752,7 +770,7 @@ def create_app(
                 ),
                 403,
             )
-        session_id = sessions.create(user, access_token)
+        session_id = sessions.create(user, tokens)
         response = redirect("/")
         response.set_cookie(
             SESSION_COOKIE,
@@ -811,7 +829,15 @@ def create_app(
         except (OSError, ValueError) as exc:
             return jsonify({"error": f"GitHub did not answer: {exc}"}), 502
         repo_cache[cache_key] = {"at": time.time(), "repos": repos}
-        return jsonify({"repos": repos, "cached": False})
+        hint = ""
+        if not repos and g.principal["kind"] == "session":
+            hint = (
+                "GitHub returned no repositories for this sign-in. If the app you "
+                "created is a GitHub App (client id starts with 'Iv'), install it on "
+                "your account with Contents: read access — GitHub Apps only see "
+                "repositories they are installed on."
+            )
+        return jsonify({"repos": repos, "cached": False, "hint": hint})
 
     @app.get("/api/branches")
     def api_branches():

@@ -222,6 +222,56 @@ def test_scan_uses_the_signed_in_token_for_the_clone(app, monkeypatch, tmp_path)
     assert "gh-abc" not in str(job)
 
 
+def test_github_app_tokens_are_refreshed_when_expiring(app, github, monkeypatch):
+    """GitHub Apps issue 8-hour user tokens with a refresh token; the 30-day
+    session must renew them quietly instead of failing."""
+    refreshed = {}
+
+    def exchange(config, code, redirect_uri):
+        return {
+            "access_token": "gh-abc",
+            "refresh_token": "ghr-1",
+            "token_expires_at": time.time() + 30,  # about to expire
+        }
+
+    def refresh(config, refresh_token):
+        refreshed["with"] = refresh_token
+        return {
+            "access_token": "gh-new",
+            "refresh_token": "ghr-2",
+            "token_expires_at": time.time() + 8 * 3600,
+        }
+
+    monkeypatch.setattr(webauth, "exchange_code", exchange)
+    monkeypatch.setattr(webauth, "refresh_access_token", refresh)
+    client = app.test_client()
+    _sign_in(client)
+    client.get("/api/repos")
+    assert refreshed["with"] == "ghr-1"
+    assert github["repos_token"] == "gh-new"
+    # Second call: the renewed token is stored, no second refresh.
+    refreshed.clear()
+    client.get("/api/branches?repo=nick/app")
+    assert not refreshed and github["branches"][0] == "gh-new"
+
+
+def test_session_store_migrates_older_databases(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "sessions.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE web_sessions (id_hash TEXT PRIMARY KEY, login TEXT NOT NULL, "
+            "name TEXT NOT NULL, avatar_url TEXT NOT NULL, github_token TEXT NOT NULL, "
+            "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
+        )
+    store = SessionStore(str(path))
+    sid = store.create({"login": "nick"}, {"access_token": "a", "refresh_token": "r"})
+    assert store.get(sid)["refresh_token"] == "r"
+    store.update_tokens(sid, "b")
+    assert store.get(sid)["github_token"] == "b"
+
+
 def test_sign_in_disabled_without_oauth_app(tmp_path):
     app = create_app(
         db_path=str(tmp_path / "e.db"),

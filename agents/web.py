@@ -497,8 +497,9 @@ async function loadRepos() {
   try {
     const r = await fetch('/api/repos', { headers: authHeaders() });
     if (!r.ok) { sel.hidden = true; text.hidden = false; return; }
-    const repos = (await r.json()).repos || [];
-    if (!repos.length) { sel.hidden = true; text.hidden = false; return; }
+    const data = await r.json();
+    const repos = data.repos || [];
+    if (!repos.length) { sel.hidden = true; text.hidden = false; if (data.hint) setStatus($('#scan-status'), data.hint, 'err'); return; }
     sel.innerHTML = '<option value="">Choose a repository…</option>' + repos.map(x =>
       `<option value="${esc(x.full_name)}" data-branch="${esc(x.default_branch)}">${esc(x.full_name)}${x.private ? ' 🔒' : ''}</option>`).join('');
     sel.hidden = false; text.hidden = true;
