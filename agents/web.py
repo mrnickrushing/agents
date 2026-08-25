@@ -508,22 +508,22 @@ function findingsMarkdown(rows) {
     groups.get(key).push(f);
   }
   const lines = [`# agents findings — ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`, '',
-    `Please fix these ${rows.length} finding(s). For each: change the code, keep behaviour, and say what you changed. Dismiss with \`agents feedback <id> dismiss --reason "..."\` if it is a false positive.`, ''];
+    `Please fix these ${rows.length} finding(s). For each: change the code, keep behaviour, and say what you changed. Dismiss with 'agents feedback <id> dismiss --reason "..."' if it is a false positive.`, ''];
   for (const [repo, list] of groups) {
     const first = list[0];
     const where = first.pull_request && first.pull_request.url ? ` (PR #${first.pull_request.number}: ${first.pull_request.url})`
       : first.repository && first.repository.head_sha ? ` (@ ${first.repository.ref || 'default'} ${String(first.repository.head_sha).slice(0, 7)})` : '';
     lines.push(`## ${repo}${where}`, '');
     for (const f of list) {
-      lines.push(`- **${f.severity}** \`${f.file_path || '?'}${f.line ? ':' + f.line : ''}\` — ${f.issue}`);
-      if (f.snippet) lines.push(`  - line: \`${f.snippet}\``);
+      lines.push(`- **${f.severity}** \\`${f.file_path || '?'}${f.line ? ':' + f.line : ''}\\` — ${f.issue}`);
+      if (f.snippet) lines.push(`  - line: \\`${f.snippet}\\``);
       if (f.why) lines.push(`  - why: ${f.why}`);
       if (f.fix) lines.push(`  - fix: ${f.fix}`);
       lines.push(`  - detector: ${f.detector}${f.finding_id ? ` · id: ${f.finding_id}` : ''}`);
     }
     lines.push('');
   }
-  return lines.join('\n');
+  return lines.join('\\n');
 }
 $('#copy-claude').addEventListener('click', async () => {
   const rows = visibleFindings(); const b = $('#copy-claude');

@@ -283,6 +283,36 @@ def test_dashboard_page_renders_the_review_layout(app):
     }
 
 
+def test_inline_scripts_parse():
+    """The dashboard's JavaScript lives inside a Python string; a stray
+    escape (`'\\n'` becoming a real newline) once broke the whole page. Parse
+    every inline script with node when it is available."""
+    import re
+    import shutil
+    import subprocess
+
+    from agents.web import _HTML, _LOGIN_HTML
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    for name, html in (("dashboard", _HTML), ("login", _LOGIN_HTML)):
+        scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+        if not scripts:
+            continue
+        path = tmp_script = None
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write("\n".join(scripts))
+            path = tmp_script = fh.name
+        result = subprocess.run(
+            [node, "--check", path], capture_output=True, text=True, timeout=60
+        )
+        assert result.returncode == 0, f"{name}: {result.stderr[-800:]}"
+        assert tmp_script
+
+
 def test_home_screen_assets_for_iphone(app):
     client = app.test_client()
     page = client.get("/").get_data(as_text=True)
