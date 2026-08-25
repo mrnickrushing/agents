@@ -595,6 +595,7 @@ def create_app(
     oauth: Optional[OAuthConfig] = None,
     session_db_path: Optional[str] = None,
     public: Optional[bool] = None,
+    public_url_override: Optional[str] = None,
 ):
     """Build the WSGI app. `webhook_secret=None` reads GITHUB_WEBHOOK_SECRET
     and `dashboard_token=None` reads DASHBOARD_TOKEN; an empty string
@@ -707,6 +708,29 @@ def create_app(
     require_sign_in = runs_enabled and not public
     app.config["REQUIRE_SIGN_IN"] = require_sign_in
 
+    # One public origin. A Railway service answers on several hostnames (the
+    # generated *.up.railway.app ones and the custom domain); the OAuth App
+    # only knows one callback URL and cookies do not travel between hosts, so
+    # every other host is sent to the canonical one.
+    from urllib.parse import urlsplit
+
+    public_url = (
+        os.environ.get("PUBLIC_URL")
+        if public_url_override is None
+        else public_url_override
+    )
+    canonical = urlsplit(public_url) if public_url else None
+    app.config["PUBLIC_URL"] = public_url or ""
+
+    @app.before_request
+    def canonical_host():
+        if canonical is None or request.path in ("/health", "/ready"):
+            return None
+        if request.host.lower() == canonical.netloc.lower():
+            return None
+        target = f"{canonical.scheme}://{canonical.netloc}{request.full_path}"
+        return redirect(target.rstrip("?"), code=308)
+
     # Reachable without signing in: probes, the GitHub webhook, the sign-in
     # flow itself, and the home-screen assets the sign-in page references.
     public_paths = {
@@ -794,7 +818,8 @@ def create_app(
         return None
 
     def callback_url() -> str:
-        return request.host_url.rstrip("/") + "/auth/callback"
+        base = public_url.rstrip("/") if public_url else request.host_url.rstrip("/")
+        return base + "/auth/callback"
 
     # ── sign in ─────────────────────────────────────────────────────
     def start_session(user: Dict[str, Any], tokens: Any):
