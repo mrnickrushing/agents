@@ -232,14 +232,17 @@ def format_scan_summary(
 
 def _fetch_pr_diff(pr: Dict[str, Any]) -> str:
     url = pr.get("diff_url")
-    token = os.getenv("GITHUB_TOKEN")
-    if not url or not token:
+    if not url:
         return ""
     headers = {
         "Accept": "application/vnd.github.v3.diff",
         "User-Agent": "rushingtech-agents",
-        "Authorization": f"Bearer {token}",
     }
+    # Public repositories serve the diff without credentials; a token only
+    # widens that to private ones (and lifts the anonymous rate limit).
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=15) as response:

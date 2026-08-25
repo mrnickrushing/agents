@@ -14,6 +14,7 @@ Then open http://localhost:8000 in your browser.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -60,6 +61,10 @@ th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--bo
 th { font-size: 12px; text-transform: uppercase; color: var(--muted); }
 tr:last-child td { border-bottom: none; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; background: var(--surface); border: 1px solid var(--border); }
+.fix { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.where { font-size: 12px; }
+.where a { color: var(--info); text-decoration: none; }
+.where .loc { color: var(--muted); font-family: monospace; word-break: break-all; }
 #sse-log { margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; color: var(--muted); }
 </style>
 </head>
@@ -79,7 +84,7 @@ tr:last-child td { border-bottom: none; }
 
   <h2 style="margin-bottom:12px;font-size:16px;">Recent findings</h2>
   <table id="findings-table">
-    <thead><tr><th>Severity</th><th>Issue</th><th>File</th><th>Detector</th><th>Scanned at</th></tr></thead>
+    <thead><tr><th>Severity</th><th>Issue</th><th>Where</th><th>Detector</th><th>Scanned at</th></tr></thead>
     <tbody id="findings-body"><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody>
   </table>
 
@@ -116,12 +121,25 @@ async function loadFindings() {
     tbody.innerHTML = d.findings.map(f => `
       <tr>
         <td><span class="badge ${f.severity}">${f.severity}</span></td>
-        <td>${esc(f.issue)}</td>
-        <td style="color:var(--muted);font-size:12px">${esc(f.file_path ?? '')}</td>
+        <td>${esc(f.issue)}${f.fix ? `<div class="fix">${esc(f.fix)}</div>` : ''}</td>
+        <td class="where">${where(f)}</td>
         <td style="color:var(--muted);font-size:12px">${esc(f.detector ?? '')}</td>
         <td style="color:var(--muted);font-size:12px">${esc(f.scanned_at ?? '')}</td>
       </tr>`).join('');
   } catch(e) { console.warn('findings fetch failed', e); }
+}
+
+function where(f) {
+  const parts = [];
+  const pr = f.pull_request;
+  if (pr && pr.url) {
+    parts.push(`<a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo || f.project_label || '')} #${esc(pr.number)}</a>`);
+  } else if (f.project_label) {
+    parts.push(esc(f.project_label));
+  }
+  const loc = (f.file_path || '') + (f.line ? ':' + f.line : '');
+  if (loc) parts.push(`<span class="loc">${esc(loc)}</span>`);
+  return parts.join('<br>') || '<span style="color:var(--muted)">—</span>';
 }
 
 function esc(s) {
@@ -204,8 +222,9 @@ class AgentsDashboard:
         """Return the most recent findings, newest scan first.
 
         Reads the evolution store's own schema (findings joined to scan_runs
-        for the timestamp and project) — the columns the CLI records, not a
-        dashboard-only shape.
+        for the timestamp and project). Line numbers and the originating
+        pull request are not columns — they live in the recorded report
+        JSON — so they are looked up per scan for the page being rendered.
         """
         conn = self._connect()
         if conn is None:
@@ -214,29 +233,66 @@ class AgentsDashboard:
             cur = conn.cursor()
             cur.execute(
                 "SELECT f.severity, f.issue, f.file, f.agent, f.tool, f.fix, "
-                "f.finding_id, r.created_at, r.project_path "
+                "f.finding_id, r.created_at, r.project_path, r.scan_id "
                 "FROM findings f JOIN scan_runs r ON r.scan_id = f.scan_id "
                 "ORDER BY r.created_at DESC, f.rowid DESC LIMIT ?",
                 (limit,),
             )
-            findings = [
-                {
-                    "severity": row[0],
-                    "issue": row[1],
-                    "file_path": row[2],
-                    "detector": f"{row[3]}.{row[4]}" if row[4] else row[3],
-                    "fix": row[5],
-                    "finding_id": row[6],
-                    "scanned_at": row[7],
-                    "project": row[8],
-                }
-                for row in cur.fetchall()
-            ]
+            rows = cur.fetchall()
+            extras = self._report_extras(cur, {row[9] for row in rows})
+            findings = []
+            for row in rows:
+                scan_extra = extras.get(row[9], {})
+                per_finding = scan_extra.get("findings", {}).get(row[6], {})
+                findings.append(
+                    {
+                        "severity": row[0],
+                        "issue": row[1],
+                        "file_path": row[2],
+                        "line": per_finding.get("line"),
+                        "detector": f"{row[3]}.{row[4]}" if row[4] else row[3],
+                        "fix": row[5],
+                        "finding_id": row[6],
+                        "scanned_at": row[7],
+                        "project": row[8],
+                        "project_label": _project_label(row[8]),
+                        "pull_request": scan_extra.get("pull_request"),
+                        "scan_id": row[9],
+                    }
+                )
             return {"findings": findings}
         except sqlite3.OperationalError:
             return {"findings": []}
         finally:
             conn.close()
+
+    @staticmethod
+    def _report_extras(cur: sqlite3.Cursor, scan_ids: set) -> Dict[str, Any]:
+        """Per scan: the pull-request block and finding_id → line map."""
+        extras: Dict[str, Any] = {}
+        for scan_id in scan_ids:
+            cur.execute(
+                "SELECT report_json FROM scan_runs WHERE scan_id = ?", (scan_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                continue
+            try:
+                report = json.loads(row[0])
+            except (TypeError, ValueError):
+                continue
+            per_finding: Dict[str, Dict[str, Any]] = {}
+            for entry in report.get("results", []):
+                for finding in entry.get("result", {}).get("findings", []):
+                    if isinstance(finding, dict) and finding.get("finding_id"):
+                        per_finding[finding["finding_id"]] = {
+                            "line": finding.get("line")
+                        }
+            extras[scan_id] = {
+                "pull_request": report.get("pull_request"),
+                "findings": per_finding,
+            }
+        return extras
 
     # ── SSE (Server-Sent Events) ──────────────────────────────────────
 
@@ -308,6 +364,15 @@ class AgentsDashboard:
         if not self._db_path or not os.path.isfile(self._db_path):
             return None
         return sqlite3.connect(self._db_path)
+
+
+def _project_label(project_path: str) -> str:
+    """`/github/owner/repo` → `owner/repo`; a filesystem path → its basename."""
+    if not project_path:
+        return ""
+    if project_path.startswith("/github/"):
+        return project_path[len("/github/") :]
+    return os.path.basename(project_path.rstrip("/")) or project_path
 
 
 def _default_db_path() -> str:

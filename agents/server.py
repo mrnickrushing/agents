@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
@@ -50,37 +51,123 @@ def resolve_db_path(db_path: Optional[str] = None) -> str:
     return db_path or os.environ.get("AGENTS_DB") or _default_db_path()
 
 
+PR_BODY_FILE = "(pull request description)"
+
+_DIFF_HEADER = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+)$")
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
+
+
+def split_unified_diff(diff: str) -> List[Dict[str, Any]]:
+    """Split a unified diff into the *added* text of each file.
+
+    Returns one dict per file: ``path``, ``text`` (the added lines joined, in
+    order) and ``lines`` (for each of those lines, its line number in the new
+    file). Only added lines are scanned — a secret already present in the
+    surrounding context predates the PR and should not be pinned on it.
+    """
+    files: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+    new_line = 0
+    for raw in diff.splitlines():
+        header = _DIFF_HEADER.match(raw)
+        if header:
+            current = {"path": header.group("b"), "added": [], "lines": []}
+            files.append(current)
+            new_line = 0
+            continue
+        if current is None:
+            continue
+        hunk = _HUNK_HEADER.match(raw)
+        if hunk:
+            new_line = int(hunk.group("start"))
+            continue
+        if raw.startswith("+++") or raw.startswith("---"):
+            continue
+        if raw.startswith("+"):
+            current["added"].append(raw[1:])
+            current["lines"].append(new_line)
+            new_line += 1
+        elif raw.startswith("-") or raw.startswith("\\"):
+            continue
+        else:
+            new_line += 1
+    return [
+        {"path": f["path"], "text": "\n".join(f["added"]), "lines": f["lines"]}
+        for f in files
+        if f["added"]
+    ]
+
+
 def scan_pull_request_diff(diff: str) -> List[Dict[str, Any]]:
-    """The static check the webhook runs on a PR diff (no API key needed)."""
+    """The static check the webhook runs on a PR (no API key needed).
+
+    Each finding carries ``file`` and ``line`` in the PR's new-file
+    coordinates. Text that is not a unified diff (the PR description, used
+    when the diff could not be fetched) is scanned as one pseudo-file.
+    """
     from agents.security_audit import SecurityAuditAgent
 
     handler = getattr(SecurityAuditAgent(), f"_{WEBHOOK_TOOL}")
-    return list(handler(diff).get("findings", []))
+    sections = split_unified_diff(diff) or [
+        {"path": PR_BODY_FILE, "text": diff, "lines": None}
+    ]
+    findings: List[Dict[str, Any]] = []
+    for section in sections:
+        for finding in handler(section["text"]).get("findings", []):
+            finding = dict(finding)
+            finding["file"] = section["path"]
+            local = finding.get("line")
+            if section["lines"] is not None and isinstance(local, int):
+                if 1 <= local <= len(section["lines"]):
+                    finding["line"] = section["lines"][local - 1]
+            findings.append(finding)
+    return findings
 
 
-def record_webhook_result(db_path: str, result: Dict[str, Any]) -> Optional[str]:
+def record_webhook_result(
+    db_path: str,
+    result: Dict[str, Any],
+    pull_request: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Persist a webhook scan into the evolution store.
 
     The report shape mirrors what `agents scan` records so the dashboard,
     `agents history`, and `agents feedback` all see webhook findings the same
     way they see local ones. The project identity is the repository (not a
-    filesystem path), so every PR of one repo shares a finding history.
+    filesystem path) so every PR of one repo shares a finding history; the
+    PR itself (number, URL, title, head SHA) is kept on the report for the
+    dashboard to link to.
     """
     if result.get("action") != "scanned":
         return None
     repo = result.get("repo") or "unknown/unknown"
     pr_number = result.get("pr_number", 0)
+    head_sha = str((pull_request or {}).get("head_sha") or result.get("head_sha") or "")
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for finding in result.get("findings", []):
+        by_file.setdefault(str(finding.get("file") or PR_BODY_FILE), []).append(
+            dict(finding)
+        )
     report: Dict[str, Any] = {
         "project": f"/github/{repo}",
         "source": "github-webhook",
+        "pull_request": {
+            "repo": repo,
+            "number": pr_number,
+            "url": (pull_request or {}).get("url")
+            or f"https://github.com/{repo}/pull/{pr_number}",
+            "title": (pull_request or {}).get("title", ""),
+            "head_sha": head_sha,
+        },
         "results": [
             {
-                "file": f"pull/{pr_number}.diff",
+                "file": path,
                 "agent": WEBHOOK_AGENT,
                 "tool": WEBHOOK_TOOL,
-                "source_hash": str(result.get("head_sha") or "unavailable"),
-                "result": {"findings": list(result.get("findings", []))},
+                "source_hash": head_sha or "unavailable",
+                "result": {"findings": findings},
             }
+            for path, findings in by_file.items()
         ],
     }
     with EvolutionStore(db_path) as store:
@@ -134,11 +221,17 @@ def create_app(db_path: Optional[str] = None, webhook_secret: Optional[str] = No
     integration = GitHubIntegration(webhook_secret=secret) if secret else None
 
     def on_result(payload: Dict[str, Any], result: Dict[str, Any]) -> None:
-        head = (payload.get("pull_request") or {}).get("head") or {}
+        pr = payload.get("pull_request") or {}
+        head = pr.get("head") or {}
         if head.get("sha"):
             result["head_sha"] = head["sha"]
+        meta = {
+            "url": pr.get("html_url"),
+            "title": pr.get("title", ""),
+            "head_sha": head.get("sha", ""),
+        }
         try:
-            scan_id = record_webhook_result(resolved_db, result)
+            scan_id = record_webhook_result(resolved_db, result, pull_request=meta)
         except (OSError, sqlite3.Error) as exc:
             logger.error("webhook scan could not be recorded: %s", exc)
             result["recorded"] = False
