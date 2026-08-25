@@ -157,35 +157,35 @@ def test_public_mode_keeps_findings_open_but_gates_runs(tmp_path, github):
     assert client.get("/api/me").get_json()["sign_in_required"] is False
 
 
-def test_other_hosts_redirect_to_the_public_url_and_callback_uses_it(tmp_path, github):
-    """Opening the site on a generated *.up.railway.app host must not build
-    an OAuth callback GitHub has never heard of."""
+def test_every_listed_origin_is_a_full_front_door(tmp_path, github):
+    """The custom domain and the Railway domain both serve the site; GitHub
+    is sent back to whichever one the visitor is on. Unknown hosts fall back
+    to the first origin's callback instead of one GitHub has never seen."""
     app = create_app(
         db_path=str(tmp_path / "e.db"),
         webhook_secret="",
         dashboard_token=TOKEN,
         oauth=OAuthConfig(client_id="cid", client_secret="cs", allowed_logins=["nick"]),
         session_db_path=":memory:",
-        public_url_override="https://agents.example.com",
+        public_url_override=(
+            "https://agents.example.com, https://agents-server-xyz.up.railway.app/"
+        ),
     )
     client = app.test_client()
-    stray = client.get(
-        "/login?x=1", base_url="https://agents-server-xyz.up.railway.app"
-    )
-    assert stray.status_code == 308
-    assert stray.headers["Location"] == "https://agents.example.com/login?x=1"
-    # Probes must keep answering on any host (Railway's healthcheck uses one).
-    assert (
-        client.get(
-            "/health", base_url="https://agents-server-xyz.up.railway.app"
-        ).status_code
-        == 200
-    )
-    login = client.get("/auth/login", base_url="https://agents.example.com")
+    for host in ("https://agents.example.com", "https://agents-server-xyz.up.railway.app"):
+        page = client.get("/login", base_url=host)
+        assert page.status_code == 200, host
+        login = client.get("/auth/login", base_url=host)
+        assert login.status_code == 302
+        encoded = host.replace("://", "%3A%2F%2F") + "%2Fauth%2Fcallback"
+        assert f"redirect_uri={encoded}" in login.headers["Location"], host
+    stray = client.get("/auth/login", base_url="https://preview-123.up.railway.app")
     assert (
         "redirect_uri=https%3A%2F%2Fagents.example.com%2Fauth%2Fcallback"
-        in login.headers["Location"]
+        in stray.headers["Location"]
     )
+    # Nothing redirects between hosts any more.
+    assert client.get("/login", base_url="https://preview-123.up.railway.app").status_code == 200
 
 
 def test_nothing_configured_means_nothing_to_sign_into(tmp_path):

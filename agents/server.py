@@ -708,28 +708,27 @@ def create_app(
     require_sign_in = runs_enabled and not public
     app.config["REQUIRE_SIGN_IN"] = require_sign_in
 
-    # One public origin. A Railway service answers on several hostnames (the
-    # generated *.up.railway.app ones and the custom domain); the OAuth App
-    # only knows one callback URL and cookies do not travel between hosts, so
-    # every other host is sent to the canonical one.
+    # The origins this site is served on. A Railway service answers on several
+    # hostnames (the generated *.up.railway.app ones and the custom domain);
+    # each one is a full front door. The OAuth callback is built from the host
+    # the visitor is on when that host is listed here, so GitHub sends them
+    # back to the same site (cookies do not travel between hosts). A visit on
+    # an unlisted host falls back to the first origin's callback, which GitHub
+    # must know about. Empty → whatever host the request arrived on.
     from urllib.parse import urlsplit
 
-    public_url = (
-        os.environ.get("PUBLIC_URL")
+    raw_public = (
+        os.environ.get("PUBLIC_URL", "")
         if public_url_override is None
         else public_url_override
     )
-    canonical = urlsplit(public_url) if public_url else None
-    app.config["PUBLIC_URL"] = public_url or ""
-
-    @app.before_request
-    def canonical_host():
-        if canonical is None or request.path in ("/health", "/ready"):
-            return None
-        if request.host.lower() == canonical.netloc.lower():
-            return None
-        target = f"{canonical.scheme}://{canonical.netloc}{request.full_path}"
-        return redirect(target.rstrip("?"), code=308)
+    public_origins = [
+        origin.strip().rstrip("/")
+        for origin in (raw_public or "").split(",")
+        if origin.strip()
+    ]
+    public_hosts = {urlsplit(origin).netloc.lower() for origin in public_origins}
+    app.config["PUBLIC_URLS"] = list(public_origins)
 
     # Reachable without signing in: probes, the GitHub webhook, the sign-in
     # flow itself, and the home-screen assets the sign-in page references.
@@ -818,8 +817,10 @@ def create_app(
         return None
 
     def callback_url() -> str:
-        base = public_url.rstrip("/") if public_url else request.host_url.rstrip("/")
-        return base + "/auth/callback"
+        here = request.host_url.rstrip("/")
+        if public_origins and request.host.lower() not in public_hosts:
+            here = public_origins[0]
+        return here + "/auth/callback"
 
     # ── sign in ─────────────────────────────────────────────────────
     def start_session(user: Dict[str, Any], tokens: Any):
