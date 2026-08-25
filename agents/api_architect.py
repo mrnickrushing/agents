@@ -197,7 +197,9 @@ When reviewing, always cite the specific endpoint/response shape that's inconsis
         list_query_evidence = bool(
             re.search(
                 r"\bfindmany\s*\(|\.fetchall\s*\(|\.all\s*\(|"
-                r"\b(?:list|getall|fetchall|loadall)[a-z0-9_]*\s*\(|"
+                # list(?!en) so server.listen( / addListener( — plain network
+                # setup, no collection — do not read as a list query.
+                r"\b(?:list(?!en)|getall|fetchall|loadall)[a-z0-9_]*\s*\(|"
                 r"\bdb\.select\s*\(.*?\)\s*\.from\s*\(",
                 code_lower,
                 re.DOTALL,
