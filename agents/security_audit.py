@@ -1657,9 +1657,28 @@ Format findings as structured reports with severity, location, description, and 
             ),
         ]
 
+        # A log that prints only whether a secret is *present* — a ternary
+        # yielding "[set]" / "[NOT SET]", a Boolean() coercion, a masked or
+        # sliced value — is not a leak. Only flag a match whose own line has
+        # no such redaction/presence marker.
+        redaction_markers = re.compile(
+            r"\[\s*(?:set|not set|redacted|filtered|hidden|masked|present|missing)"
+            r"\s*[\]\-]|"
+            r"\?\s*['\"]|\bBoolean\s*\(|!!|\*{3,}|"
+            r"redact|mask|sanitiz|anonymiz|\.slice\(|\.substring\(|substr\(",
+            re.IGNORECASE,
+        )
+
+        def _line_of(index: int) -> str:
+            start = code.rfind("\n", 0, index) + 1
+            end = code.find("\n", index)
+            return code[start : end if end != -1 else len(code)]
+
         sensitive_log_found = False
         for pattern, data_type, severity in sensitive_patterns:
-            if re.search(pattern, code, re.IGNORECASE):
+            for match in re.finditer(pattern, code, re.IGNORECASE):
+                if redaction_markers.search(_line_of(match.start())):
+                    continue
                 sensitive_log_found = True
                 findings.append(
                     {
@@ -1668,6 +1687,7 @@ Format findings as structured reports with severity, location, description, and 
                         "fix": f"Filter or redact {data_type.lower()} before logging; use structured logging with field redaction",
                     }
                 )
+                break
 
         # Check for proper PII redaction
         if sensitive_log_found and not re.search(
