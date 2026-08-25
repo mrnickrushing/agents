@@ -47,11 +47,53 @@ def test_flow_webhook_without_idempotency_is_high_and_idempotent_one_is_clean():
 
 
 def test_flow_retry_without_backoff_and_upload_without_cleanup():
-    code = "for attempt in range(5):\n    upload(file)\n"
+    code = (
+        "const upload = multer({ dest: 'tmp/' });\n"
+        "app.post('/avatar', upload.single('file'), (req, res) => {\n"
+        "  for (let attempt = 0; attempt < 5; attempt++) store(req.file);\n"
+        "});\n"
+    )
     issues = _issues(FlowAuditAgent()._audit_flow_logic(code))
     assert "Retry logic has no visible exponential backoff" in issues
     assert "Upload workflow has no visible cleanup on failure" in issues
     assert "Upload flow has no visible malware scanning step" in issues
+
+
+def test_flow_does_not_mistake_react_and_expo_idioms_for_server_flows():
+    """Regression from a real scan: an Expo screen was flagged for OAuth
+    state, server uploads, concurrent writes and unhandled async — none of
+    which it contains."""
+    code = (
+        'import { useCallback, useState } from "react";\n'
+        'import { File } from "expo-file-system";\n'
+        "export default function Screen() {\n"
+        "  const [state, setState] = useState(null);\n"
+        "  const load = useCallback(async () => {\n"
+        "    try {\n"
+        "      const [lib, saved] = await Promise.all([getLibrary(), getSaved()]);\n"
+        "      const data = await new File(saved.uri).base64();\n"
+        "      setState({ lib, data });\n"
+        "    } catch (e) { report(e); }\n"
+        "  }, []);\n"
+        "  return null;\n"
+        "}\n"
+    )
+    assert FlowAuditAgent()._audit_flow_logic(code)["findings"] == []
+
+
+def test_flow_still_flags_real_oauth_and_parallel_writes():
+    oauth = "const url = `${AUTH}/authorize?client_id=${id}&redirect_uri=${cb}`;"
+    assert "OAuth flow has no visible state parameter validation" in _issues(
+        FlowAuditAgent()._audit_flow_logic(oauth)
+    )
+    writes = "await Promise.all(items.map(i => db.items.update(i.id, { seen: true })));"
+    assert "Concurrent state updates with no visible lock/transaction guard" in _issues(
+        FlowAuditAgent()._audit_flow_logic(writes)
+    )
+    unhandled = "async function go() { await fetch(url); }"
+    assert "Async flow may create unhandled rejection/exception paths" in _issues(
+        FlowAuditAgent()._audit_flow_logic(unhandled)
+    )
 
 
 def test_flow_clean_code_has_no_findings():
