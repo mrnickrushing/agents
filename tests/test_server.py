@@ -295,3 +295,164 @@ def test_home_screen_assets_for_iphone(app):
     assert icon.status_code == 200
     assert icon.mimetype == "image/png"
     assert icon.data.startswith(b"\x89PNG")
+
+
+# ── Running agents from the web ──────────────────────────────────────────
+
+TOKEN = "dashboard-test-token"
+
+
+@pytest.fixture
+def run_app(tmp_path):
+    return create_app(
+        db_path=str(tmp_path / "evolution.db"),
+        webhook_secret="",
+        dashboard_token=TOKEN,
+    )
+
+
+def test_agent_catalog_lists_every_cli_agent(run_app):
+    from agents.cli import AGENTS
+
+    d = run_app.test_client().get("/api/agents").get_json()
+    assert d["runs_enabled"] is True
+    assert {a["key"] for a in d["agents"]} == set(AGENTS)
+    sec = next(a for a in d["agents"] if a["key"] == "security_audit")
+    tool = next(t for t in sec["tools"] if t["name"] == "audit_hardcoded_secrets")
+    assert "code" in tool["parameters"]["properties"]
+
+
+def test_run_endpoints_are_disabled_without_a_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("DASHBOARD_TOKEN", raising=False)
+    app = create_app(
+        db_path=str(tmp_path / "e.db"), webhook_secret="", dashboard_token=""
+    )
+    client = app.test_client()
+    assert client.get("/api/agents").get_json()["runs_enabled"] is False
+    assert client.post("/api/run", json={}).status_code == 503
+    assert client.post("/api/scan", json={}).status_code == 503
+
+
+def test_run_endpoints_reject_a_bad_token(run_app):
+    client = run_app.test_client()
+    assert client.post("/api/run", json={}).status_code == 401
+    r = client.post("/api/run", json={}, headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+
+
+def test_run_one_check_from_the_web(run_app):
+    client = run_app.test_client()
+    r = client.post(
+        "/api/run",
+        json={
+            "agent": "security_audit",
+            "tool": "audit_hardcoded_secrets",
+            "args": {"code": f'api_key = "{LEAKED_KEY}"', "ignored": "x"},
+        },
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert r.status_code == 200
+    findings = r.get_json()["result"]["findings"]
+    assert findings and findings[0]["why"]
+    bad = client.post(
+        "/api/run",
+        json={"agent": "security_audit", "tool": "audit_hardcoded_secrets", "args": {}},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert bad.status_code == 400 and "missing required" in bad.get_json()["error"]
+    unknown = client.post(
+        "/api/run",
+        json={"agent": "nope", "tool": "x", "args": {}},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert unknown.status_code == 400
+
+
+def test_normalize_repo_accepts_urls_and_rejects_junk():
+    from agents.server import normalize_repo
+
+    assert normalize_repo("https://github.com/Owner/Repo.git") == "Owner/Repo"
+    assert normalize_repo("github.com/o/r/") == "o/r"
+    for junk in ("", "o", "o/r/x", "../../etc", "o/r;rm", "--flag/x"):
+        with pytest.raises(ValueError):
+            normalize_repo(junk)
+
+
+def test_scan_job_clones_scans_and_records(run_app, tmp_path, monkeypatch):
+    import subprocess
+    import time as _time
+
+    # A local stand-in for GitHub: a git repo with a leaked key.
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    (origin / "config.py").write_text(f'API_KEY = "{LEAKED_KEY}"\n')
+    subprocess.run(["git", "init", "-q"], cwd=origin, check=True)
+    subprocess.run(["git", "add", "."], cwd=origin, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
+        cwd=origin,
+        check=True,
+    )
+
+    def fake_clone(repo, ref, destination):
+        subprocess.run(["git", "clone", "-q", str(origin), destination], check=True)
+        return "deadbeefcafe"
+
+    monkeypatch.setattr("agents.server._clone_repository", fake_clone)
+    client = run_app.test_client()
+    r = client.post(
+        "/api/scan",
+        json={"repo": "mrnickrushing/example", "agents": ["security_audit"]},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert r.status_code == 202
+    job_id = r.get_json()["job"]["id"]
+    for _ in range(100):
+        job = client.get(f"/api/jobs/{job_id}").get_json()["job"]
+        if job["status"] in ("done", "failed"):
+            break
+        _time.sleep(0.1)
+    assert job["status"] == "done", job
+    assert job["result"]["findings"] >= 1
+    assert job["result"]["head_sha"] == "deadbeefcafe"
+
+    findings = client.get("/api/findings").get_json()["findings"]
+    assert findings[0]["project_label"] == "mrnickrushing/example"
+    assert findings[0]["file_path"] == "config.py"
+    assert findings[0]["repository"]["head_sha"] == "deadbeefcafe"
+    assert findings[0]["source"] == "web-scan"
+    assert client.get("/api/jobs").get_json()["jobs"][0]["id"] == job_id
+
+
+def test_scan_rejects_bad_input(run_app):
+    client = run_app.test_client()
+    h = {"Authorization": f"Bearer {TOKEN}"}
+    assert client.post("/api/scan", json={"repo": "junk"}, headers=h).status_code == 400
+    assert (
+        client.post(
+            "/api/scan", json={"repo": "o/r", "ref": "-x"}, headers=h
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/scan", json={"repo": "o/r", "agents": ["nope"]}, headers=h
+        ).status_code
+        == 400
+    )
+
+
+def test_github_pseudo_root_matches_a_real_clone(tmp_path):
+    import subprocess
+
+    from agents.evolution import project_key
+
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=clone, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://github.com/Owner/Repo.git"],
+        cwd=clone,
+        check=True,
+    )
+    assert project_key(str(clone)) == project_key("/github/owner/repo")

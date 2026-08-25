@@ -29,10 +29,18 @@ process involved.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
+import queue
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from agents import __version__
@@ -272,11 +280,284 @@ def record_webhook_result(
         return store.record_scan(report, detector_version=__version__)
 
 
-def create_app(db_path: Optional[str] = None, webhook_secret: Optional[str] = None):
-    """Build the WSGI app. `webhook_secret=None` reads GITHUB_WEBHOOK_SECRET;
-    an empty string disables the webhook route explicitly."""
+# ── Running agents from the web ──────────────────────────────────────────
+#
+# Both entry points below are gated by DASHBOARD_TOKEN: the page is public,
+# and cloning repositories / running detectors on demand must not be.
+
+MAX_ARG_CHARS = 512_000
+_CATALOG: List[Dict[str, Any]] = []
+_CATALOG_LOCK = threading.Lock()
+
+
+def agent_catalog() -> List[Dict[str, Any]]:
+    """Every CLI-registered agent with its tools and parameter schemas."""
+    with _CATALOG_LOCK:
+        if _CATALOG:
+            return _CATALOG
+        from agents.cli import AGENTS
+
+        for key, cls in sorted(AGENTS.items()):
+            agent = cls()
+            tools = []
+            for tool in agent._tools:
+                schema = tool.get("parameters") or tool.get("input_schema") or {}
+                tools.append(
+                    {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "parameters": schema,
+                    }
+                )
+            doc = (cls.__doc__ or "").strip().splitlines()
+            _CATALOG.append(
+                {
+                    "key": key,
+                    "name": cls.__name__,
+                    "description": doc[0] if doc else "",
+                    "tools": tools,
+                }
+            )
+        return _CATALOG
+
+
+def run_tool(agent_key: str, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Call one tool handler with schema-checked arguments (the web form of
+    `agents run <agent> <tool>`). Findings gain a `why` like webhook ones."""
+    from agents.cli import AGENTS
+
+    cls = AGENTS.get(agent_key)
+    if cls is None:
+        raise ValueError(f"unknown agent: {agent_key}")
+    agent = cls()
+    handler = agent._tool_handlers.get(tool_name)
+    if handler is None:
+        raise ValueError(f"unknown tool {tool_name!r} for agent {agent_key!r}")
+    spec = next((tl for tl in agent._tools if tl["name"] == tool_name), {})
+    schema = spec.get("parameters") or spec.get("input_schema") or {}
+    allowed = set((schema.get("properties") or {}).keys())
+    missing = [name for name in schema.get("required", []) if name not in args]
+    if missing:
+        raise ValueError(f"missing required argument(s): {', '.join(missing)}")
+    kwargs: Dict[str, Any] = {}
+    for name, value in (args or {}).items():
+        if name not in allowed:
+            continue
+        if isinstance(value, str) and len(value) > MAX_ARG_CHARS:
+            raise ValueError(f"argument {name!r} is too large")
+        kwargs[name] = value
+    result = handler(**kwargs)
+    if isinstance(result, dict) and isinstance(result.get("findings"), list):
+        findings = [f for f in result["findings"] if isinstance(f, dict)]
+        for finding in findings:
+            finding.setdefault("why", explain_finding(tool_name, finding))
+        if tool_name == WEBHOOK_TOOL:
+            findings = _dedupe_entropy(findings)
+        result["findings"] = findings
+        result["total_issues"] = len(findings)
+    return result
+
+
+_REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$")
+
+
+def normalize_repo(value: str) -> str:
+    """Accept `owner/name`, `github.com/owner/name`, or a full URL."""
+    slug = (value or "").strip()
+    for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
+        if slug.lower().startswith(prefix):
+            slug = slug[len(prefix) :]
+    slug = slug.strip("/").removesuffix(".git")
+    if not _REPO_RE.match(slug) or ".." in slug:
+        raise ValueError("repository must look like owner/name on github.com")
+    return slug
+
+
+def _clone_repository(repo: str, ref: Optional[str], destination: str) -> str:
+    """Shallow-clone `repo` at `ref` into `destination`; returns the head SHA.
+
+    GITHUB_TOKEN, when set, is passed as the HTTPS credential so private
+    repositories work; it never reaches the recorded report (the evolution
+    store strips credentials from remote URLs)."""
+    public_url = f"https://github.com/{repo}.git"
+    token = os.environ.get("GITHUB_TOKEN")
+    url = public_url
+    if token:
+        url = public_url.replace("https://", f"https://x-access-token:{token}@", 1)
+    command = ["git", "clone", "--depth", "1", "--single-branch", "--no-tags"]
+    if ref:
+        command += ["--branch", ref]
+    command += ["--", url, destination]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    proc = subprocess.run(
+        command, capture_output=True, text=True, timeout=180, env=env, check=False
+    )
+    if proc.returncode != 0:
+        message = proc.stderr.strip().replace(url, public_url)
+        raise RuntimeError(message[-400:] or "git clone failed")
+    head = subprocess.run(
+        ["git", "-C", destination, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    ).stdout.strip()
+    return head
+
+
+class ScanJobs:
+    """One worker thread; scans run one at a time so a small container is
+    never asked to clone and analyse several repositories at once."""
+
+    MAX_QUEUED = 5
+    KEEP = 50
+
+    def __init__(self, db_path: str, publish) -> None:
+        self._db_path = db_path
+        self._publish = publish
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._order: List[str] = []
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._lock = threading.Lock()
+        self._worker: Optional[threading.Thread] = None
+
+    def submit(
+        self, repo: str, ref: Optional[str], agents: List[str]
+    ) -> Dict[str, Any]:
+        from agents.cli import AGENTS
+
+        repo = normalize_repo(repo)
+        ref = (ref or "").strip() or None
+        if ref and (not _REF_RE.match(ref) or ".." in ref):
+            raise ValueError("branch or tag name is not valid")
+        unknown = [a for a in agents if a not in AGENTS]
+        if unknown:
+            raise ValueError(f"unknown agent(s): {', '.join(unknown)}")
+        with self._lock:
+            queued = sum(1 for j in self._jobs.values() if j["status"] == "queued")
+            if queued >= self.MAX_QUEUED:
+                raise RuntimeError("too many scans queued; try again in a minute")
+            job = {
+                "id": f"job_{uuid.uuid4().hex[:12]}",
+                "repo": repo,
+                "ref": ref,
+                "agents": list(agents),
+                "status": "queued",
+                "submitted_at": time.time(),
+                "started_at": None,
+                "finished_at": None,
+                "progress": "queued",
+                "result": None,
+                "error": None,
+            }
+            self._jobs[job["id"]] = job
+            self._order.append(job["id"])
+            for stale in self._order[: -self.KEEP]:
+                self._jobs.pop(stale, None)
+            self._order = self._order[-self.KEEP :]
+            self._ensure_worker()
+        self._queue.put(job["id"])
+        return dict(job)
+
+    def get(self, job_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return dict(job) if job else None
+
+    def recent(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            return [
+                dict(self._jobs[i]) for i in reversed(self._order) if i in self._jobs
+            ]
+
+    def _ensure_worker(self) -> None:
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(
+                target=self._loop, name="agents-scan-worker", daemon=True
+            )
+            self._worker.start()
+
+    def _loop(self) -> None:
+        while True:
+            job_id = self._queue.get()
+            job = self._jobs.get(job_id)
+            if job is None:
+                continue
+            try:
+                self._run(job)
+            except Exception as exc:  # noqa: BLE001 - reported on the job
+                logger.exception("scan job %s failed", job_id)
+                job.update(
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    finished_at=time.time(),
+                )
+                self._publish(f"scan_failed {job['repo']}: {exc}")
+
+    def _run(self, job: Dict[str, Any]) -> None:
+        from agents.cli import _run_scan
+        from agents.evolution import _source_hash, attach_finding_ids
+
+        job.update(status="running", started_at=time.time(), progress="cloning")
+        self._publish(f"scan_started {job['repo']}")
+        workdir = tempfile.mkdtemp(prefix="agents-scan-")
+        try:
+            clone_dir = os.path.join(workdir, "repo")
+            head = _clone_repository(job["repo"], job["ref"], clone_dir)
+            job["progress"] = "scanning"
+            report = _run_scan(clone_dir, job["agents"] or None)
+            attach_finding_ids(report)
+            for entry in report.get("results", []):
+                entry["source_hash"] = _source_hash(
+                    clone_dir, str(entry.get("file", ""))
+                )
+            report["project"] = f"/github/{job['repo']}"
+            report["source"] = "web-scan"
+            report["repository"] = {
+                "repo": job["repo"],
+                "ref": job["ref"],
+                "head_sha": head,
+            }
+            job["progress"] = "recording"
+            with EvolutionStore(self._db_path) as store:
+                store.apply_feedback(report)
+                scan_id = store.record_scan(report, detector_version=__version__)
+            counts: Dict[str, int] = {}
+            total = 0
+            for entry in report.get("results", []):
+                for finding in entry.get("result", {}).get("findings", []):
+                    if isinstance(finding, dict):
+                        total += 1
+                        sev = str(finding.get("severity", "INFO"))
+                        counts[sev] = counts.get(sev, 0) + 1
+            job.update(
+                status="done",
+                finished_at=time.time(),
+                progress="done",
+                result={
+                    "scan_id": scan_id,
+                    "head_sha": head,
+                    "files_scanned": report.get("coverage", {}).get("files_scanned"),
+                    "findings": total,
+                    "by_severity": counts,
+                },
+            )
+            self._publish(f"scan_complete {job['repo']}: {total} finding(s)")
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+
+def create_app(
+    db_path: Optional[str] = None,
+    webhook_secret: Optional[str] = None,
+    dashboard_token: Optional[str] = None,
+):
+    """Build the WSGI app. `webhook_secret=None` reads GITHUB_WEBHOOK_SECRET
+    and `dashboard_token=None` reads DASHBOARD_TOKEN; an empty string
+    disables that feature explicitly."""
     try:
-        from flask import jsonify
+        from flask import jsonify, request
     except ImportError as exc:  # pragma: no cover - exercised by the import guard
         raise ImportError(
             "Install the web extra: pip install 'rushingtech-agents[web]'"
@@ -345,6 +626,83 @@ def create_app(db_path: Optional[str] = None, webhook_secret: Optional[str] = No
     register_webhook_routes(
         app, integration, scan_fn=scan_pull_request_diff, on_result=on_result
     )
+
+    token = (
+        os.environ.get("DASHBOARD_TOKEN")
+        if dashboard_token is None
+        else dashboard_token
+    )
+    jobs = ScanJobs(resolved_db, dashboard.publish_event)
+    app.config["SCAN_JOBS"] = jobs
+
+    def denied():
+        if not token:
+            return (
+                jsonify(
+                    {
+                        "error": "running checks from the web is disabled: "
+                        "DASHBOARD_TOKEN is not configured"
+                    }
+                ),
+                503,
+            )
+        header = request.headers.get("Authorization", "")
+        supplied = header[7:] if header.startswith("Bearer ") else ""
+        if not supplied or not hmac.compare_digest(supplied, token):
+            return jsonify({"error": "invalid token"}), 401
+        return None
+
+    @app.get("/api/agents")
+    def api_agents():
+        return jsonify({"agents": agent_catalog(), "runs_enabled": bool(token)})
+
+    @app.post("/api/run")
+    def api_run():
+        refusal = denied()
+        if refusal:
+            return refusal
+        body = request.get_json(silent=True) or {}
+        try:
+            result = run_tool(
+                str(body.get("agent", "")),
+                str(body.get("tool", "")),
+                body.get("args") or {},
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except TypeError as exc:
+            return jsonify({"error": f"bad arguments: {exc}"}), 400
+        return jsonify({"result": result})
+
+    @app.post("/api/scan")
+    def api_scan():
+        refusal = denied()
+        if refusal:
+            return refusal
+        body = request.get_json(silent=True) or {}
+        try:
+            job = jobs.submit(
+                str(body.get("repo", "")),
+                body.get("ref"),
+                [str(a) for a in (body.get("agents") or [])],
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 429
+        return jsonify({"job": job}), 202
+
+    @app.get("/api/jobs")
+    def api_jobs():
+        return jsonify({"jobs": jobs.recent()})
+
+    @app.get("/api/jobs/<job_id>")
+    def api_job(job_id: str):
+        job = jobs.get(job_id)
+        if job is None:
+            return jsonify({"error": "unknown job"}), 404
+        return jsonify({"job": job})
+
     return app
 
 
