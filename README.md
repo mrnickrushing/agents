@@ -26,6 +26,12 @@ agents serve                 # http://0.0.0.0:8000 — reads $PORT / $HOST / $AG
   reason; everything else keeps serving.
 - Fixed: the dashboard queried columns the evolution store never had and
   silently showed zero findings. It now reads the real schema.
+- **Run agents from the page**: with `DASHBOARD_TOKEN` set on the service,
+  the *Run agents* panel scans any GitHub repository (shallow clone on the
+  server, pick the agents, results recorded and linked to the exact
+  file:line on GitHub) or runs one check on pasted code — dropdowns for
+  agent and tool, fields generated from the tool's schema. Public page,
+  so both endpoints (`POST /api/run`, `POST /api/scan`) require the token.
 - `Dockerfile.server` + `railway.toml` deploy it (non-root, gunicorn, volume
   at `/data`); the tag pipeline also publishes
   `ghcr.io/mrnickrushing/agents-server`. Runbook: [`docs/deploy.md`](docs/deploy.md).

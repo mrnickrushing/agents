@@ -113,6 +113,38 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .stat .value { font-size: 28px; font-weight: 700; line-height: 1.15; margin-top: 4px; }
 .stat .hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
+/* Run panel */
+.runner { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; margin-bottom: 18px; }
+.runner > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 14px 16px; min-height: 56px; }
+.runner > summary::-webkit-details-marker { display: none; }
+.runner .title { font-size: 16px; font-weight: 700; }
+.runner .hint { color: var(--muted); font-size: 13px; flex: 1; }
+.runner-body { padding: 0 16px 16px; display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; }
+.field { display: grid; gap: 5px; min-width: 160px; }
+.field.grow { flex: 1; }
+.field > span { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.field > span small { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--ink); border: 1px solid var(--line); color: var(--text); border-radius: 10px;
+  padding: 9px 12px; min-height: 40px; font: inherit; font-size: 16px; -webkit-appearance: none; appearance: none;
+}
+.field select:not([multiple]) { background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+.field select[multiple] { padding: 6px; min-height: 120px; }
+.field select[multiple] option { padding: 6px 8px; border-radius: 6px; }
+.field textarea { min-height: 140px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px; line-height: 1.45; resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.fields { display: grid; gap: 10px; }
+.desc { color: var(--muted); font-size: 13px; }
+.actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.btn.primary:disabled { opacity: .6; cursor: progress; }
+.status { font-size: 13px; color: var(--muted); }
+.status.err { color: var(--critical); }
+.status.ok { color: var(--low); }
+.mode-form[hidden] { display: none; }
+.result-pre { white-space: pre-wrap; word-break: break-word; }
+
 /* Filters */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -224,6 +256,59 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
     </div>
   </section>
 
+  <details class="runner" id="runner">
+    <summary>
+      <span class="title display">Run agents</span>
+      <span class="hint" id="runner-hint">Scan a GitHub repository, or run one check on pasted code</span>
+      <span class="caret" aria-hidden="true">▾</span>
+    </summary>
+    <div class="runner-body">
+      <div class="row">
+        <label class="field"><span>What to run</span>
+          <select id="mode">
+            <option value="repo">Scan a GitHub repository</option>
+            <option value="check">Run one check on pasted code</option>
+          </select>
+        </label>
+        <label class="field grow"><span>Access token</span>
+          <input id="token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN from the Railway service">
+        </label>
+      </div>
+
+      <form id="repo-form" class="mode-form">
+        <div class="row">
+          <label class="field grow"><span>Repository</span>
+            <input id="repo" placeholder="owner/name" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+          </label>
+          <label class="field"><span>Branch or tag</span>
+            <input id="ref" placeholder="default branch" autocapitalize="none" autocorrect="off" spellcheck="false">
+          </label>
+        </div>
+        <label class="field"><span>Agents <small>(none selected = all of them)</small></span>
+          <select id="scan-agents" multiple size="6"></select>
+        </label>
+        <div class="actions">
+          <button class="btn primary" type="submit" id="scan-btn">Scan repository</button>
+          <span class="status" id="scan-status"></span>
+        </div>
+      </form>
+
+      <form id="check-form" class="mode-form" hidden>
+        <div class="row">
+          <label class="field grow"><span>Agent</span><select id="agent"></select></label>
+          <label class="field grow"><span>Check</span><select id="tool"></select></label>
+        </div>
+        <p class="desc" id="tool-desc"></p>
+        <div id="tool-fields" class="fields"></div>
+        <div class="actions">
+          <button class="btn primary" type="submit" id="run-btn">Run check</button>
+          <span class="status" id="run-status"></span>
+        </div>
+        <div id="run-result" class="list"></div>
+      </form>
+    </div>
+  </details>
+
   <div class="toolbar" id="filters">
     <div class="chips" role="group" aria-label="Filter by severity">
       <button class="chip" data-sev="CRITICAL" aria-pressed="false" type="button">Critical <span class="n">0</span></button>
@@ -288,17 +373,27 @@ async function loadFindings() {
 
 function whereHtml(f) {
   const parts = [];
-  const pr = f.pull_request;
-  if (pr && pr.url) parts.push(`<a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo || f.project_label)} #${esc(pr.number)}</a>`);
+  const pr = f.pull_request, repo = f.repository;
+  const slug = (pr && pr.repo) || (repo && repo.repo) || '';
+  const sha = (pr && pr.head_sha) || (repo && repo.head_sha) || '';
+  if (pr && pr.url) parts.push(`<a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(slug || f.project_label)} #${esc(pr.number)}</a>`);
+  else if (repo && repo.repo) parts.push(`<a href="https://github.com/${esc(repo.repo)}${repo.ref ? '/tree/' + esc(repo.ref) : ''}" target="_blank" rel="noopener">${esc(repo.repo)}${repo.ref ? ' @ ' + esc(repo.ref) : ''}</a>`);
   else if (f.project_label) parts.push(`<span>${esc(f.project_label)}</span>`);
-  if (f.file_path) parts.push(`<span class="loc">${esc(f.file_path)}${f.line ? `<b>:${esc(f.line)}</b>` : ''}</span>`);
-  parts.push(`<span>${when(f.scanned_at)}</span>`);
+  if (f.file_path) {
+    const loc = `${esc(f.file_path)}${f.line ? `<b>:${esc(f.line)}</b>` : ''}`;
+    const linkable = slug && sha && !f.file_path.startsWith('(');
+    parts.push(linkable
+      ? `<a class="loc" href="https://github.com/${esc(slug)}/blob/${esc(sha)}/${esc(f.file_path)}${f.line ? '#L' + esc(f.line) : ''}" target="_blank" rel="noopener" title="Open this line on GitHub">${loc}</a>`
+      : `<span class="loc">${loc}</span>`);
+  }
+  if (f.scanned_at) parts.push(`<span>${when(f.scanned_at)}</span>`);
   return parts.join('');
 }
 
 function card(f) {
   const id = esc(f.finding_id || '');
   const dismiss = `agents feedback ${f.finding_id} dismiss --reason "…"`;
+  const sha = (f.pull_request && f.pull_request.head_sha) || (f.repository && f.repository.head_sha) || '';
   return `
   <details class="card" data-sev="${esc(f.severity)}" data-id="${id}"${state.open.has(f.finding_id) ? ' open' : ''}>
     <summary>
@@ -315,9 +410,9 @@ function card(f) {
       ${f.fix ? `<div class="note fix"><h4>How to fix</h4><p>${esc(f.fix)}</p></div>` : ''}
       <div class="meta">
         <span class="tag">${esc(f.detector)}</span>
-        ${f.pull_request && f.pull_request.head_sha ? `<span class="mono">${esc(String(f.pull_request.head_sha).slice(0, 7))}</span>` : ''}
-        <span class="mono">${id}</span>
-        <button class="btn copy" type="button" data-copy="${esc(dismiss)}" title="Copy the command that marks this finding a false positive">Copy dismiss command</button>
+        ${sha ? `<span class="mono">${esc(String(sha).slice(0, 7))}</span>` : ''}
+        ${id ? `<span class="mono">${id}</span>` : ''}
+        ${id ? `<button class="btn copy" type="button" data-copy="${esc(dismiss)}" title="Copy the command that marks this finding a false positive">Copy dismiss command</button>` : ''}
       </div>
     </div>
   </details>`;
@@ -351,6 +446,110 @@ document.addEventListener('click', async e => {
   try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy dismiss command', 1500); }
   catch { prompt('Copy this command', b.dataset.copy); }
 });
+
+// ── Run agents from the page ─────────────────────────────────────────
+const runner = { catalog: [], enabled: false };
+const tokenInput = $('#token');
+try { tokenInput.value = localStorage.getItem('agents-token') || ''; } catch {}
+tokenInput.addEventListener('change', () => { try { localStorage.setItem('agents-token', tokenInput.value); } catch {} });
+const authHeaders = () => ({ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tokenInput.value.trim() });
+const setStatus = (el, text, cls) => { el.textContent = text; el.className = 'status' + (cls ? ' ' + cls : ''); };
+
+async function loadCatalog() {
+  try {
+    const d = await (await fetch('/api/agents')).json();
+    runner.catalog = d.agents || []; runner.enabled = !!d.runs_enabled;
+    if (!runner.enabled) $('#runner-hint').textContent = 'Disabled until DASHBOARD_TOKEN is set on the service';
+    const opts = runner.catalog.map(a => `<option value="${esc(a.key)}">${esc(a.key)} — ${esc(a.description || a.name)}</option>`).join('');
+    $('#scan-agents').innerHTML = opts;
+    $('#agent').innerHTML = opts;
+    fillTools();
+  } catch (e) { console.warn('catalog', e); }
+}
+function currentAgent() { return runner.catalog.find(a => a.key === $('#agent').value); }
+function fillTools() {
+  const a = currentAgent(); const sel = $('#tool');
+  sel.innerHTML = a ? a.tools.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('') : '';
+  fillFields();
+}
+const CODE_LIKE = /code|content|schema|diff|log|yaml|json|config|manifest|text|incident|figma|package|requirements|dockerfile|workflow/i;
+function fillFields() {
+  const a = currentAgent(); const t = a && a.tools.find(t => t.name === $('#tool').value);
+  $('#tool-desc').textContent = t ? t.description : '';
+  const props = (t && t.parameters && t.parameters.properties) || {};
+  const required = new Set((t && t.parameters && t.parameters.required) || []);
+  $('#tool-fields').innerHTML = Object.entries(props).map(([name, p]) => {
+    const label = `<span>${esc(name)}${required.has(name) ? '' : ' <small>(optional)</small>'}</span>`;
+    const desc = p.description ? `<small class="desc">${esc(p.description)}</small>` : '';
+    let control;
+    if (p.enum) control = `<select name="${esc(name)}" data-type="string">${p.enum.map(v => `<option>${esc(v)}</option>`).join('')}</select>`;
+    else if (p.type === 'boolean') control = `<select name="${esc(name)}" data-type="boolean"><option value="false">no</option><option value="true">yes</option></select>`;
+    else if (p.type === 'integer' || p.type === 'number') control = `<input name="${esc(name)}" data-type="number" type="number" inputmode="decimal">`;
+    else if (p.type === 'object' || p.type === 'array') control = `<textarea name="${esc(name)}" data-type="json" placeholder="JSON"></textarea>`;
+    else if (CODE_LIKE.test(name) || CODE_LIKE.test(p.description || '')) control = `<textarea name="${esc(name)}" data-type="string" spellcheck="false" placeholder="Paste here"></textarea>`;
+    else control = `<input name="${esc(name)}" data-type="string" autocapitalize="none" autocorrect="off">`;
+    return `<label class="field">${label}${control}${desc}</label>`;
+  }).join('') || '<p class="desc">This check takes no input.</p>';
+}
+$('#agent').addEventListener('change', fillTools);
+$('#tool').addEventListener('change', fillFields);
+$('#mode').addEventListener('change', e => {
+  const repoMode = e.target.value === 'repo';
+  $('#repo-form').hidden = !repoMode; $('#check-form').hidden = repoMode;
+});
+
+$('#check-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const status = $('#run-status'), out = $('#run-result'), btn = $('#run-btn');
+  const args = {};
+  for (const el of $('#tool-fields').querySelectorAll('[name]')) {
+    const v = el.value; if (v === '' && el.tagName !== 'SELECT') continue;
+    const kind = el.dataset.type;
+    if (kind === 'number') args[el.name] = Number(v);
+    else if (kind === 'boolean') args[el.name] = v === 'true';
+    else if (kind === 'json') { try { args[el.name] = JSON.parse(v); } catch { setStatus(status, `${el.name} must be valid JSON`, 'err'); return; } }
+    else args[el.name] = v;
+  }
+  btn.disabled = true; setStatus(status, 'running…'); out.innerHTML = '';
+  try {
+    const r = await fetch('/api/run', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ agent: $('#agent').value, tool: $('#tool').value, args }) });
+    const d = await r.json();
+    if (!r.ok) { setStatus(status, d.error || r.statusText, 'err'); return; }
+    const res = d.result || {};
+    if (Array.isArray(res.findings)) {
+      setStatus(status, res.findings.length ? `${res.findings.length} finding(s) — not recorded` : 'clean — no findings', res.findings.length ? '' : 'ok');
+      out.innerHTML = res.findings.map(f => card({ ...f, severity: f.severity || 'INFO', issue: f.issue || JSON.stringify(f), detector: `${$('#agent').value}.${$('#tool').value}`, file_path: f.file || '', finding_id: '' })).join('');
+    } else {
+      setStatus(status, 'done', 'ok');
+      out.innerHTML = `<pre class="snippet result-pre">${esc(JSON.stringify(res, null, 2))}</pre>`;
+    }
+  } catch (err) { setStatus(status, String(err), 'err'); }
+  finally { btn.disabled = false; }
+});
+
+$('#repo-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const status = $('#scan-status'), btn = $('#scan-btn');
+  const agents = Array.from($('#scan-agents').selectedOptions).map(o => o.value);
+  btn.disabled = true; setStatus(status, 'submitting…');
+  try {
+    const r = await fetch('/api/scan', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ repo: $('#repo').value, ref: $('#ref').value, agents }) });
+    const d = await r.json();
+    if (!r.ok) { setStatus(status, d.error || r.statusText, 'err'); btn.disabled = false; return; }
+    const id = d.job.id;
+    const poll = async () => {
+      const j = (await (await fetch('/api/jobs/' + id)).json()).job;
+      if (j.status === 'done') {
+        const s = j.result.by_severity || {};
+        setStatus(status, `done — ${j.result.findings} finding(s) in ${j.result.files_scanned ?? '?'} files (${s.CRITICAL || 0} critical, ${s.HIGH || 0} high)`, j.result.findings ? '' : 'ok');
+        btn.disabled = false; loadSummary(); loadFindings();
+      } else if (j.status === 'failed') { setStatus(status, j.error, 'err'); btn.disabled = false; }
+      else { setStatus(status, j.progress + '…'); setTimeout(poll, 2000); }
+    };
+    poll();
+  } catch (err) { setStatus(status, String(err), 'err'); btn.disabled = false; }
+});
+loadCatalog();
 
 // Theme: follow the system, remember an explicit choice.
 const root = document.documentElement;
@@ -498,6 +697,8 @@ class AgentsDashboard:
                         "project": row[8],
                         "project_label": _project_label(row[8]),
                         "pull_request": scan_extra.get("pull_request"),
+                        "repository": scan_extra.get("repository"),
+                        "source": scan_extra.get("source"),
                         "scan_id": row[9],
                     }
                 )
@@ -533,6 +734,8 @@ class AgentsDashboard:
                         }
             extras[scan_id] = {
                 "pull_request": report.get("pull_request"),
+                "repository": report.get("repository"),
+                "source": report.get("source"),
                 "findings": per_finding,
             }
         return extras

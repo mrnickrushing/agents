@@ -43,8 +43,18 @@ def _normalized_text(value: Any) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+GITHUB_PSEUDO_ROOT = "/github/"
+
+
 def _project_identity(project_root: str) -> str:
     root = os.path.realpath(os.path.expanduser(project_root))
+    if root.startswith(GITHUB_PSEUDO_ROOT):
+        # Hosted-service convention for a repository that is not on disk
+        # (webhook scans, web-triggered scans). Resolves to the same identity
+        # a local clone with that GitHub remote produces, so all three share
+        # one finding history and one project on the dashboard.
+        slug = root[len(GITHUB_PSEUDO_ROOT) :].strip("/").casefold()
+        return f"https://github.com/{slug}#"
     try:
         remote = subprocess.run(
             ["git", "-C", root, "config", "--get", "remote.origin.url"],

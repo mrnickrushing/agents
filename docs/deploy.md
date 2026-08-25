@@ -28,7 +28,8 @@ Routes: `/` dashboard · `/api/summary` · `/api/findings` · `/api/events` (SSE
 | Variable | Purpose |
 |---|---|
 | `GITHUB_WEBHOOK_SECRET` | Shared secret on the GitHub webhook. Unset → `POST /webhook` answers 503 and everything else still serves. |
-| `GITHUB_TOKEN` | Lets the receiver fetch PR diffs and post the summary comment. Without it the webhook scans the PR *body* only and posts nothing. Fine-grained PAT: Pull requests **read**, Issues **write** on the repos you point webhooks at. |
+| `DASHBOARD_TOKEN` | Enables the **Run agents** panel on the page (`POST /api/run`, `POST /api/scan`). Unset → those endpoints answer 503 and the panel says so. Paste the value into the panel's *Access token* field once; the browser remembers it. |
+| `GITHUB_TOKEN` | Lets the receiver fetch PR diffs and post the summary comment, and lets web-triggered scans clone private repositories. Without it the webhook scans the PR *body* only and posts nothing. Fine-grained PAT: Pull requests **read**, Issues **write** on the repos you point webhooks at. |
 | `RAILWAY_RUN_UID=0` | Railway mounts volumes as root; the image runs as a non-root user. Railway's documented fix. |
 | `XDG_STATE_HOME` | Already `/data` in the image; only override if the volume is mounted elsewhere. |
 | `PORT=8000` | **Set it explicitly.** Railway otherwise injects its own value (8080 on first deploy) while the service domains target port 8000 — the result is a healthy container behind a 502. |
