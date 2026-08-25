@@ -2,7 +2,7 @@
 branch listings it unlocks. GitHub itself is mocked at the module boundary."""
 
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 
@@ -98,6 +98,7 @@ def test_sign_in_flow_sets_a_session_and_unlocks_the_api(app, github):
         "avatar_url": None,
         "sign_in_enabled": True,
         "token_enabled": False,
+        "sign_in_required": True,
     }
     # Not signed in: the API refuses.
     assert client.post("/api/run", json={}).status_code == 401
@@ -160,16 +161,23 @@ def test_repos_and_branches_use_the_signed_in_token(app, github):
 def test_logins_off_the_allow_list_are_refused(app):
     client = app.test_client()
     refused = _sign_in(client, code="stranger")
-    assert refused.status_code == 403
-    assert "someone" in refused.get_json()["error"]
+    assert refused.status_code == 302
+    assert "@someone is not on this dashboard" in unquote(refused.headers["Location"])
     assert client.get("/api/me").get_json()["signed_in"] is False
 
 
 def test_bad_state_and_bad_code_are_refused(app):
     client = app.test_client()
     client.get("/auth/login")
-    assert client.get("/auth/callback?code=good&state=wrong").status_code == 400
-    assert _sign_in(client, code="broken").status_code == 502
+    bad_state = client.get("/auth/callback?code=good&state=wrong")
+    assert (
+        bad_state.status_code == 302
+        and "/login?error=" in bad_state.headers["Location"]
+    )
+    bad_code = _sign_in(client, code="broken")
+    assert bad_code.status_code == 302 and "did not complete" in unquote(
+        bad_code.headers["Location"]
+    )
 
 
 def test_logout_ends_the_session(app):

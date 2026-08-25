@@ -314,7 +314,11 @@ def run_app(tmp_path):
 def test_agent_catalog_lists_every_cli_agent(run_app):
     from agents.cli import AGENTS
 
-    d = run_app.test_client().get("/api/agents").get_json()
+    d = (
+        run_app.test_client()
+        .get("/api/agents", headers={"Authorization": f"Bearer {TOKEN}"})
+        .get_json()
+    )
     assert d["runs_enabled"] is True
     assert {a["key"] for a in d["agents"]} == set(AGENTS)
     sec = next(a for a in d["agents"] if a["key"] == "security_audit")
@@ -329,6 +333,7 @@ def test_run_endpoints_are_disabled_without_a_token(tmp_path, monkeypatch):
     )
     client = app.test_client()
     assert client.get("/api/agents").get_json()["runs_enabled"] is False
+    assert client.get("/api/me").get_json()["sign_in_required"] is False
     assert client.post("/api/run", json={}).status_code == 503
     assert client.post("/api/scan", json={}).status_code == 503
 
@@ -407,8 +412,9 @@ def test_scan_job_clones_scans_and_records(run_app, tmp_path, monkeypatch):
     )
     assert r.status_code == 202
     job_id = r.get_json()["job"]["id"]
+    auth = {"Authorization": f"Bearer {TOKEN}"}
     for _ in range(100):
-        job = client.get(f"/api/jobs/{job_id}").get_json()["job"]
+        job = client.get(f"/api/jobs/{job_id}", headers=auth).get_json()["job"]
         if job["status"] in ("done", "failed"):
             break
         _time.sleep(0.1)
@@ -417,12 +423,12 @@ def test_scan_job_clones_scans_and_records(run_app, tmp_path, monkeypatch):
     assert job["result"]["files_scanned"] >= 1
     assert job["result"]["head_sha"] == "deadbeefcafe"
 
-    findings = client.get("/api/findings").get_json()["findings"]
+    findings = client.get("/api/findings", headers=auth).get_json()["findings"]
     assert findings[0]["project_label"] == "mrnickrushing/example"
     assert findings[0]["file_path"] == "config.py"
     assert findings[0]["repository"]["head_sha"] == "deadbeefcafe"
     assert findings[0]["source"] == "web-scan"
-    assert client.get("/api/jobs").get_json()["jobs"][0]["id"] == job_id
+    assert client.get("/api/jobs", headers=auth).get_json()["jobs"][0]["id"] == job_id
 
 
 def test_scan_rejects_bad_input(run_app):
