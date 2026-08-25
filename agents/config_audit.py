@@ -664,6 +664,12 @@ class ConfigAuditAgent(BaseAgent):
         "NODE_ENV",
         "PORT",
         "HOSTNAME",
+        # Vite defines these on import.meta.env itself; no deploy sets them.
+        "BASE_URL",
+        "MODE",
+        "DEV",
+        "PROD",
+        "SSR",
         "CI",
         "HOME",
         "PATH",
@@ -694,8 +700,10 @@ class ConfigAuditAgent(BaseAgent):
         findings: List[Finding] = []
         documented: Dict[str, str] = {}
         for i, line in enumerate(content.splitlines(), 1):
+            # `# OPTIONAL_KEY=` is the usual way to document a variable a
+            # deploy may leave unset; it counts as documented.
             m = re.match(
-                r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\"']?(.*?)[\"']?\s*$",
+                r"^\s*(?:#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\"']?(.*?)[\"']?\s*$",
                 line,
             )
             if not m:

@@ -435,14 +435,32 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
             "external_id",
             "stripe_id",
             "plaid_id",
+            # Identifiers that name something outside the database.
+            "cve_id",
+            "worker_job_id",
+            "task_id",
+            "message_id",
+            "transaction_id",
+            "trace_id",
+            "correlation_id",
         }
         candidates = []
+        # A Drizzle column is usually declared across several lines:
+        #   userId: uuid("user_id")
+        #     .notNull()
+        #     .references(() => usersTable.id, ...)
+        # so the declaration includes every continuation line that starts
+        # with a chained call.
         for match in re.finditer(
-            r"(?m)^\s*(\w+(?:_id|Id))\s*[:=]([^\n]+)", schema_code
+            r"(?m)^\s*(\w+(?:_id|Id))\s*[:=]([^\n]+(?:\n[ \t]*\.[^\n]+)*)", schema_code
         ):
             name, declaration = match.group(1), match.group(2)
-            if name.lower() in external_ids or re.search(
-                r"\.references\s*\(|ForeignKey\s*\(", declaration
+            # `cveId` and `cve_id` are the same identifier in two casings.
+            normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+            if (
+                name.lower() in external_ids
+                or normalized in external_ids
+                or re.search(r"\.references\s*\(|ForeignKey\s*\(", declaration)
             ):
                 continue
             candidates.append(name)

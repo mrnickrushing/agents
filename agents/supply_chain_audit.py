@@ -182,12 +182,37 @@ class SupplyChainAuditAgent(BaseAgent):
                 }
             )
 
+        # Lockfiles record resolved versions; the ranges and wildcards inside
+        # them are other packages' peer/optional specs, not this project's
+        # choices, so the manifest-only checks below skip them.
+        is_lockfile = path.lower().endswith(
+            (
+                "pnpm-lock.yaml",
+                "package-lock.json",
+                "yarn.lock",
+                "cargo.lock",
+                "poetry.lock",
+                "pipfile.lock",
+                "mix.lock",
+                "package.resolved",
+            )
+        )
+
         # ── 2. Broad version ranges ───────────────────────────────────
-        if re.search(r"(?m)^\s*[^#\n]+(?:\^|~|>=)\d", content):
+        # Caret/tilde ranges are the ecosystem default and are exactly what
+        # a lockfile pins; only open-ended ranges (>=, >, x) are worth a note.
+        # A library's peerDependencies are *meant* to be wide (react >=18).
+        without_peers = re.sub(
+            r'"peerDependencies"\s*:\s*\{[^{}]*\}', "", content, flags=re.S
+        )
+        if not is_lockfile and re.search(
+            r"(?m)^\s*[^#\n]+[\"']\s*(?:>=?\s*\d|\d+\.x\b|x\b|latest\b)",
+            without_peers,
+        ):
             findings.append(
                 {
                     "severity": "LOW",
-                    "issue": "Manifest uses broad version ranges",
+                    "issue": "Manifest uses open-ended version ranges (>=, x, latest)",
                     "fix": "Use lockfiles and tighter pinning for production services.",
                 }
             )
@@ -267,14 +292,14 @@ class SupplyChainAuditAgent(BaseAgent):
             if dep_edges > 500:
                 findings.append(
                     {
-                        "severity": "LOW",
+                        "severity": "INFO",
                         "issue": f"Large transitive dependency graph detected ({dep_edges} edges in pnpm-lock.yaml)",
                         "fix": "Review heavy dependencies and prune unused packages.",
                     }
                 )
 
         # ── 8. Unpinned * wildcard ────────────────────────────────────
-        if re.search(r'["\']\s*\*\s*["\']', content):
+        if not is_lockfile and re.search(r'["\']\s*\*\s*["\']', content):
             findings.append(
                 {
                     "severity": "MEDIUM",
