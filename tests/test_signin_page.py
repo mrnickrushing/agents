@@ -172,7 +172,10 @@ def test_every_listed_origin_is_a_full_front_door(tmp_path, github):
         ),
     )
     client = app.test_client()
-    for host in ("https://agents.example.com", "https://agents-server-xyz.up.railway.app"):
+    for host in (
+        "https://agents.example.com",
+        "https://agents-server-xyz.up.railway.app",
+    ):
         page = client.get("/login", base_url=host)
         assert page.status_code == 200, host
         login = client.get("/auth/login", base_url=host)
@@ -185,7 +188,10 @@ def test_every_listed_origin_is_a_full_front_door(tmp_path, github):
         in stray.headers["Location"]
     )
     # Nothing redirects between hosts any more.
-    assert client.get("/login", base_url="https://preview-123.up.railway.app").status_code == 200
+    assert (
+        client.get("/login", base_url="https://preview-123.up.railway.app").status_code
+        == 200
+    )
 
 
 def test_nothing_configured_means_nothing_to_sign_into(tmp_path):
