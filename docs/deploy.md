@@ -28,7 +28,10 @@ Routes: `/` dashboard · `/api/summary` · `/api/findings` · `/api/events` (SSE
 | Variable | Purpose |
 |---|---|
 | `GITHUB_WEBHOOK_SECRET` | Shared secret on the GitHub webhook. Unset → `POST /webhook` answers 503 and everything else still serves. |
-| `DASHBOARD_TOKEN` | Enables the **Run agents** panel on the page (`POST /api/run`, `POST /api/scan`). Unset → those endpoints answer 503 and the panel says so. Paste the value into the panel's *Access token* field once; the browser remembers it. |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | **Sign in with GitHub** for the *Run agents* panel. Create an OAuth App at github.com → Settings → Developer settings → OAuth Apps → *New OAuth App*: homepage `https://agents.rushingtechnologies.com`, callback `https://agents.rushingtechnologies.com/auth/callback`. The signed-in person's GitHub token lists their repositories for the dropdown and clones private ones — no `GITHUB_TOKEN` needed for that. |
+| `DASHBOARD_ALLOWED_LOGINS` | Comma-separated GitHub logins allowed to sign in (e.g. `mrnickrushing`). Anyone else gets a 403 after GitHub redirects back. Empty → nobody can sign in. |
+| `SESSION_SECRET` | Signs the short-lived OAuth state cookie. Sessions themselves live in `/data/rushingtech-agents/sessions.db` (server side, 30 days) so a redeploy does not sign you out. |
+| `DASHBOARD_TOKEN` | Optional fallback for scripts/curl: `Authorization: Bearer …` on `POST /api/run` / `POST /api/scan`. With sign-in configured you can leave it unset. |
 | `GITHUB_TOKEN` | Lets the receiver fetch PR diffs and post the summary comment, and lets web-triggered scans clone private repositories. Without it the webhook scans the PR *body* only and posts nothing. Fine-grained PAT: Pull requests **read**, Issues **write** on the repos you point webhooks at. |
 | `RAILWAY_RUN_UID=0` | Railway mounts volumes as root; the image runs as a non-root user. Railway's documented fix. |
 | `XDG_STATE_HOME` | Already `/data` in the image; only override if the volume is mounted elsewhere. |

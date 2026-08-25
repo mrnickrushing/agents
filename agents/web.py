@@ -143,6 +143,12 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .status.err { color: var(--critical); }
 .status.ok { color: var(--low); }
 .mode-form[hidden] { display: none; }
+[hidden] { display: none !important; }
+.account { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.account img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); }
+.account .login { font-weight: 600; }
+.signin { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.field .signin { min-height: 40px; }
 .result-pre { white-space: pre-wrap; word-break: break-word; }
 
 /* Filters */
@@ -236,6 +242,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
     <div class="brand display"><span class="mark">&gt;_</span>agents<small id="version"></small></div>
     <span class="spacer"></span>
     <span class="live" id="live" data-state="idle"><span class="dot"></span><span id="live-text">connecting</span></span>
+    <span id="account" class="account"></span>
     <button class="btn" id="theme" type="button" aria-label="Toggle light and dark theme">◐</button>
   </div>
 </header>
@@ -270,17 +277,22 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
             <option value="check">Run one check on pasted code</option>
           </select>
         </label>
-        <label class="field grow"><span>Access token</span>
+        <label class="field grow" id="token-field"><span>Access token</span>
           <input id="token" type="password" autocomplete="off" placeholder="DASHBOARD_TOKEN from the Railway service">
         </label>
+        <div class="field grow" id="signin-field" hidden><span>Account</span>
+          <a class="btn primary signin" href="/auth/login">Sign in with GitHub</a>
+        </div>
       </div>
 
       <form id="repo-form" class="mode-form">
         <div class="row">
           <label class="field grow"><span>Repository</span>
-            <input id="repo" placeholder="owner/name" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+            <select id="repo-select" hidden></select>
+            <input id="repo" placeholder="owner/name" autocapitalize="none" autocorrect="off" spellcheck="false">
           </label>
           <label class="field"><span>Branch or tag</span>
+            <select id="ref-select" hidden></select>
             <input id="ref" placeholder="default branch" autocapitalize="none" autocorrect="off" spellcheck="false">
           </label>
         </div>
@@ -452,14 +464,71 @@ const runner = { catalog: [], enabled: false };
 const tokenInput = $('#token');
 try { tokenInput.value = localStorage.getItem('agents-token') || ''; } catch {}
 tokenInput.addEventListener('change', () => { try { localStorage.setItem('agents-token', tokenInput.value); } catch {} });
-const authHeaders = () => ({ 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tokenInput.value.trim() });
+const authHeaders = () => {
+  const h = { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' };
+  if (!runner.signedIn && tokenInput.value.trim()) h['Authorization'] = 'Bearer ' + tokenInput.value.trim();
+  return h;
+};
 const setStatus = (el, text, cls) => { el.textContent = text; el.className = 'status' + (cls ? ' ' + cls : ''); };
+
+// Account: sign in with GitHub, or fall back to the access token.
+async function loadMe() {
+  try {
+    const me = await (await fetch('/api/me')).json();
+    runner.signedIn = !!me.signed_in;
+    const account = $('#account');
+    if (me.signed_in) {
+      account.innerHTML = `<img src="${esc(me.avatar_url)}" alt=""><span class="login">${esc(me.login)}</span><button class="btn" type="button" id="signout">Sign out</button>`;
+      $('#signout').addEventListener('click', async () => { await fetch('/auth/logout', { method: 'POST', headers: authHeaders() }); location.reload(); });
+    } else if (me.sign_in_enabled) {
+      account.innerHTML = `<a class="btn primary signin" href="/auth/login">Sign in with GitHub</a>`;
+    } else {
+      account.innerHTML = '';
+    }
+    $('#token-field').hidden = me.signed_in || !me.token_enabled;
+    $('#signin-field').hidden = me.signed_in || !me.sign_in_enabled;
+    if (me.signed_in || (me.token_enabled && tokenInput.value.trim())) loadRepos();
+  } catch (e) { console.warn('me', e); }
+}
+
+// Repository + branch dropdowns, from the signed-in account.
+async function loadRepos() {
+  const sel = $('#repo-select'), text = $('#repo');
+  try {
+    const r = await fetch('/api/repos', { headers: authHeaders() });
+    if (!r.ok) { sel.hidden = true; text.hidden = false; return; }
+    const repos = (await r.json()).repos || [];
+    if (!repos.length) { sel.hidden = true; text.hidden = false; return; }
+    sel.innerHTML = '<option value="">Choose a repository…</option>' + repos.map(x =>
+      `<option value="${esc(x.full_name)}" data-branch="${esc(x.default_branch)}">${esc(x.full_name)}${x.private ? ' 🔒' : ''}</option>`).join('');
+    sel.hidden = false; text.hidden = true;
+  } catch (e) { sel.hidden = true; text.hidden = false; }
+}
+async function loadBranches(repo, preferred) {
+  const sel = $('#ref-select'), text = $('#ref');
+  sel.hidden = true; text.hidden = false; text.value = preferred || '';
+  if (!repo) return;
+  try {
+    const r = await fetch('/api/branches?repo=' + encodeURIComponent(repo), { headers: authHeaders() });
+    if (!r.ok) return;
+    const branches = (await r.json()).branches || [];
+    if (!branches.length) return;
+    sel.innerHTML = branches.map(b => `<option value="${esc(b)}"${b === preferred ? ' selected' : ''}>${esc(b)}</option>`).join('');
+    sel.hidden = false; text.hidden = true;
+  } catch {}
+}
+$('#repo-select').addEventListener('change', e => {
+  const opt = e.target.selectedOptions[0];
+  loadBranches(e.target.value, opt ? opt.dataset.branch : '');
+});
+const chosenRepo = () => ($('#repo-select').hidden ? $('#repo').value : $('#repo-select').value).trim();
+const chosenRef = () => ($('#ref-select').hidden ? $('#ref').value : $('#ref-select').value).trim();
 
 async function loadCatalog() {
   try {
     const d = await (await fetch('/api/agents')).json();
     runner.catalog = d.agents || []; runner.enabled = !!d.runs_enabled;
-    if (!runner.enabled) $('#runner-hint').textContent = 'Disabled until DASHBOARD_TOKEN is set on the service';
+    if (!runner.enabled) $('#runner-hint').textContent = 'Disabled until sign-in (GITHUB_OAUTH_CLIENT_ID/SECRET) or DASHBOARD_TOKEN is set on the service';
     const opts = runner.catalog.map(a => `<option value="${esc(a.key)}">${esc(a.key)} — ${esc(a.description || a.name)}</option>`).join('');
     $('#scan-agents').innerHTML = opts;
     $('#agent').innerHTML = opts;
@@ -533,7 +602,8 @@ $('#repo-form').addEventListener('submit', async e => {
   const agents = Array.from($('#scan-agents').selectedOptions).map(o => o.value);
   btn.disabled = true; setStatus(status, 'submitting…');
   try {
-    const r = await fetch('/api/scan', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ repo: $('#repo').value, ref: $('#ref').value, agents }) });
+    if (!chosenRepo()) { setStatus(status, 'choose a repository first', 'err'); btn.disabled = false; return; }
+    const r = await fetch('/api/scan', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ repo: chosenRepo(), ref: chosenRef(), agents }) });
     const d = await r.json();
     if (!r.ok) { setStatus(status, d.error || r.statusText, 'err'); btn.disabled = false; return; }
     const id = d.job.id;
@@ -549,7 +619,9 @@ $('#repo-form').addEventListener('submit', async e => {
     poll();
   } catch (err) { setStatus(status, String(err), 'err'); btn.disabled = false; }
 });
+tokenInput.addEventListener('change', () => { if (tokenInput.value.trim()) loadRepos(); });
 loadCatalog();
+loadMe();
 
 // Theme: follow the system, remember an explicit choice.
 const root = document.documentElement;

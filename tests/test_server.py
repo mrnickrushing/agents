@@ -394,7 +394,7 @@ def test_scan_job_clones_scans_and_records(run_app, tmp_path, monkeypatch):
         check=True,
     )
 
-    def fake_clone(repo, ref, destination):
+    def fake_clone(repo, ref, destination, token=None):
         subprocess.run(["git", "clone", "-q", str(origin), destination], check=True)
         return "deadbeefcafe"
 
