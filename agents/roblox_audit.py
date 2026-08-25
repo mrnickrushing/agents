@@ -544,10 +544,38 @@ file, so treat findings as leads to verify against the actual script context, no
         # Scoped per handler: a file can define more than one remote, and a
         # validated handler must not suppress a missing-validation finding on
         # a sibling handler in the same file that never checks its arguments.
-        for trusted_param, body in handlers:
-            if not re.search(
-                r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\(", body
-            ):
+        signatures = []
+        for m in list(_HANDLER_ENTRY_RE.finditer(stripped)) + list(
+            _HANDLER_INVOKE_RE.finditer(stripped)
+        ):
+            close = stripped.find(")", m.end())
+            signatures.append(stripped[m.start() : close + 1] if close != -1 else "")
+        for (trusted_param, body), signature in zip(handlers, signatures):
+            params_match = re.search(r"function\s*\(([^)]*)\)", signature)
+            params = [
+                p.strip()
+                for p in (params_match.group(1) if params_match else "").split(",")
+                if p.strip()
+            ]
+            # A handler that receives only the engine-supplied player has no
+            # client-controlled argument to validate.
+            takes_arguments = len(params) > 1
+            # ...and if it also does nothing expensive (no yields, no
+            # DataStore, no character loads), there is nothing to throttle.
+            cheap_player_only = not takes_arguments and not re.search(
+                r"Async\s*\(|WaitForChild|LoadCharacter|task\.wait|\bwait\s*\(|"
+                r":Kick\s*\(|Teleport|Instance\.new|Clone\s*\(",
+                body,
+            )
+            # Comparing an argument against literals (`action ~= "shown"`,
+            # stripped here to `""`) or an allow-list table
+            # (`VALID_ACTIONS[action]`) validates it as surely as typeof().
+            validated = re.search(
+                r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\("
+                r"|(?:==|~=)\s*(?:\"\"|'')|\b[A-Z_]*(?:VALID|ALLOWED|KNOWN)\w*\s*\[",
+                body,
+            )
+            if takes_arguments and not validated:
                 findings.append(
                     {
                         "severity": "MEDIUM",
@@ -556,8 +584,14 @@ file, so treat findings as leads to verify against the actual script context, no
                     }
                 )
 
-            if not re.search(
-                r"(?i)debounce|cooldown|rate[_-]?limit|last[A-Z]\w*Time|os\.clock\s*\(\s*\)\s*-",
+            # A project's own throttle helper — `if not allowReset(player)
+            # then return end`, RemoteThrottle.create(...) — is rate limiting.
+            if not cheap_player_only and not re.search(
+                r"(?i)debounce|cooldown|rate[_-]?limit|throttle|last[A-Z]\w*(?:Time|At)\b"
+                r"|os\.clock\s*\(\s*\)\s*-"
+                r"|\b(?:allow|can|may|permit)\w*\s*\(\s*"
+                + re.escape(trusted_param)
+                + r"\s*\)",
                 body,
             ):
                 findings.append(
@@ -793,10 +827,13 @@ file, so treat findings as leads to verify against the actual script context, no
         for loop_match in re.finditer(r"\b(?:for|while)\b[^\n]*?\bdo\b", stripped):
             body_end = _block_end(stripped, loop_match.end())
             loop_body = stripped[loop_match.end() : body_end]
-            if (
-                re.search(r":\s*Connect\s*\(", loop_body)
-                and ":Disconnect(" not in loop_body
-            ):
+            connects = re.findall(r"(\w+)(?:[.:]\w+)*\s*:\s*Connect\s*\(", loop_body)
+            created_here = set(re.findall(r"\blocal\s+(\w+)\s*=", loop_body))
+            # Connecting to an instance created in this same iteration (a
+            # rune, a card) is the normal way to wire per-instance handlers;
+            # destroying the instance drops the connection.
+            leaky = [c for c in connects if c not in created_here]
+            if leaky and ":Disconnect(" not in loop_body:
                 findings.append(
                     {
                         "severity": "MEDIUM",
@@ -859,7 +896,12 @@ file, so treat findings as leads to verify against the actual script context, no
         ):
             body_end = _block_end(stripped, frame_match.end())
             body = stripped[frame_match.end() : body_end]
-            if re.search(r":\s*FindFirstChild\s*\(\s*[\"']", body):
+            # An accumulator that returns early most frames turns the
+            # connection into a low-rate tick, not a per-frame walk.
+            throttled = re.search(r"\+=\s*\w+", body) and re.search(
+                r"\bif\s+\w+\s*<\s*[\d.]+\s*then\s+return\b", body
+            )
+            if not throttled and re.search(r":\s*FindFirstChild\s*\(\s*[\"']", body):
                 findings.append(
                     {
                         "severity": "LOW",
@@ -928,7 +970,12 @@ file, so treat findings as leads to verify against the actual script context, no
                     }
                 )
 
-            if not re.search(r"PurchaseId", body):
+            # The callback may hand the whole receipt to a helper (a ledger
+            # module, a grant function); the PurchaseId handling then lives
+            # there, elsewhere in the file.
+            delegates_receipt = re.search(r"\w+\s*\([^)]*\breceipt\w*\b[^)]*\)", body)
+            scope = code if delegates_receipt else body
+            if not re.search(r"PurchaseId", scope):
                 findings.append(
                     {
                         "severity": "MEDIUM",
