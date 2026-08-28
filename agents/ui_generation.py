@@ -88,7 +88,8 @@ def _label_wrapper_components(code: str) -> List[str]:
         # Body runs to the next top-level component definition, which is a
         # good enough bound for deciding whether this one renders a label.
         nxt = re.search(
-            r"\n(?:function\s+[A-Z]|(?:const|let|var)\s+[A-Z]\w*\s*=)",
+            r"\n(?:export\s+)?(?:default\s+)?"
+            r"(?:function\s+[A-Z]|(?:const|let|var)\s+[A-Z]\w*\s*=)",
             code[m.end() :],
         )
         body = code[m.end() : m.end() + (nxt.start() if nxt else len(code))]

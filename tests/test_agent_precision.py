@@ -257,3 +257,52 @@ def test_prop_forwarding_primitive_is_not_judged_for_labels():
     )
     result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
     assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_exported_component_ends_the_previous_components_body():
+    """Regression: the body boundary didn't recognise `export function`, so a
+    component preceding an exported <label> wrapper was itself classified as
+    one — silently accepting unlabeled controls inside it (Codex, agents#63)."""
+    from agents.ui_generation import _label_wrapper_components
+
+    src = (
+        "export function Panel({ children }) "
+        '{ return (<div className="panel">{children}</div>); }\n'
+        "export function Field({ label, children }) "
+        "{ return (<label><span>{label}</span>{children}</label>); }\n"
+    )
+    assert _label_wrapper_components(src) == ["Field"]
+
+
+def test_control_inside_a_non_label_wrapper_is_still_reported():
+    code = (
+        "export function Panel({ children }) "
+        '{ return (<div className="panel">{children}</div>); }\n'
+        "export function Field({ label, children }) "
+        "{ return (<label><span>{label}</span>{children}</label>); }\n"
+        "export default function Screen() "
+        "{ return (<Panel><input value={v} /></Panel>); }\n"
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_bare_yarn_with_flags_is_still_an_install():
+    """Yarn Classic runs `yarn install` when given no command, so
+    `yarn --production` installs too (Codex, agents#63)."""
+    for line in ("RUN yarn --production", "RUN yarn --ignore-optional"):
+        issues = _issues(
+            RailwayDeployAgent()._review_deployment_config(
+                "FROM node:20\n" + line + "\n", "Dockerfile"
+            )
+        )
+        assert any("lockfile-strict" in issue for issue in issues), line
+
+
+def test_strict_bare_yarn_with_flags_is_accepted():
+    issues = _issues(
+        RailwayDeployAgent()._review_deployment_config(
+            "FROM node:20\nRUN yarn --frozen-lockfile\n", "Dockerfile"
+        )
+    )
+    assert not any("lockfile-strict" in issue for issue in issues)

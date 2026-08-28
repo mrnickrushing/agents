@@ -313,12 +313,14 @@ When helping with deployment issues:
                 r"(?im)^\s*RUN\s+(?:.*&&\s*)?pnpm\s+(?:install|i)\b(?![^\n]*--frozen-lockfile)",
                 config_text,
             )
-            # Only an actual install counts: `yarn install`, or bare `yarn`,
-            # which installs. `yarn build` / `yarn test` are not installs, and
-            # matching them flagged Dockerfiles whose install line was already
-            # strict (aegisapparel, 2026-08-28).
+            # Only an actual install counts: `yarn install`, or bare `yarn`
+            # with or without flags — Yarn Classic runs `yarn install` when
+            # given no command, so `yarn --production` installs too.
+            # `yarn build` / `yarn test` are not installs, and matching them
+            # flagged Dockerfiles whose install line was already strict
+            # (aegisapparel, 2026-08-28).
             loose_yarn = re.search(
-                r"(?im)^\s*RUN\s+(?:.*&&\s*)?yarn(?:\s+install\b|(?=\s*$))"
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?yarn(?:\s+install\b|(?=\s*$)|(?=\s+-))"
                 r"(?![^\n]*(?:--frozen-lockfile|--immutable))",
                 config_text,
             )
