@@ -160,3 +160,27 @@ def test_strip_js_comments_keeps_urls_regexes_and_division():
     assert "const b = 2" in _strip_js_comments(
         "const a = 1; // don't break\nconst b = 2;"
     )
+
+
+def test_browserslist_query_is_not_an_open_ended_dependency_range():
+    """Create React App ships a ">0.2%" browserslist query, which looks like
+    a version range to a whole-manifest regex and flagged every CRA project
+    (aegisapparel frontend/package.json, 2026-08-28)."""
+    from agents.supply_chain_audit import SupplyChainAuditAgent
+
+    manifest = (
+        '{"dependencies": {"react": "18.3.1"},'
+        ' "browserslist": {"production": [">0.2%", "not dead"]}}'
+    )
+    result = SupplyChainAuditAgent()._audit_supply_chain(manifest, "package.json")
+    issues = [f["issue"] for f in result["findings"]]
+    assert not any("open-ended version ranges" in issue for issue in issues)
+
+
+def test_genuine_open_ended_dependency_range_is_still_reported():
+    from agents.supply_chain_audit import SupplyChainAuditAgent
+
+    manifest = '{"dependencies": {"react": ">=18", "lodash": "latest"}}'
+    result = SupplyChainAuditAgent()._audit_supply_chain(manifest, "package.json")
+    issues = [f["issue"] for f in result["findings"]]
+    assert any("open-ended version ranges" in issue for issue in issues)

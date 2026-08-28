@@ -78,9 +78,18 @@ class FrontendPerformanceAgent(BaseAgent):
         # builds its order emails inline, 2026-08-28).
         email_html = _builds_email_html(code)
 
+        # An explicit loading="eager" or fetchPriority="high" is a deliberate
+        # decision, not an oversight: lazy-loading an above-the-fold or LCP
+        # image makes load performance worse, so don't ask for it back.
+        eager_by_choice = re.search(
+            r"loading\s*=\s*['\"]eager['\"]|fetchPriority\s*=\s*['\"]high['\"]",
+            code,
+            re.IGNORECASE,
+        )
         if (
             re.search(r"<img\b", code)
             and not email_html
+            and not eager_by_choice
             and not re.search(r"loading\s*=\s*['\"]lazy['\"]", code)
         ):
             findings.append(

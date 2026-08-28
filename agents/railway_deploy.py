@@ -313,8 +313,13 @@ When helping with deployment issues:
                 r"(?im)^\s*RUN\s+(?:.*&&\s*)?pnpm\s+(?:install|i)\b(?![^\n]*--frozen-lockfile)",
                 config_text,
             )
+            # Only an actual install counts: `yarn install`, or bare `yarn`,
+            # which installs. `yarn build` / `yarn test` are not installs, and
+            # matching them flagged Dockerfiles whose install line was already
+            # strict (aegisapparel, 2026-08-28).
             loose_yarn = re.search(
-                r"(?im)^\s*RUN\s+(?:.*&&\s*)?yarn(?:\s+install)?\b(?![^\n]*(?:--frozen-lockfile|--immutable))(?:\s|$)",
+                r"(?im)^\s*RUN\s+(?:.*&&\s*)?yarn(?:\s+install\b|(?=\s*$))"
+                r"(?![^\n]*(?:--frozen-lockfile|--immutable))",
                 config_text,
             )
             if loose_install or loose_pnpm or loose_yarn:
@@ -329,7 +334,10 @@ When helping with deployment issues:
                     else (
                         "pnpm install --frozen-lockfile"
                         if loose_pnpm
-                        else "yarn install --immutable"
+                        else (
+                            "yarn install --immutable (Yarn 2+) or "
+                            "--frozen-lockfile (Yarn 1)"
+                        )
                     )
                 )
                 findings.append(

@@ -260,3 +260,18 @@ def test_table_based_email_markup_is_recognised_without_an_sdk_import():
     )
     issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
     assert not any("loading='lazy'" in issue for issue in issues)
+
+
+def test_explicitly_eager_image_is_not_asked_to_lazy_load():
+    """loading="eager" / fetchPriority="high" mark an above-the-fold or LCP
+    image, where lazy-loading makes load performance worse (aegisapparel
+    splash and header art, 2026-08-28)."""
+    code = '<img src="/hero.png" width="1376" height="768" loading="eager" fetchPriority="high" />'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("loading='lazy'" in issue for issue in issues)
+
+
+def test_image_with_no_loading_hint_at_all_is_still_reported():
+    code = '<section><img src="/thumb.png" width="100" height="100" /></section>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)

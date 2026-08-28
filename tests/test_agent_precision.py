@@ -210,3 +210,50 @@ def test_scaffolder_no_longer_generates_auth_bypass_stub():
     assert "algorithms: ['HS256']" in files["src/middleware/auth.ts"]
     assert "=> next()" not in files["src/middleware/auth.ts"]
     assert "helmet()" in files["src/app.ts"]
+
+
+def test_control_nested_inside_its_label_is_associated():
+    """A control nested in its <label> is associated implicitly — valid HTML
+    that needs no htmlFor/id pair (aegisapparel Contact.jsx, 2026-08-28)."""
+    code = '<label>Email<input type="email" value={v} /></label>'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_field_wrapper_component_counts_as_the_label():
+    """Design systems wrap the control in a component that renders the
+    <label> around {children}, so the control is never lexically inside a
+    <label> even though it is associated."""
+    code = """
+function Field({ label, children, className = "" }) {
+  return (<label className={`block ${className}`}><span>{label}</span>{children}</label>);
+}
+export default function Contact() {
+  return (<form>
+    <Field label="Full name"><input value={a} onChange={(e) => setA(e.target.value)} /></Field>
+    <Field label="Email"><input type="email" value={b} /></Field>
+  </form>);
+}
+"""
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_sibling_label_without_htmlfor_is_still_reported():
+    """The label must actually be associated — a sibling with no htmlFor
+    leaves the control unnamed to a screen reader."""
+    code = '<div><label>Password</label><input type="password" /></div>'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_prop_forwarding_primitive_is_not_judged_for_labels():
+    """`<input {...props} />` in a forwardRef primitive is labelled by its
+    call sites, so the wrapper itself can't be judged (shadcn/ui)."""
+    code = (
+        "const Input = React.forwardRef(({ className, type, ...props }, ref) => {\n"
+        "  return (<input type={type} className={cn(className)} ref={ref} {...props} />);\n"
+        "})"
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
