@@ -130,6 +130,33 @@ def test_accessibility_validator_checks_each_form_control():
     assert result["wcag_21_aa_compliant"] is False
 
 
+def test_label_after_arrow_function_prop_is_still_seen():
+    # Regression: the tag matcher used [^>]* and stopped at the ">" inside
+    # "=>", truncating the tag before aria-label/id and miscounting fully
+    # labeled controls as unlabeled (VibeMaps AdminDashboard, 2026-08-27).
+    code = (
+        '<input value={q} onChange={e => setQ(e.target.value)} '
+        'placeholder="Search" aria-label="Search users" />'
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_htmlfor_id_pair_after_arrow_function_prop_is_still_seen():
+    code = (
+        '<label htmlFor="email">Email</label>'
+        '<input onChange={(e) => setEmail(e.target.value)} id="email" />'
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_img_alt_after_arrow_function_prop_is_still_seen():
+    code = '<img onLoad={() => setLoaded(true)} src={src} alt="Cover" />'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("missing alt" in issue["issue"] for issue in result["issues"])
+
+
 def test_visible_role_button_text_does_not_require_aria_label():
     code = '<div role="button" tabIndex={0} onKeyDown={onKey}>Save</div>'
     result = UIGenerationAgent()._validate_accessibility(code, severity="minor")

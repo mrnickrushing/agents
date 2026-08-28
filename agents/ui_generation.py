@@ -30,6 +30,13 @@ from typing import Any, Callable, Dict, List, Optional
 from agents.base import AgentResponse, BaseAgent
 
 
+# JSX attribute matcher for tag regexes: a plain [^>]* stops at the ">" inside
+# "=>" arrow functions (and any {a > b} expression), truncating the attribute
+# list mid-tag and hiding attributes that come after it (aria-label, alt, id).
+# Treat up to two levels of {..} nesting as atomic instead.
+JSX_ATTRS = r"(?:[^{}>]|\{(?:[^{}]|\{[^{}]*\})*\})*"
+
+
 class UIGenerationAgent(BaseAgent):
     """
     UI component generation specialist powered by Claude by default.
@@ -400,7 +407,7 @@ You're not decorating screens — you're crafting the thing the user feels every
         # lookaheads only checking the attribute immediately after the tag
         # name misfire whenever attributes aren't in that exact order (the
         # common case for anything formatted by prettier).
-        img_tags = re.findall(r"<img\b[^>]*/?>", component_code, re.IGNORECASE)
+        img_tags = re.findall(rf"<img\b{JSX_ATTRS}/?>", component_code, re.IGNORECASE)
         missing_alt = [
             t for t in img_tags if not re.search(r"\balt\s*=", t, re.IGNORECASE)
         ]
@@ -413,9 +420,9 @@ You're not decorating screens — you're crafting the thing the user feels every
             )
 
         # Attrs can contain "{() => fn()}" — the "=>" arrow has a literal ">" in it,
-        # so a plain [^>]* stops there. Treat up to two levels of {..} nesting as
-        # atomic so we don't truncate the attribute list mid-JSX-expression.
-        tag_pattern = r"<([a-zA-Z][\w.]*)\b((?:[^{}>]|\{(?:[^{}]|\{[^{}]*\})*\})*)>"
+        # so a plain [^>]* stops there. JSX_ATTRS treats {..} nesting as atomic
+        # so we don't truncate the attribute list mid-JSX-expression.
+        tag_pattern = rf"<([a-zA-Z][\w.]*)\b({JSX_ATTRS})>"
         all_tags = re.findall(tag_pattern, component_code)
 
         clickable_no_keyboard = []
@@ -469,7 +476,7 @@ You're not decorating screens — you're crafting the thing the user feels every
                 )
 
         input_tags = re.findall(
-            r"<(?:input|textarea|select)\b[^>]*>", component_code, re.IGNORECASE
+            rf"<(?:input|textarea|select)\b{JSX_ATTRS}>", component_code, re.IGNORECASE
         )
         unlabeled = 0
         for tag in input_tags:
@@ -491,7 +498,7 @@ You're not decorating screens — you're crafting the thing the user feels every
                 "Associate a <label htmlFor=...> with each control, or add an accurate aria-label/aria-labelledby",
             )
 
-        for match in re.finditer(r"<a\b([^>]*)>", component_code, re.IGNORECASE):
+        for match in re.finditer(rf"<a\b({JSX_ATTRS})>", component_code, re.IGNORECASE):
             attrs = match.group(1)
             if not re.search(r"\bhref\s*=", attrs, re.IGNORECASE) and re.search(
                 r"\bonClick\s*=", attrs
