@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from agents.base import BaseAgent
 from agents.ui_generation import find_jsx_tags
@@ -24,6 +24,34 @@ _EMAIL_HTML_MARKERS = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+
+def _string_literal_spans(code: str) -> List[Tuple[int, int]]:
+    """(start, end) ranges covered by '...', "..." and `...` literals."""
+    spans: List[Tuple[int, int]] = []
+    i = 0
+    while i < len(code):
+        ch = code[i]
+        if ch in "\"'`":
+            j = i + 1
+            while j < len(code):
+                if code[j] == "\\":
+                    j += 2
+                    continue
+                if code[j] == ch:
+                    j += 1
+                    break
+                j += 1
+            spans.append((i, j))
+            i = j
+            continue
+        i += 1
+    return spans
+
+
+# An image positioned to fill its container takes its box from that container,
+# so intrinsic width/height would be inert markup and reserve nothing extra.
+_FILLS_CONTAINER = re.compile(r"absolute[^\"'`]*inset-0|w-full[^\"'`]*h-full")
 
 
 def _builds_email_html(code: str) -> bool:
@@ -83,11 +111,20 @@ class FrontendPerformanceAgent(BaseAgent):
         # vouch for every other one, so a hero with loading="eager" hid a bare
         # <img> beside it (Codex, agents#63) — and, before that, one lazy image
         # hid the rest.
-        img_tags = (
-            []
-            if email_html
-            else [full for _, _, full in find_jsx_tags(code, "img", re.IGNORECASE)]
-        )
+        # An <img> written inside a string or template literal is markup this
+        # module *generates* (an email body, an innerHTML fragment), not JSX it
+        # renders, so browser loading hints don't apply to it.
+        literal = _string_literal_spans(code)
+        img_tags = []
+        if not email_html:
+            cursor = 0
+            for _, _, full in find_jsx_tags(code, "img", re.IGNORECASE):
+                at = code.find(full, cursor)
+                if at != -1:
+                    cursor = at + 1
+                    if any(start <= at < end for start, end in literal):
+                        continue
+                img_tags.append(full)
 
         # An explicit loading="eager" or fetchPriority="high" is a deliberate
         # decision, not an oversight: lazy-loading an above-the-fold or LCP
@@ -113,6 +150,7 @@ class FrontendPerformanceAgent(BaseAgent):
             tag
             for tag in img_tags
             if not re.search(r"\b(srcSet|width\s*=|height\s*=)", tag, re.IGNORECASE)
+            and not _FILLS_CONTAINER.search(tag)
         ]:
             findings.append(
                 {

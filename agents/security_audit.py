@@ -1552,8 +1552,14 @@ Format findings as structured reports with severity, location, description, and 
                     "fix": "Validate the uploaded file's mimetype against an allowlist server-side",
                 }
             )
+        # `max[_-]?<anything>[_-]?(size|bytes|length|mb|kb)` covers the common
+        # constant names — MAX_UPLOAD_BYTES, MAX_FILE_SIZE, maxFileSize — which
+        # the narrower list missed, reporting a capped endpoint as unbounded
+        # (aegisapparel backend/server.py, 2026-08-28).
         if (is_multer or is_fastapi_upload) and not re.search(
-            r"limits|max_size|maxsize|max_length|content_length", code, re.IGNORECASE
+            r"limits|content_length|\bmax[_a-z]*(?:size|bytes|length|mb|kb)\b",
+            code,
+            re.IGNORECASE,
         ):
             findings.append(
                 {
