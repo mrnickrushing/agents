@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from agents.base import BaseAgent
 from agents.ui_generation import find_jsx_tags
@@ -24,6 +24,56 @@ _EMAIL_HTML_MARKERS = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+
+def _template_literal_spans(code: str) -> List[Tuple[int, int]]:
+    """(start, end) ranges covered by closed `...` template literals.
+
+    Backticks only, and only when the literal actually closes. Treating ' and
+    " as literal delimiters is unsafe without a real parser: an apostrophe in
+    ordinary JSX text — `<p>Don't wait</p>` — would open a span that swallows
+    everything after it, hiding real findings (Codex, agents#64). Generated
+    markup is written as a template literal in practice, which is the case
+    this needs to recognise.
+    """
+    spans: List[Tuple[int, int]] = []
+    i = 0
+    while i < len(code):
+        if code[i] != "`":
+            i += 1
+            continue
+        j = i + 1
+        closed = False
+        while j < len(code):
+            if code[j] == "\\":
+                j += 2
+                continue
+            if code[j] == "`":
+                j += 1
+                closed = True
+                break
+            j += 1
+        if closed:
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1  # unterminated: assume it was not a literal at all
+    return spans
+
+
+# Evidence the module hands HTML to the browser, which renders it — so the
+# loading and dimension hints do apply to markup built in a string here.
+_INJECTS_HTML = re.compile(
+    r"\binnerHTML\b|\binsertAdjacentHTML\b|\bouterHTML\b|dangerouslySetInnerHTML",
+)
+
+
+# An absolutely-positioned image with all insets pinned takes its box from its
+# containing block, so intrinsic width/height would be inert markup. `w-full
+# h-full` alone is NOT enough: a percentage height resolves to auto unless the
+# parent has a definite height, and the parent isn't visible from here
+# (Codex, agents#64).
+_FILLS_CONTAINER = re.compile(r"absolute[^\"'`]*inset-0")
 
 
 def _builds_email_html(code: str) -> bool:
@@ -83,11 +133,22 @@ class FrontendPerformanceAgent(BaseAgent):
         # vouch for every other one, so a hero with loading="eager" hid a bare
         # <img> beside it (Codex, agents#63) — and, before that, one lazy image
         # hid the rest.
-        img_tags = (
-            []
-            if email_html
-            else [full for _, _, full in find_jsx_tags(code, "img", re.IGNORECASE)]
-        )
+        # An <img> written inside a string or template literal is markup this
+        # module *generates* (an email body, an innerHTML fragment), not JSX it
+        # renders, so browser loading hints don't apply to it.
+        # Markup a module injects into the DOM is rendered by the browser, so
+        # the hints do apply there — only skip generated markup that isn't.
+        literal = [] if _INJECTS_HTML.search(code) else _template_literal_spans(code)
+        img_tags = []
+        if not email_html:
+            cursor = 0
+            for _, _, full in find_jsx_tags(code, "img", re.IGNORECASE):
+                at = code.find(full, cursor)
+                if at != -1:
+                    cursor = at + 1
+                    if any(start <= at < end for start, end in literal):
+                        continue
+                img_tags.append(full)
 
         # An explicit loading="eager" or fetchPriority="high" is a deliberate
         # decision, not an oversight: lazy-loading an above-the-fold or LCP
@@ -113,6 +174,7 @@ class FrontendPerformanceAgent(BaseAgent):
             tag
             for tag in img_tags
             if not re.search(r"\b(srcSet|width\s*=|height\s*=)", tag, re.IGNORECASE)
+            and not _FILLS_CONTAINER.search(tag)
         ]:
             findings.append(
                 {

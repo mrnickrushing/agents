@@ -184,3 +184,49 @@ def test_genuine_open_ended_dependency_range_is_still_reported():
     result = SupplyChainAuditAgent()._audit_supply_chain(manifest, "package.json")
     issues = [f["issue"] for f in result["findings"]]
     assert any("open-ended version ranges" in issue for issue in issues)
+
+
+def test_upload_cap_named_max_upload_bytes_counts_as_a_size_limit():
+    """The name list missed MAX_UPLOAD_BYTES / MAX_FILE_SIZE, so a capped
+    endpoint was reported as unbounded (aegisapparel, 2026-08-28)."""
+    agent = SecurityAuditAgent()
+    code = (
+        "MAX_UPLOAD_BYTES = 5 * 1024 * 1024\n"
+        '@api_router.post("/admin/uploads")\n'
+        "async def admin_upload_file(file: UploadFile = File(...)):\n"
+        "    total = 0\n"
+        "    while chunk := await file.read(65536):\n"
+        "        total += len(chunk)\n"
+        "        if total > MAX_UPLOAD_BYTES:\n"
+        '            raise HTTPException(status_code=400, detail="File too large")\n'
+    )
+    issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
+    assert not any("No file size limit" in issue for issue in issues)
+
+
+def test_upload_with_no_cap_at_all_is_still_reported():
+    agent = SecurityAuditAgent()
+    code = (
+        '@app.post("/upload")\n'
+        "async def upload(file: UploadFile = File(...)):\n"
+        "    contents = await file.read()\n"
+        '    open("out", "wb").write(contents)\n'
+    )
+    issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
+    assert any("No file size limit" in issue for issue in issues)
+
+
+def test_unrelated_max_size_constant_does_not_count_as_an_upload_cap():
+    """A pagination or buffer limit is not a file-size cap; matching any
+    max…size name suppressed the unbounded-upload finding (Codex,
+    agents#64)."""
+    agent = SecurityAuditAgent()
+    code = (
+        "MAX_PAGE_SIZE = 100\n"
+        '@app.post("/upload")\n'
+        "async def upload(file: UploadFile = File(...)):\n"
+        "    contents = await file.read()\n"
+        '    open("out", "wb").write(contents)\n'
+    )
+    issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
+    assert any("No file size limit" in issue for issue in issues)

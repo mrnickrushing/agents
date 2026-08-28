@@ -306,3 +306,79 @@ def test_every_image_hinted_is_clean():
     assert not any(
         "loading='lazy'" in issue or "unoptimized" in issue for issue in issues
     )
+
+
+def test_image_filling_its_container_is_not_asked_for_dimensions():
+    """An image positioned to fill its container takes its box from that
+    container, so width/height would be inert markup reserving nothing
+    (aegisapparel product and campaign grids, 2026-08-28)."""
+    code = (
+        '<div className="relative aspect-[4/5]">'
+        '<img src={image} alt="" className="absolute inset-0 w-full h-full object-cover" '
+        'loading="lazy" /></div>'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("unoptimized" in issue for issue in issues)
+
+
+def test_fixed_size_image_without_dimensions_is_still_reported():
+    code = '<img src="/badge.png" className="w-48" loading="lazy" />'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("unoptimized" in issue for issue in issues)
+
+
+def test_image_inside_a_template_literal_is_not_judged():
+    """Markup a module generates into a string — an email body, an innerHTML
+    fragment — isn't JSX this component renders, so browser loading hints
+    don't apply (aegisapparel AdminDashboard.jsx, 2026-08-28)."""
+    code = (
+        'const tag = `<img src="${url}" alt="" style="max-width:100%" />`;\n'
+        "setBody((prev) => prev + tag);\n"
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("lazy" in issue or "unoptimized" in issue for issue in issues)
+
+
+def test_real_jsx_image_beside_a_string_literal_one_is_still_reported():
+    code = (
+        'const tag = `<img src="${url}" />`;\n'
+        'export default function C() { return (<img src="/a.png" className="w-10" />); }\n'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("lazy" in issue for issue in issues)
+
+
+def test_apostrophe_in_jsx_text_does_not_hide_a_later_image():
+    """Regression: treating ' as a literal delimiter opened a span that ran to
+    EOF, swallowing every image after ordinary prose (Codex, agents#64)."""
+    code = '<div><p>Don\'t wait</p><img src="/hero.png" /></div>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+    assert any("unoptimized" in issue for issue in issues)
+
+
+def test_markup_injected_into_the_dom_is_still_checked():
+    """innerHTML/insertAdjacentHTML markup is rendered by the browser, so the
+    hints do apply to it (Codex, agents#64)."""
+    code = 'el.innerHTML = `<img src="${u}" />`;'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+
+
+def test_full_size_image_without_a_reserved_parent_is_still_reported():
+    """`w-full h-full` alone doesn't reserve anything — a percentage height
+    resolves to auto unless the parent has a definite height, and the parent
+    isn't visible from a single-file check (Codex, agents#64)."""
+    code = '<div><img className="w-full h-full" src={url} /></div>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("unoptimized" in issue for issue in issues)
+
+
+def test_absolutely_pinned_image_is_still_exempt():
+    code = (
+        '<div className="aspect-[4/5]">'
+        '<img className="absolute inset-0 w-full h-full object-cover" '
+        'src={i} loading="lazy" /></div>'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("unoptimized" in issue for issue in issues)
