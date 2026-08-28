@@ -152,6 +152,89 @@ def test_frontend_layout_thrashing_and_modal_focus():
     assert "Modal/dialog lacks visible focus management" in issues
 
 
+THRASH = "Animation loop reads layout metrics (possible layout thrashing)"
+
+
+def _thrash_reported(code: str) -> bool:
+    return THRASH in _issues(
+        FrontendPerformanceAgent()._audit_frontend_performance(code)
+    )
+
+
+def test_frontend_layout_thrashing_needs_read_and_write_in_one_frame():
+    """Measuring once and then batching writes is the fix, not the finding.
+
+    chorechart's two bundles read a rect in a click handler, pass plain
+    numbers on, and write inside a double rAF -- exactly what the fix text
+    asks for -- and still tripped the old file-level co-occurrence check
+    (2026-08-28).
+    """
+    batched = (
+        "var rect = el.getBoundingClientRect();\n"
+        "requestAnimationFrame(function(){ requestAnimationFrame(function(){\n"
+        "  bars.forEach(function(b){ b.style.width = rect.width + 'px'; });\n"
+        "}); });"
+    )
+    assert not _thrash_reported(batched)
+
+    # A read with no write in the same body forces layout once, not per frame.
+    assert not _thrash_reported(
+        "requestAnimationFrame(function(){ report(el.offsetWidth); });"
+    )
+    # ...and a write with no read never has to wait on layout at all.
+    assert not _thrash_reported(
+        "var w = el.offsetWidth;\n"
+        "requestAnimationFrame(function(){ el.style.width = w + 'px'; });"
+    )
+    # The reflow-restarts-an-animation idiom is a one-shot, not a loop.
+    assert not _thrash_reported(
+        "gate.classList.remove('shake'); void gate.offsetWidth;"
+        " gate.classList.add('shake');\n"
+        "setInterval(poll, 30000);\n"
+        "function poll(){ return fetch('/day'); }"
+    )
+    # Commented-out code is not a measurement.
+    assert not _thrash_reported(
+        "requestAnimationFrame(function(){ /* el.offsetWidth */ el.style.top = '0'; });\n"
+        "var r = el.getBoundingClientRect();"
+    )
+
+    # Interleaved in one body is the real thing, however it is spelled.
+    assert _thrash_reported(
+        "requestAnimationFrame(function(){ box.style.width = box.offsetWidth + 1 + 'px'; });"
+    )
+    assert _thrash_reported(
+        "requestAnimationFrame(function(){ if (el.offsetWidth > 10)"
+        " el.classList.add('wide'); });"
+    )
+    assert _thrash_reported(
+        "requestAnimationFrame(function(){ requestAnimationFrame(function(){\n"
+        "  rows.forEach(function(r){ r.style.width = r.offsetWidth + 'px'; });\n"
+        "}); });"
+    )
+
+
+def test_frontend_layout_thrashing_follows_a_named_callback():
+    """`setInterval(tick, 16)` puts the thrash in a body elsewhere in the file."""
+    assert _thrash_reported(
+        "function resize(){\n"
+        "  for (var i = 0; i < n; i++) { b[i].style.height = b[i].offsetHeight + 'px'; }\n"
+        "}\n"
+        "setInterval(resize, 16);"
+    )
+    assert _thrash_reported(
+        "const step = () => { p.style.left = p.getBoundingClientRect().left + 'px'; };\n"
+        "setInterval(step, 16);"
+    )
+    # A named callback that does no layout work keeps the file quiet even
+    # though the file measures elsewhere.
+    assert not _thrash_reported(
+        "function refresh(){ return fetchDay().then(render); }\n"
+        "setInterval(refresh, 30000);\n"
+        "function onTap(){ var r = btn.getBoundingClientRect(); confetti(r.left, r.top); }"
+    )
+
+
 # ── IACSecurityAgent ──────────────────────────────────────────────────────
 
 
