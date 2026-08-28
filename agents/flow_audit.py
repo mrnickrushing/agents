@@ -107,7 +107,21 @@ class FlowAuditAgent(BaseAgent):
                 r"|\bUPDATE\s+\w+\s+SET\b|\bINSERT\s+INTO\b",
                 code,
             )
-            and not re.search(r"lock|mutex|transaction|FOR UPDATE", code, re.IGNORECASE)
+            # A serialising queue is the idiomatic JavaScript mutex: a promise
+            # chain each task appends to runs them one at a time, and no word
+            # in the list above appears anywhere near it. A relay client that
+            # funnels every tmux action through `actionQueue = actionQueue
+            # .then(...)` was reported as unguarded (cyberlab-terminal,
+            # 2026-08-28).
+            and not re.search(
+                r"lock|mutex|semaphore|transaction|FOR UPDATE"
+                # `x = x.then(...)` for any x — the chain is the mechanism,
+                # whatever the variable happens to be called.
+                r"|\b(\w+)\s*=\s*\1\s*\.then\b"
+                r"|\bp-limit\b|\bpLimit\b|\basync-mutex\b",
+                code,
+                re.IGNORECASE,
+            )
         ):
             findings.append(
                 {

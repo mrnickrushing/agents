@@ -203,8 +203,15 @@ class FrontendPerformanceAgent(BaseAgent):
                     "fix": "Batch DOM reads/writes and avoid sync layout reads inside tight loops.",
                 }
             )
+        # React Native has no focus() to call on a View and no ARIA attributes;
+        # `accessibilityViewIsModal` (with `importantForAccessibility` on
+        # Android) is how a native modal scopes the screen reader, and it is
+        # the direct equivalent of the web focus trap this looks for
+        # (cyberlab-terminal, 2026-08-28).
         if re.search(r"modal|dialog", code, re.IGNORECASE) and not re.search(
-            r"focus\(|aria-modal|role=['\"]dialog['\"]", code
+            r"focus\(|aria-modal|role=['\"]dialog['\"]"
+            r"|accessibilityViewIsModal|importantForAccessibility",
+            code,
         ):
             findings.append(
                 {
