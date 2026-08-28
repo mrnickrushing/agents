@@ -233,8 +233,15 @@ def _assignment_expression(code: str, start: int, limit: int = 20000) -> str:
             depth -= 1
         elif depth == 0 and ch == ";":
             break
-        elif depth == 0 and ch == "\n" and last not in "+,([{?:&|=":
-            break
+        elif depth == 0 and ch == "\n":
+            # The operator can lead the next line as easily as trail this one:
+            # `= "<b>"` then `+ userInput` is one expression, and reading only
+            # the literal would call the assignment static.
+            following = re.match(r"\s*(\S)", code[i:])
+            if last not in "+,([{?:&|=" and not (
+                following and following.group(1) in "+-*/%?:&|,."
+            ):
+                break
         if not ch.isspace():
             last = ch
         i += 1

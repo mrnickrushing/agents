@@ -287,3 +287,30 @@ def test_the_finding_says_how_many_sites_there_are():
     found = _html_issues(code)
     assert len(found) == 1
     assert "line 1 and 1 more" in found[0]["issue"]
+
+
+def test_an_operator_leading_the_next_line_continues_the_expression():
+    """`= '<b>'` then `+ userInput` is one expression. Reading only the
+    literal would judge the assignment static and suppress the finding."""
+    found = _html_issues("el.innerHTML = '<b>'\n  + userInput;\n")
+    assert found and found[0]["line"] == 1
+
+
+def test_a_following_statement_does_not_continue_the_expression():
+    """No semicolon, but the next line starts a statement rather than
+    continuing this one — the assignment really is static."""
+    assert _html_issues('el.innerHTML = ""\nel.textContent = "x"\n') == []
+
+
+def test_the_scan_discovery_rule_reaches_the_append_form():
+    """The handler supports `+=`, but the repository scan only invokes it when
+    the discovery expression matches the file first."""
+    import re as _re
+
+    from agents.cli import RULES, _discovery_text
+
+    rule = next(r for r in RULES if r[3] == "audit_xss_patterns")
+    for code in ("el.innerHTML = userInput;", "el.innerHTML += userInput;"):
+        assert _re.search(
+            rule[1], _discovery_text("f.js", code, "audit_xss_patterns")
+        ), code
