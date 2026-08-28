@@ -487,12 +487,281 @@ def _resolve_py_import(module: str, from_dir: str, root: str) -> Optional[str]:
     return None
 
 
-def _inline_local_imports(
-    path: str, content: str, root: str, max_files: int = 8
-) -> str:
-    """Append up to `max_files` locally-imported helper modules' content to
-    `content`, so a single-file regex check can see logic that actually
-    lives one import away instead of judging the call site in isolation."""
+# --- Luau requires ----------------------------------------------------------
+#
+# Roblox projects reach a sibling module through the *instance* tree, not the
+# filesystem, so a require can take several shapes that all mean "the file next
+# door": a relative string (`require("./Strings")`), a walk from the script's
+# own instance (`require(script.Parent.Parent.World.TerrainBuilder)`), a
+# service-rooted path (`require(game:GetService("ReplicatedStorage")
+# :WaitForChild("LastLight").Strings)`), or a local alias bound to any of
+# those (`local root = ReplicatedStorage:WaitForChild("LastLight", 8)` then
+# `require(root.Strings)`). Rojo's project file is what maps the instance tree
+# back onto directories, so resolving any of these needs to read it.
+
+_LUAU_EXTS = (".luau", ".lua")
+
+# `init.luau` doesn't become a child of its directory — it *becomes* the
+# directory's instance, so `script` there means the folder, not the file.
+_LUAU_INIT_STEMS = ("init", "init.server", "init.client")
+
+_LUAU_REQUIRE_RE = re.compile(r"(?<![\w.:])require\s*\(")
+
+# One step of an instance path. `game:GetService("X")` anchors at a service;
+# `:WaitForChild("X")`/`:FindFirstChild("X")` are just child lookups spelled
+# defensively (and WaitForChild takes an optional timeout argument).
+_LUAU_STEP_RE = re.compile(
+    r"""\s*(?:
+        game\s*:\s*GetService\s*\(\s*["'](?P<service>\w+)["']\s*\)
+      | :\s*(?:WaitForChild|FindFirstChild)\s*\(\s*["'](?P<child>[^"']+)["']
+        (?:\s*,[^()]*)?\s*\)
+      | \.\s*(?P<attr>[A-Za-z_]\w*)
+      | (?P<head>[A-Za-z_]\w*)
+    )""",
+    re.X,
+)
+
+
+def _balanced_end(text: str, open_paren: int) -> int:
+    """Index of the ")" matching the "(" at ``open_paren``, or -1."""
+    depth = 0
+    quote: Optional[str] = None
+    i = open_paren
+    while i < len(text):
+        ch = text[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+_ROJO_PATH_MAPS: Dict[str, Dict[str, str]] = {}
+
+
+def _rojo_path_map(root: str) -> Dict[str, str]:
+    """Map dotted instance paths to source directories, from the Rojo project.
+
+    ``{"ReplicatedStorage": {"LastLight": {"$path": "src/shared"}}}`` becomes
+    ``{"ReplicatedStorage.LastLight": "<root>/src/shared"}``.
+    """
+    cached = _ROJO_PATH_MAPS.get(root)
+    if cached is not None:
+        return cached
+    mapping: Dict[str, str] = {}
+    try:
+        candidates = sorted(
+            os.path.join(root, name)
+            for name in os.listdir(root)
+            if name.endswith(".project.json")
+        )
+    except OSError:
+        return mapping
+    # A `default.project.json` is the one Rojo serves unless told otherwise.
+    candidates.sort(key=lambda p: os.path.basename(p) != "default.project.json")
+    for candidate in candidates:
+        try:
+            with open(candidate, "r", errors="ignore") as fh:
+                tree = json.load(fh).get("tree")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not isinstance(tree, dict):
+            continue
+
+        def walk(node: Any, dotted: str) -> None:
+            if not isinstance(node, dict):
+                return
+            path_value = node.get("$path")
+            if dotted and isinstance(path_value, str):
+                mapping.setdefault(dotted, os.path.join(root, path_value))
+            for key, child in node.items():
+                if key.startswith("$"):
+                    continue
+                walk(child, f"{dotted}.{key}" if dotted else key)
+
+        walk(tree, "")
+        if mapping:
+            break
+    _ROJO_PATH_MAPS[root] = mapping
+    return mapping
+
+
+def _luau_module_file(stem: str) -> Optional[str]:
+    """The file backing an instance at filesystem location ``stem``."""
+    candidates = [stem + ext for ext in _LUAU_EXTS]
+    candidates += [
+        os.path.join(stem, init + ext)
+        for init in _LUAU_INIT_STEMS
+        for ext in _LUAU_EXTS
+    ]
+    return next((c for c in candidates if os.path.isfile(c)), None)
+
+
+def _luau_script_anchor(path: str) -> str:
+    """Filesystem location of the instance `script` refers to inside ``path``."""
+    stem, _ = os.path.splitext(path)
+    if os.path.basename(stem) in _LUAU_INIT_STEMS or os.path.basename(stem).startswith(
+        "init."
+    ):
+        return os.path.dirname(path)
+    return stem
+
+
+def _luau_steps(expr: str) -> Optional[List[str]]:
+    """Tokenize an instance expression into path steps, or None if it isn't one.
+
+    Services come back tagged (``"service:ReplicatedStorage"``) so the caller
+    can tell `game:GetService("Foo")` from a variable that happens to be
+    called ``Foo``.
+    """
+    steps: List[str] = []
+    pos = 0
+    while pos < len(expr):
+        match = _LUAU_STEP_RE.match(expr, pos)
+        if not match:
+            break
+        if match.group("service"):
+            if steps:
+                return None
+            steps.append("service:" + match.group("service"))
+        elif match.group("head"):
+            if steps:
+                return None
+            steps.append(match.group("head"))
+        else:
+            if not steps:
+                return None
+            steps.append(match.group("child") or match.group("attr"))
+        pos = match.end()
+    if expr[pos:].strip():
+        # Anything left over means this wasn't a plain instance path — a call,
+        # an index by variable, a concatenation. Don't guess at it.
+        return None
+    return steps or None
+
+
+def _luau_alias_expr(name: str, content: str) -> Optional[str]:
+    """The expression a same-file `local <name> = ...` binds, if any."""
+    match = re.search(
+        r"^\s*local\s+" + re.escape(name) + r"\s*=\s*([^\n]+)$",
+        content,
+        re.MULTILINE,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _within_root(candidate: str, root: str) -> bool:
+    """True when `candidate` really sits under `root`.
+
+    A prefix test says yes to `/repo-backup/x` for root `/repo`; comparing
+    the common ancestor does not.
+    """
+    try:
+        return os.path.commonpath(
+            [os.path.abspath(candidate), os.path.abspath(root)]
+        ) == os.path.abspath(root)
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def _resolve_luau_import(
+    spec: str, path: str, root: str, content: str
+) -> Optional[str]:
+    """Resolve one `require(...)` argument to a file inside the scan root."""
+    found = _resolve_luau_target(spec.strip(), path, root, content)
+    # Every form can address a file outside the repository being scanned —
+    # enough `..` in a string require, a `script.Parent` walk that climbs too
+    # far, a Rojo `$path` pointing at a sibling checkout. Findings must not be
+    # based on source the scan was never pointed at.
+    return found if found and _within_root(found, root) else None
+
+
+def _resolve_luau_target(
+    spec: str, path: str, root: str, content: str
+) -> Optional[str]:
+
+    literal = re.fullmatch(r"""["']([^"']+)["']""", spec)
+    if literal:
+        # A string require is relative to the requiring file's own directory,
+        # the same way an ES module specifier is.
+        target = literal.group(1)
+        if not target.startswith("."):
+            return None
+        return _luau_module_file(
+            os.path.normpath(os.path.join(os.path.dirname(path), target))
+        )
+
+    steps = _luau_steps(spec)
+    for _ in range(4):  # bounded: alias -> alias -> service
+        if not steps:
+            return None
+        head = steps[0]
+        if head == "script":
+            location = _luau_script_anchor(path)
+            for step in steps[1:]:
+                location = (
+                    os.path.dirname(location)
+                    if step == "Parent"
+                    else os.path.join(location, step)
+                )
+            return _luau_module_file(location)
+
+        if head.startswith("service:"):
+            mapping = _rojo_path_map(root)
+            dotted = ".".join([head.split(":", 1)[1]] + steps[1:])
+            # Longest prefix wins: a project can map both a service and a
+            # folder inside it.
+            best = max(
+                (p for p in mapping if dotted == p or dotted.startswith(p + ".")),
+                key=len,
+                default=None,
+            )
+            if best is None:
+                return None
+            rest = [s for s in dotted[len(best) :].split(".") if s]
+            return _luau_module_file(os.path.join(mapping[best], *rest))
+
+        # Otherwise the head is a local alias — substitute what it was bound
+        # to and resolve again (`root` -> `ReplicatedStorage:WaitForChild(...)`
+        # -> `game:GetService("ReplicatedStorage"):WaitForChild(...)`).
+        alias = _luau_alias_expr(head, content)
+        if not alias:
+            return None
+        expanded = _luau_steps(alias)
+        if not expanded:
+            return None
+        steps = expanded + steps[1:]
+    return None
+
+
+def _luau_require_specs(content: str) -> List[str]:
+    specs = []
+    for match in _LUAU_REQUIRE_RE.finditer(content):
+        end = _balanced_end(content, match.end() - 1)
+        if end == -1:
+            continue
+        specs.append(content[match.end() : end])
+    return specs
+
+
+def _imported_sources(path: str, content: str, root: str, max_files: int = 8) -> str:
+    """Concatenate up to `max_files` locally-imported helper modules' source.
+
+    Returned separately from the importing file so a check can either append
+    it (to see logic that lives one import away) or consult it only when
+    resolving a named callee, without the imported file's own call sites
+    being mistaken for the importer's."""
     from_dir = os.path.dirname(path)
     ext = os.path.splitext(path)[1]
     resolved: List[str] = []
@@ -507,9 +776,19 @@ def _inline_local_imports(
             found = _resolve_py_import(module, from_dir, root)
             if found and found != path:
                 resolved.append(found)
+    elif ext in _LUAU_EXTS:
+        for spec in _luau_require_specs(content):
+            found = _resolve_luau_import(spec, path, root, content)
+            if found and found != path:
+                resolved.append(found)
 
-    comment_prefix = "#" if ext == ".py" else "//"
-    combined = content
+    if ext == ".py":
+        comment_prefix = "#"
+    elif ext in _LUAU_EXTS:
+        comment_prefix = "--"
+    else:
+        comment_prefix = "//"
+    combined = ""
     for found in resolved[:max_files]:
         try:
             combined += (
@@ -519,6 +798,15 @@ def _inline_local_imports(
         except OSError:
             continue
     return combined
+
+
+def _inline_local_imports(
+    path: str, content: str, root: str, max_files: int = 8
+) -> str:
+    """`content` with its locally-imported helper modules appended, so a
+    single-file regex check can see logic that actually lives one import
+    away instead of judging the call site in isolation."""
+    return content + _imported_sources(path, content, root, max_files)
 
 
 # Router layouts, in the order a file-system router nests them. expo-router
@@ -1840,7 +2128,16 @@ def _run_scan(
                         effective_content += (
                             "\n// project-level evidence: express-async-errors"
                         )
-                result = handler(**arg_builder(path, effective_content))
+                call_kwargs = arg_builder(path, effective_content)
+                if tool_name == "audit_remote_validation" and ext in _LUAU_EXTS:
+                    # Passed alongside the file rather than appended to it: a
+                    # required module's own remote handlers must not be
+                    # audited as if they lived here. The check only searches
+                    # this text for a named callee's definition.
+                    call_kwargs["imported_code"] = _imported_sources(
+                        path, content, root
+                    )
+                result = handler(**call_kwargs)
                 if not isinstance(result, dict):
                     result = {
                         "error": f"Tool returned {type(result).__name__}, expected dict"
