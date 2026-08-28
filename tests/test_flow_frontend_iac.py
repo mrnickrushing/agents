@@ -404,7 +404,7 @@ def test_a_promise_chain_queue_counts_as_a_guard():
         "let actionQueue = Promise.resolve();\n"
         "actionQueue = actionQueue.then(() => db.save(x));\n"
         "await Promise.all(t);",
-        'import pLimit from "p-limit";\nawait Promise.all(ids.map((i) => limit(() => db.update(i))));',
+        "const limit = pLimit(1);\nawait Promise.all(ids.map((i) => limit(() => db.update(i))));",
         'import { Mutex } from "async-mutex";\nawait Promise.all(ids.map((i) => db.update(i)));',
     ):
         assert _lock_issues(code) == [], code
@@ -414,8 +414,18 @@ def test_parallel_writes_with_no_guard_are_still_reported():
     for code in (
         "await Promise.all(ids.map((id) => db.update({ where: { id } })));",
         "await asyncio.gather(*[session.save(r) for r in rows])",
-        # A .then chain that isn't a queue vouches for nothing.
-        "const out = fetchAll().then((r) => r.json());\n"
+        # A self-reassigned promise that is not a queue vouches for nothing.
+        # The seed is what tells them apart: a queue starts from an
+        # already-resolved promise, this starts from a fetch.
+        "let result = fetchAll();\n"
+        "result = result.then(normalize);\n"
+        "await Promise.all(ids.map((i) => db.update(i)));",
+        # A limiter deliberately permits concurrency above one, and an unused
+        # import proves nothing at all.
+        'import pLimit from "p-limit";\n'
+        "const limit = pLimit(5);\n"
+        "await Promise.all(ids.map((i) => limit(() => db.update(i))));",
+        'import pLimit from "p-limit";\n'
         "await Promise.all(ids.map((i) => db.update(i)));",
     ):
         assert _lock_issues(code), code
@@ -436,8 +446,23 @@ def test_react_native_modal_scoping_counts_as_focus_management():
         for f in agent._audit_frontend_performance(scoped)["findings"]
     )
 
-    bare = "<Modal visible={open}><View style={s.sheet}><Text>Hi</Text></View></Modal>"
-    assert any(
+    for bare in (
+        "<Modal visible={open}><View style={s.sheet}><Text>Hi</Text></View></Modal>",
+        # importantForAccessibility defaults to "auto"; only the value that
+        # actually hides the background counts as scoping.
+        '<Modal visible={open}><View importantForAccessibility="auto">'
+        "<Text>Hi</Text></View></Modal>",
+    ):
+        assert any(
+            "focus management" in f["issue"]
+            for f in agent._audit_frontend_performance(bare)["findings"]
+        ), bare
+
+    android = (
+        '<Modal visible={open}><View importantForAccessibility="no-hide-descendants">'
+        "<Text>Hi</Text></View></Modal>"
+    )
+    assert not any(
         "focus management" in f["issue"]
-        for f in agent._audit_frontend_performance(bare)["findings"]
+        for f in agent._audit_frontend_performance(android)["findings"]
     )

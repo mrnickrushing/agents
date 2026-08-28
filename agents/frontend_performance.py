@@ -210,7 +210,11 @@ class FrontendPerformanceAgent(BaseAgent):
         # (cyberlab-terminal, 2026-08-28).
         if re.search(r"modal|dialog", code, re.IGNORECASE) and not re.search(
             r"focus\(|aria-modal|role=['\"]dialog['\"]"
-            r"|accessibilityViewIsModal|importantForAccessibility",
+            # accessibilityViewIsModal is the canonical scoping prop; the
+            # Android form only counts at the value that actually hides the
+            # background, since importantForAccessibility defaults to "auto".
+            r"|accessibilityViewIsModal"
+            r"|importantForAccessibility\s*=\s*['\"]no-hide-descendants['\"]",
             code,
         ):
             findings.append(
