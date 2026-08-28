@@ -235,6 +235,45 @@ def test_frontend_layout_thrashing_follows_a_named_callback():
     )
 
 
+def test_frontend_layout_thrashing_reads_a_concise_arrow_callback():
+    """A braceless arrow is still a body, and can still thrash.
+
+    Requiring a `{` to walk dropped a genuine finding the old file-level
+    check reported (Codex, agents#70).
+    """
+    assert _thrash_reported(
+        "const tick = () => el.style.width = el.offsetWidth;\nsetInterval(tick, 16);"
+    )
+    assert _thrash_reported(
+        "const step = (el) => el.style.left = el.getBoundingClientRect().left\n"
+        "setInterval(step, 16);"
+    )
+    # The body ends at the line break, so a write on the next statement does
+    # not get borrowed by a read-only arrow.
+    assert not _thrash_reported(
+        "const t = () => report(el.offsetWidth);\n"
+        "el.style.top = '0';\n"
+        "setInterval(t, 16);"
+    )
+
+
+def test_frontend_layout_thrashing_counts_dom_removal_as_a_write():
+    """removeChild/replaceChild dirty layout as much as the insertion APIs.
+
+    Only the insertion half was listed, so a remove-then-measure frame went
+    quiet (Codex, agents#70).
+    """
+    for mutation in (
+        "parent.removeChild(child);",
+        "parent.replaceChild(fresh, stale);",
+        "stale.replaceWith(fresh);",
+        "parent.insertAdjacentElement('beforeend', child);",
+    ):
+        assert _thrash_reported(
+            f"requestAnimationFrame(function(){{ {mutation} void parent.offsetWidth; }});"
+        ), mutation
+
+
 # ── IACSecurityAgent ──────────────────────────────────────────────────────
 
 

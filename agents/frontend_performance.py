@@ -103,7 +103,11 @@ _LAYOUT_WRITE = re.compile(
     | \.classList\s*\.\s*(?:add|remove|toggle)\s*\(
     | \.setAttribute\s*\(
     | \.(?:innerHTML|outerHTML|textContent|innerText)\s*=
-    | \.(?:append|appendChild|prepend|insertBefore|replaceChildren|remove)\s*\(
+    | \.(?:
+          appendChild | append | prepend | insertBefore
+        | insertAdjacentElement | insertAdjacentHTML
+        | removeChild | replaceChildren | replaceChild | replaceWith | remove
+      )\s*\(
     """,
     re.VERBOSE,
 )
@@ -147,6 +151,39 @@ def _balanced_span(text: str, start: int) -> int:
     return -1
 
 
+def _concise_arrow_body(code: str, start: int) -> str:
+    """Text of a braceless arrow body — `() => el.style.top = el.offsetTop`.
+
+    Ends at the first `;`, newline, or depth-0 `,`/closing bracket. Stopping at
+    the line break keeps a body from running on into whatever follows and
+    borrowing a write that is not the callback's.
+    """
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(code)):
+        char = code[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "\"'`":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return code[start:index]
+            depth -= 1
+        elif depth == 0 and char in ";,\n":
+            return code[start:index]
+    return code[start:]
+
+
 def _named_function_body(code: str, name: str) -> str:
     """Body of a same-file `function name()` or `name = function/arrow`."""
     escaped = re.escape(name)
@@ -158,15 +195,21 @@ def _named_function_body(code: str, name: str) -> str:
         arguments = _balanced_span(code, code.index("(", match.end() - 1))
         if arguments == -1:
             continue
-        brace = code.find("{", arguments)
-        # Only a brace that opens *this* function counts. A concise arrow body
-        # (`const tick = (el) => el.style.width = el.offsetWidth`) has none, and
-        # without this the search would run on to some unrelated later block.
-        if brace == -1 or code[arguments:brace].strip() not in ("", "=>"):
+        arrow = re.compile(r"\s*=>").match(code, arguments)
+        body = re.compile(r"\s*").match(code, arrow.end() if arrow else arguments)
+        start = body.end()
+        if start < len(code) and code[start] == "{":
+            end = _balanced_span(code, start)
+            if end != -1:
+                return code[start:end]
             continue
-        end = _balanced_span(code, brace)
-        if end != -1:
-            return code[brace:end]
+        # A concise arrow has no brace to walk, and requiring one dropped a
+        # genuine `const tick = () => el.style.width = el.offsetWidth` that the
+        # old check reported (Codex, agents#70). Anything else that is not a
+        # brace here is not this function's body at all -- skip it rather than
+        # searching on for some unrelated later block.
+        if arrow:
+            return _concise_arrow_body(code, start)
     return ""
 
 
