@@ -15,3 +15,7 @@ venv/
 *.db-shm
 *.db-wal
 todo.md
+
+# uv-generated lockfile: this project installs with pip (see CI), so the
+# lockfile is a local byproduct of running `uv run`, not a tracked input.
+uv.lock
