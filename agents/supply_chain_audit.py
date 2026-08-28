@@ -201,10 +201,25 @@ class SupplyChainAuditAgent(BaseAgent):
         # ── 2. Broad version ranges ───────────────────────────────────
         # Caret/tilde ranges are the ecosystem default and are exactly what
         # a lockfile pins; only open-ended ranges (>=, >, x) are worth a note.
-        # A library's peerDependencies are *meant* to be wide (react >=18).
-        without_peers = re.sub(
-            r'"peerDependencies"\s*:\s*\{[^{}]*\}', "", content, flags=re.S
-        )
+        # A library's peerDependencies are *meant* to be wide (react >=18),
+        # and several manifest sections aren't dependency ranges at all —
+        # browserslist queries in particular look exactly like one
+        # (Create React App ships ">0.2%", which flagged every CRA project).
+        without_peers = content
+        for section in (
+            "peerDependencies",
+            "browserslist",
+            "engines",
+            "scripts",
+            "jest",
+            "eslintConfig",
+        ):
+            without_peers = re.sub(
+                rf'"{section}"\s*:\s*(\{{[^{{}}]*\}}|\[[^\]]*\])',
+                "",
+                without_peers,
+                flags=re.S,
+            )
         if not is_lockfile and re.search(
             r"(?m)^\s*[^#\n]+[\"']\s*(?:>=?\s*\d|\d+\.x\b|x\b|latest\b)",
             without_peers,

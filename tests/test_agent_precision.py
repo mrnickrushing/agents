@@ -210,3 +210,99 @@ def test_scaffolder_no_longer_generates_auth_bypass_stub():
     assert "algorithms: ['HS256']" in files["src/middleware/auth.ts"]
     assert "=> next()" not in files["src/middleware/auth.ts"]
     assert "helmet()" in files["src/app.ts"]
+
+
+def test_control_nested_inside_its_label_is_associated():
+    """A control nested in its <label> is associated implicitly — valid HTML
+    that needs no htmlFor/id pair (aegisapparel Contact.jsx, 2026-08-28)."""
+    code = '<label>Email<input type="email" value={v} /></label>'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_field_wrapper_component_counts_as_the_label():
+    """Design systems wrap the control in a component that renders the
+    <label> around {children}, so the control is never lexically inside a
+    <label> even though it is associated."""
+    code = """
+function Field({ label, children, className = "" }) {
+  return (<label className={`block ${className}`}><span>{label}</span>{children}</label>);
+}
+export default function Contact() {
+  return (<form>
+    <Field label="Full name"><input value={a} onChange={(e) => setA(e.target.value)} /></Field>
+    <Field label="Email"><input type="email" value={b} /></Field>
+  </form>);
+}
+"""
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_sibling_label_without_htmlfor_is_still_reported():
+    """The label must actually be associated — a sibling with no htmlFor
+    leaves the control unnamed to a screen reader."""
+    code = '<div><label>Password</label><input type="password" /></div>'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_prop_forwarding_primitive_is_not_judged_for_labels():
+    """`<input {...props} />` in a forwardRef primitive is labelled by its
+    call sites, so the wrapper itself can't be judged (shadcn/ui)."""
+    code = (
+        "const Input = React.forwardRef(({ className, type, ...props }, ref) => {\n"
+        "  return (<input type={type} className={cn(className)} ref={ref} {...props} />);\n"
+        "})"
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_exported_component_ends_the_previous_components_body():
+    """Regression: the body boundary didn't recognise `export function`, so a
+    component preceding an exported <label> wrapper was itself classified as
+    one — silently accepting unlabeled controls inside it (Codex, agents#63)."""
+    from agents.ui_generation import _label_wrapper_components
+
+    src = (
+        "export function Panel({ children }) "
+        '{ return (<div className="panel">{children}</div>); }\n'
+        "export function Field({ label, children }) "
+        "{ return (<label><span>{label}</span>{children}</label>); }\n"
+    )
+    assert _label_wrapper_components(src) == ["Field"]
+
+
+def test_control_inside_a_non_label_wrapper_is_still_reported():
+    code = (
+        "export function Panel({ children }) "
+        '{ return (<div className="panel">{children}</div>); }\n'
+        "export function Field({ label, children }) "
+        "{ return (<label><span>{label}</span>{children}</label>); }\n"
+        "export default function Screen() "
+        "{ return (<Panel><input value={v} /></Panel>); }\n"
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_bare_yarn_with_flags_is_still_an_install():
+    """Yarn Classic runs `yarn install` when given no command, so
+    `yarn --production` installs too (Codex, agents#63)."""
+    for line in ("RUN yarn --production", "RUN yarn --ignore-optional"):
+        issues = _issues(
+            RailwayDeployAgent()._review_deployment_config(
+                "FROM node:20\n" + line + "\n", "Dockerfile"
+            )
+        )
+        assert any("lockfile-strict" in issue for issue in issues), line
+
+
+def test_strict_bare_yarn_with_flags_is_accepted():
+    issues = _issues(
+        RailwayDeployAgent()._review_deployment_config(
+            "FROM node:20\nRUN yarn --frozen-lockfile\n", "Dockerfile"
+        )
+    )
+    assert not any("lockfile-strict" in issue for issue in issues)

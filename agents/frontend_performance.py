@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
+from agents.ui_generation import find_jsx_tags
 
 # `loading="lazy"` and `srcSet` are browser features that email clients do not
 # implement, so telling an email template to use them is noise, not a fix.
@@ -78,11 +79,29 @@ class FrontendPerformanceAgent(BaseAgent):
         # builds its order emails inline, 2026-08-28).
         email_html = _builds_email_html(code)
 
-        if (
-            re.search(r"<img\b", code)
-            and not email_html
-            and not re.search(r"loading\s*=\s*['\"]lazy['\"]", code)
-        ):
+        # Per tag, not per file. Scanning the whole blob let one hinted image
+        # vouch for every other one, so a hero with loading="eager" hid a bare
+        # <img> beside it (Codex, agents#63) — and, before that, one lazy image
+        # hid the rest.
+        img_tags = (
+            []
+            if email_html
+            else [full for _, _, full in find_jsx_tags(code, "img", re.IGNORECASE)]
+        )
+
+        # An explicit loading="eager" or fetchPriority="high" is a deliberate
+        # decision, not an oversight: lazy-loading an above-the-fold or LCP
+        # image makes load performance worse, so don't ask for it back.
+        if [
+            tag
+            for tag in img_tags
+            if not re.search(
+                r"loading\s*=\s*['\"]lazy['\"]|loading\s*=\s*['\"]eager['\"]"
+                r"|fetchPriority\s*=\s*['\"]high['\"]",
+                tag,
+                re.IGNORECASE,
+            )
+        ]:
             findings.append(
                 {
                     "severity": "LOW",
@@ -90,11 +109,11 @@ class FrontendPerformanceAgent(BaseAgent):
                     "fix": "Add loading='lazy' for non-critical images.",
                 }
             )
-        if (
-            re.search(r"<img\b", code)
-            and not email_html
-            and not re.search(r"\b(srcSet|width=|height=)", code)
-        ):
+        if [
+            tag
+            for tag in img_tags
+            if not re.search(r"\b(srcSet|width\s*=|height\s*=)", tag, re.IGNORECASE)
+        ]:
             findings.append(
                 {
                     "severity": "LOW",

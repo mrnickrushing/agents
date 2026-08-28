@@ -69,6 +69,67 @@ def _jsx_tag_end(code: str, start: int) -> Optional[int]:
     return None
 
 
+def _label_wrapper_components(code: str) -> List[str]:
+    """Names of components in this file that wrap their children in a <label>.
+
+    Design systems almost always express a labelled field as a component —
+    `<Field label="Email"><input /></Field>` — whose body renders
+    `<label>…{children}…</label>`. The control is then lexically inside
+    `<Field>`, never inside `<label>`, so enclosure alone can't see the
+    association.
+    """
+    names: List[str] = []
+    for m in re.finditer(
+        r"(?:function\s+([A-Z]\w*)\s*\(|"
+        r"(?:const|let|var)\s+([A-Z]\w*)\s*=\s*(?:\([^)]*\)|\w+)\s*=>)",
+        code,
+    ):
+        name = m.group(1) or m.group(2)
+        # Body runs to the next top-level component definition, which is a
+        # good enough bound for deciding whether this one renders a label.
+        nxt = re.search(
+            r"\n(?:export\s+)?(?:default\s+)?"
+            r"(?:function\s+[A-Z]|(?:const|let|var)\s+[A-Z]\w*\s*=)",
+            code[m.end() :],
+        )
+        body = code[m.end() : m.end() + (nxt.start() if nxt else len(code))]
+        for span in _element_spans(body, "label"):
+            if "{children}" in body[span[0] : span[1]]:
+                names.append(name)
+                break
+    return names
+
+
+def _element_spans(code: str, tag: str) -> List[Tuple[int, int]]:
+    """(start, end) offsets of each `<tag>…</tag>` element, nesting-aware."""
+    spans: List[Tuple[int, int]] = []
+    stack: List[int] = []
+    for m in re.finditer(rf"<\s*(/?)\s*{tag}\b", code, re.IGNORECASE):
+        if m.group(1):
+            if stack:
+                spans.append((stack.pop(), m.end()))
+            continue
+        end = _jsx_tag_end(code, m.end())
+        if end is not None and code[max(0, end - 2) : end] == "/>":
+            continue  # self-closing: encloses nothing
+        stack.append(m.start())
+    return spans
+
+
+def labelling_spans(code: str) -> List[Tuple[int, int]]:
+    """Ranges inside which a form control is already labelled by enclosure.
+
+    Covers both a literal `<label>…<input/></label>` and the wrapper
+    components above. Nesting a control inside its label is valid HTML and
+    needs no htmlFor/id pair, so flagging it was a false positive
+    (aegisapparel Contact.jsx and LegacyDivision.jsx, 2026-08-28).
+    """
+    spans = _element_spans(code, "label")
+    for name in _label_wrapper_components(code):
+        spans.extend(_element_spans(code, re.escape(name)))
+    return spans
+
+
 def find_jsx_tags(
     code: str, name_pattern: str = r"[a-zA-Z][\w.]*", flags: int = 0
 ) -> List[Tuple[str, str, str]]:
@@ -533,9 +594,24 @@ You're not decorating screens — you're crafting the thing the user feels every
                 component_code, "input|textarea|select", re.IGNORECASE
             )
         ]
+        # A control nested inside its <label> (directly, or via a wrapper
+        # component that renders one around {children}) is already associated
+        # and needs no htmlFor/id pair.
+        enclosing = labelling_spans(component_code)
         unlabeled = 0
+        cursor = 0
         for tag in input_tags:
+            offset = component_code.find(tag, cursor)
+            if offset != -1:
+                cursor = offset + 1
+                if any(start <= offset < end for start, end in enclosing):
+                    continue
             if re.search(r"aria-label\s*=|aria-labelledby\s*=", tag, re.IGNORECASE):
+                continue
+            # `<input {...props} />` — a forwarding primitive. Whether it is
+            # labelled is decided by each call site, so judging the wrapper
+            # is a guess (shadcn/ui input.jsx and textarea.jsx, 2026-08-28).
+            if re.search(r"\{\s*\.\.\.\s*\w+\s*\}", tag):
                 continue
             id_match = re.search(r"\bid\s*=\s*[\"']([^\"']+)[\"']", tag, re.IGNORECASE)
             if id_match and re.search(
