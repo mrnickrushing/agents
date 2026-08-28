@@ -521,6 +521,53 @@ def _inline_local_imports(
     return combined
 
 
+# Router layouts, in the order a file-system router nests them. expo-router
+# uses `_layout`, the Next.js App Router uses `layout`.
+_LAYOUT_BASENAMES = tuple(
+    stem + ext for stem in ("_layout", "layout") for ext in _JS_EXTS
+)
+
+
+def _ancestor_layout_sources(path: str, root: str, max_files: int = 8) -> str:
+    """Append the content of layout files in ancestor directories.
+
+    expo-router and the Next.js App Router compose layouts by file-system
+    nesting rather than imports: `app/_layout.tsx` wraps
+    `app/(tabs)/_layout.tsx` without either file mentioning the other, so
+    following imports finds nothing. An ErrorBoundary in a parent layout
+    already covers every layout below it, and judging the nested file alone
+    reported it as uncovered (sugarhaus and VibeMaps both, 2026-08-28).
+    """
+    if os.path.basename(path) not in _LAYOUT_BASENAMES:
+        return ""
+
+    root_abs = os.path.abspath(root)
+    current = os.path.dirname(os.path.abspath(path))
+    combined = ""
+    seen = 0
+    while seen < max_files:
+        parent = os.path.dirname(current)
+        # Stop at the repository root, and at the filesystem root if `path`
+        # somehow sits outside it.
+        if parent == current or not current.startswith(root_abs):
+            break
+        current = parent
+        for base in _LAYOUT_BASENAMES:
+            candidate = os.path.join(current, base)
+            if not os.path.isfile(candidate):
+                continue
+            try:
+                combined += (
+                    f"\n\n// --- parent layout {os.path.relpath(candidate, root)} ---\n"
+                    + _read(candidate)
+                )
+            except OSError:
+                continue
+            seen += 1
+            break
+    return combined
+
+
 _TEST_PATH_RE = re.compile(
     r"(^|/)(tests?|__tests__)/|"
     r"(^|/)(test_\w+|\w+_test|\w+\.(test|spec))\.\w+$|"
@@ -1781,6 +1828,8 @@ def _run_scan(
                     if tool_name in CROSS_FILE_TOOLS
                     else content
                 )
+                if tool_name == "review_error_boundary_coverage":
+                    effective_content += _ancestor_layout_sources(path, root)
                 if tool_name == "review_express_route":
                     package_dir = os.path.dirname(path)
                     handles_async_route_errors = async_route_error_cache.setdefault(
