@@ -26,6 +26,19 @@ from agents.base import BaseAgent
 logger = logging.getLogger(__name__)
 
 
+def _strip_js_comments(code: str) -> str:
+    """Drop // and /* */ comments so regex checks don't read prose as code.
+
+    Newlines inside block comments are preserved so any line numbers derived
+    from the result still line up with the original file.
+    """
+
+    def blank(match: re.Match[str]) -> str:
+        return "\n" * match.group(0).count("\n")
+
+    return re.sub(r"/\*.*?\*/|//[^\n]*", blank, code, flags=re.DOTALL)
+
+
 def _shannon_entropy(value: str) -> float:
     if not value:
         return 0.0
@@ -477,6 +490,13 @@ Format findings as structured reports with severity, location, description, and 
                 config = parsed
         except json.JSONDecodeError:
             config = None
+
+        if config is None:
+            # Source mode: every check below is a regex over the file body, so
+            # prose in comments would otherwise be read as code. A file that
+            # calls helmet({...}) but *describes* helmet() in a comment was
+            # reported as a bare call (VibeMaps backend/src/index.ts).
+            text = _strip_js_comments(text)
 
         checks = {
             "contentSecurityPolicy": "CSP is not configured — allows inline scripts and styles from any source",

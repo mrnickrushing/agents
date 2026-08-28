@@ -2638,6 +2638,8 @@ def cmd_remote_findings(args: argparse.Namespace) -> None:
         )
     except OSError as exc:
         raise SystemExit(f"Could not reach {args.url}: {exc}") from exc
+    if not getattr(args, "include_dismissed", False):
+        findings = [f for f in findings if f.get("verdict") != "FALSE_POSITIVE"]
     if args.json:
         print(json.dumps(findings, indent=2))
         return
@@ -2920,6 +2922,11 @@ def main() -> None:
     )
     p_remote.add_argument("--limit", type=int, default=200)
     p_remote.add_argument("--json", action="store_true", help="Raw JSON instead")
+    p_remote.add_argument(
+        "--include-dismissed",
+        action="store_true",
+        help="Also list findings already dismissed as false positives",
+    )
     p_remote.set_defaults(func=cmd_remote_findings)
 
     p_rfb = sub.add_parser(
