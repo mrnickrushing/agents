@@ -192,6 +192,93 @@ def _is_placeholder_credential(value: str) -> bool:
     return set(value) <= {"*", "x", "X", "."}
 
 
+def _assignment_expression(code: str, start: int, limit: int = 20000) -> str:
+    """The right-hand side of an assignment, from ``start`` to the statement end.
+
+    A `;` or newline only ends the statement when it is not inside a string, a
+    template literal or a bracketed group, and when the line does not end on an
+    operator — `node.innerHTML =` followed by the expression on the next line is
+    one statement, and reading it as an empty one would call it static.
+    """
+    i = start
+    while i < len(code) and code[i] in " \t\r\n":
+        i += 1
+    begin = i
+    depth = 0
+    quote = None
+    template_depth = 0
+    last = ""
+    stop = min(len(code), begin + limit)
+    while i < stop:
+        ch = code[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if quote == "`" and ch == "$" and code[i + 1 : i + 2] == "{":
+                template_depth += 1
+                i += 2
+                continue
+            if quote == "`" and ch == "}" and template_depth:
+                template_depth -= 1
+            elif ch == quote and not template_depth:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and ch == ";":
+            break
+        elif depth == 0 and ch == "\n":
+            # The operator can lead the next line as easily as trail this one:
+            # `= "<b>"` then `+ userInput` is one expression, and reading only
+            # the literal would call the assignment static.
+            following = re.match(r"\s*(\S)", code[i:])
+            if last not in "+,([{?:&|=" and not (
+                following and following.group(1) in "+-*/%?:&|,."
+            ):
+                break
+        if not ch.isspace():
+            last = ch
+        i += 1
+    return code[begin:i]
+
+
+def _is_static_html(expression: str) -> bool:
+    """True when nothing in the assigned value is computed at runtime.
+
+    `el.innerHTML = ""` and `el.innerHTML = '<p>None yet</p>'` cannot carry
+    user input; a template literal with any `${...}`, or a bare identifier or
+    call, can. An unterminated literal is treated as dynamic — unjudgeable is
+    not the same as safe.
+    """
+    outside = []
+    quote = None
+    i = 0
+    while i < len(expression):
+        ch = expression[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if quote == "`" and ch == "$" and expression[i + 1 : i + 2] == "{":
+                return False
+            if ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        else:
+            outside.append(ch)
+        i += 1
+    if quote is not None:
+        return False
+    return not re.search(r"[^\s+;]", "".join(outside))
+
+
 class SecurityAuditAgent(BaseAgent):
     """
     Security hardening and audit agent for Node/Express, React, and React Native apps.
@@ -1374,12 +1461,30 @@ Format findings as structured reports with severity, location, description, and 
                 }
             )
 
-        if re.search(r"\.innerHTML\s*=(?!=)", code):
+        # Reported per assignment rather than once per file, and only where the
+        # value is built at runtime: `el.innerHTML = ""` to clear a container,
+        # or a literal empty-state fragment, carries nothing to escape. `+=` is
+        # the same sink and was previously missed entirely — the old pattern
+        # required `=` immediately after the property.
+        stripped = _strip_js_comments(code)
+        risky = [
+            stripped.count("\n", 0, match.start()) + 1
+            for match in re.finditer(r"\.innerHTML\s*\+?=(?!=)", stripped)
+            if not _is_static_html(_assignment_expression(stripped, match.end()))
+        ]
+        if risky:
+            where = (
+                f"line {risky[0]}"
+                if len(risky) == 1
+                else f"line {risky[0]} and {len(risky) - 1} more"
+            )
             findings.append(
                 {
                     "severity": "HIGH",
-                    "issue": "Direct .innerHTML assignment found — verify the assigned value isn't user-controlled",
-                    "fix": "Use .textContent for plain text, or sanitize HTML with DOMPurify",
+                    "issue": f".innerHTML assigned a value built at runtime ({where}) "
+                    "— verify every part of it is escaped or not user-controlled",
+                    "line": risky[0],
+                    "fix": "Use .textContent for plain text, escape each interpolated value, or sanitize the HTML with DOMPurify",
                 }
             )
 

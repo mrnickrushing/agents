@@ -1392,7 +1392,7 @@ RULES: List[
     ),
     (
         None,
-        r"dangerouslySetInnerHTML|\.innerHTML\s*=(?!=)|\|\s*safe\b|Markup\(|\bv-html\s*=|\{@html\b|bypassSecurityTrustHtml\(",
+        r"dangerouslySetInnerHTML|\.innerHTML\s*\+?=(?!=)|\|\s*safe\b|Markup\(|\bv-html\s*=|\{@html\b|bypassSecurityTrustHtml\(",
         "security_audit",
         "audit_xss_patterns",
         lambda p, c: {"code": c},
