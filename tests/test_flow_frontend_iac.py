@@ -219,3 +219,44 @@ def test_iac_dockerfile_unpinned_image_and_baked_secret():
         IACSecurityAgent()._audit_iac_security(pinned, path="Dockerfile")["findings"]
         == []
     )
+
+
+def test_email_html_images_are_not_asked_for_loading_lazy():
+    """Regression: email clients ignore loading/srcSet, so telling an email
+    template to add them is dead markup. sugarhaus builds its order emails
+    inline in server.js and the finding returned with a fresh id on every
+    commit that touched the file (2026-08-28)."""
+    code = (
+        "const { Resend } = require('resend');\n"
+        'const EMAIL_HEADER_HTML = `<img src="${URL}" alt="Bakery" width="600" />`;\n'
+        "await resend.emails.send({ html: EMAIL_HEADER_HTML });\n"
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("loading='lazy'" in issue for issue in issues)
+    assert not any("unoptimized" in issue for issue in issues)
+
+
+def test_ordinary_page_images_are_still_asked_for_loading_lazy():
+    code = '<section><img src="/hero.png" /><p>Welcome</p></section>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+
+
+def test_a_form_labelled_email_is_not_mistaken_for_an_email_template():
+    """The marker must key on sending/building email, not the word 'email' —
+    a sign-up form with an email field is an ordinary page."""
+    code = (
+        '<form><label htmlFor="email">Email</label>'
+        '<input id="email" type="email" /><img src="/logo.png" /></form>'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+
+
+def test_table_based_email_markup_is_recognised_without_an_sdk_import():
+    code = (
+        '<table cellpadding="0" cellspacing="0" role="presentation">'
+        '<tr><td><img src="https://cdn/x.png" width="600" /></td></tr></table>'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("loading='lazy'" in issue for issue in issues)
