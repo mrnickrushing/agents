@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Dict, List, Tuple
 
 from agents.base import BaseAgent
+from agents.security_audit import _strip_js_comments
 from agents.ui_generation import find_jsx_tags
 
 # `loading="lazy"` and `srcSet` are browser features that email clients do not
@@ -79,6 +80,169 @@ _FILLS_CONTAINER = re.compile(r"absolute[^\"'`]*inset-0")
 def _builds_email_html(code: str) -> bool:
     """True when this module builds or sends email HTML rather than a page."""
     return bool(_EMAIL_HTML_MARKERS.search(code))
+
+
+# Layout thrashing is a read and a write interleaved inside one frame
+# callback, so that each pass dirties layout and then immediately forces it
+# back to measure. Co-occurrence anywhere in a file is not that. chorechart's
+# two bundles measure once in a click handler, pass plain numbers onward, and
+# batch every write inside a double rAF -- the shape the fix text asks for --
+# and the old file-level check reported both of them (2026-08-28).
+#
+# The read set below is deliberately unchanged, so what this reports is a
+# strict subset of what the file-level check reported: it can only drop false
+# positives, never introduce a finding that did not exist before.
+_LAYOUT_READ = re.compile(r"offsetHeight|offsetWidth|getBoundingClientRect")
+
+# A write that dirties layout, so a read after it in the same body has to
+# force a synchronous reflow to answer.
+_LAYOUT_WRITE = re.compile(
+    r"""
+      \.style\b
+    | \.className\s*=
+    | \.classList\s*\.\s*(?:add|remove|toggle)\s*\(
+    | \.setAttribute\s*\(
+    | \.(?:innerHTML|outerHTML|textContent|innerText)\s*=
+    | \.(?:
+          appendChild | append | prepend | insertBefore
+        | insertAdjacentElement | insertAdjacentHTML
+        | removeChild | replaceChildren | replaceChild | replaceWith | remove
+      )\s*\(
+    """,
+    re.VERBOSE,
+)
+
+_FRAME_SCHEDULER = re.compile(r"\b(?:requestAnimationFrame|setInterval)\s*\(")
+
+# `setInterval(tick, 16)` hands off to a function declared elsewhere in the
+# file, so the body worth reading is not at the call site.
+_CALLBACK_NAME = re.compile(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)")
+
+
+def _balanced_span(text: str, start: int) -> int:
+    """Index just past the bracket opened at `start`, or -1 if unbalanced.
+
+    The paren-only `_balanced_call` helpers elsewhere in this package cannot
+    walk a function body, which needs braces.
+    """
+    opener = text[start]
+    closer = {"(": ")", "{": "}"}[opener]
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "\"'`":
+            quote = char
+        elif char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return -1
+
+
+def _concise_arrow_body(code: str, start: int) -> str:
+    """Text of a braceless arrow body — `() => el.style.top = el.offsetTop`.
+
+    Ends at the first `;`, newline, or depth-0 `,`/closing bracket. Stopping at
+    the line break keeps a body from running on into whatever follows and
+    borrowing a write that is not the callback's.
+    """
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(code)):
+        char = code[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in "\"'`":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return code[start:index]
+            depth -= 1
+        elif depth == 0 and char in ";,\n":
+            return code[start:index]
+    return code[start:]
+
+
+def _named_function_body(code: str, name: str) -> str:
+    """Body of a same-file `function name()` or `name = function/arrow`."""
+    escaped = re.escape(name)
+    declaration = re.compile(
+        rf"\bfunction\s+{escaped}\s*\("
+        rf"|\b{escaped}\s*=\s*(?:async\s+)?(?:function\b\s*\w*\s*)?\("
+    )
+    for match in declaration.finditer(code):
+        arguments = _balanced_span(code, code.index("(", match.end() - 1))
+        if arguments == -1:
+            continue
+        arrow = re.compile(r"\s*=>").match(code, arguments)
+        body = re.compile(r"\s*").match(code, arrow.end() if arrow else arguments)
+        start = body.end()
+        if start < len(code) and code[start] == "{":
+            end = _balanced_span(code, start)
+            if end != -1:
+                return code[start:end]
+            continue
+        # A concise arrow has no brace to walk, and requiring one dropped a
+        # genuine `const tick = () => el.style.width = el.offsetWidth` that the
+        # old check reported (Codex, agents#70). Anything else that is not a
+        # brace here is not this function's body at all -- skip it rather than
+        # searching on for some unrelated later block.
+        if arrow:
+            return _concise_arrow_body(code, start)
+    return ""
+
+
+def _frame_callback_bodies(code: str) -> List[str]:
+    """Text of every animation-frame and interval callback body in `code`."""
+    bodies: List[str] = []
+    for match in _FRAME_SCHEDULER.finditer(code):
+        end = _balanced_span(code, match.end() - 1)
+        if end == -1:
+            continue
+        arguments = code[match.end() : end - 1]
+        if "function" in arguments or "=>" in arguments:
+            bodies.append(arguments)
+            continue
+        named = _CALLBACK_NAME.match(arguments)
+        if named:
+            body = _named_function_body(code, named.group(1))
+            if body:
+                bodies.append(body)
+    return bodies
+
+
+def _thrashes_layout(code: str) -> bool:
+    """True when one frame callback both reads and writes layout."""
+    if not _FRAME_SCHEDULER.search(code) or not _LAYOUT_READ.search(code):
+        return False
+    # Comments are dropped first so a `)` or `}` inside one cannot throw off
+    # the span walk, and so commented-out code is not read as a measurement.
+    stripped = _strip_js_comments(code)
+    return any(
+        _LAYOUT_READ.search(body) and _LAYOUT_WRITE.search(body)
+        for body in _frame_callback_bodies(stripped)
+    )
 
 
 class FrontendPerformanceAgent(BaseAgent):
@@ -193,9 +357,7 @@ class FrontendPerformanceAgent(BaseAgent):
                     "fix": "Add aria-label describing button action.",
                 }
             )
-        if re.search(r"requestAnimationFrame|setInterval", code) and re.search(
-            r"(offsetHeight|offsetWidth|getBoundingClientRect)", code
-        ):
+        if _thrashes_layout(code):
             findings.append(
                 {
                     "severity": "LOW",
