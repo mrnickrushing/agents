@@ -403,3 +403,71 @@ def test_config_audit_is_wired_into_the_scan_rules():
         ".env.example",
         "railway.toml",
     } <= globs
+
+
+def test_a_privilege_dropping_entrypoint_is_not_running_as_root(tmp_path):
+    """A container that starts as root only to hand a mounted volume to its
+    runtime user, then drops and execs the service, is not running as root.
+    It cannot use USER — a volume is mounted over its directory after the
+    build, so a build-time chown never reaches it (backgrounds, 2026-08-28)."""
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13-slim\n"
+        "RUN useradd --uid 10001 app\n"
+        "COPY . /app\n"
+        'ENTRYPOINT ["python3", "/app/docker-entrypoint.py"]\n'
+        'CMD ["python3", "-m", "app"]\n'
+    )
+    (tmp_path / "docker-entrypoint.py").write_text(
+        "import os, pwd\n"
+        "account = pwd.getpwnam('app')\n"
+        "os.setgid(account.pw_gid)\n"
+        "os.setuid(account.pw_uid)\n"
+        "os.execvp('python3', ['python3'])\n"
+    )
+    result = ConfigAuditAgent()._audit_dockerfile(
+        dockerfile.read_text(), str(dockerfile)
+    )
+    assert not any("runs as root" in f["issue"] for f in result["findings"])
+
+
+def test_an_entrypoint_that_does_not_drop_privileges_is_still_reported(tmp_path):
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13-slim\n"
+        "COPY . /app\n"
+        'ENTRYPOINT ["/app/entrypoint.sh"]\n'
+        'CMD ["python3", "-m", "app"]\n'
+    )
+    (tmp_path / "entrypoint.sh").write_text('#!/bin/sh\nexec "$@"\n')
+    result = ConfigAuditAgent()._audit_dockerfile(
+        dockerfile.read_text(), str(dockerfile)
+    )
+    assert any("runs as root" in f["issue"] for f in result["findings"])
+
+
+def test_an_unreadable_entrypoint_does_not_vouch_for_the_container(tmp_path):
+    """The script is not in the build context, so nothing proves it drops."""
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13-slim\n"
+        'ENTRYPOINT ["/usr/local/bin/entry.sh"]\n'
+        'CMD ["python3"]\n'
+    )
+    result = ConfigAuditAgent()._audit_dockerfile(
+        dockerfile.read_text(), str(dockerfile)
+    )
+    assert any("runs as root" in f["issue"] for f in result["findings"])
+
+
+def test_gosu_named_inline_in_the_dockerfile_counts(tmp_path):
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        "FROM python:3.13-slim\n"
+        "RUN apt-get install -y gosu\n"
+        'ENTRYPOINT ["sh", "-c", "exec gosu app python3 -m app"]\n'
+    )
+    result = ConfigAuditAgent()._audit_dockerfile(
+        dockerfile.read_text(), str(dockerfile)
+    )
+    assert not any("runs as root" in f["issue"] for f in result["findings"])

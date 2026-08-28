@@ -105,3 +105,55 @@ request_id: text('request_id').notNull(),
 sender_email: text('sender_email').notNull(),
 """
     assert DatabaseArchitectAgent()._review_constraints(code)["findings"] == []
+
+
+def test_query_select_does_not_match_queryselector():
+    """`card.querySelector(...)` inside a .forEach is DOM traversal, not a
+    database call. Without a word boundary after `query`, every DOM-heavy
+    script that reaches for an element inside a loop read as an N+1
+    (backgrounds/workbench, 2026-08-28)."""
+    agent = DatabaseArchitectAgent()
+    dom = """
+rows.forEach((card) => {
+  const button = card.querySelector("[data-view-load]");
+  const target = card.querySelectorAll(".cell");
+  button.onclick = () => open(card.dataset.id);
+});
+"""
+    assert agent._review_n_plus_one(dom)["findings"] == []
+
+
+def test_a_real_query_in_a_loop_is_still_reported():
+    agent = DatabaseArchitectAgent()
+    for code in (
+        'for (const id of ids) { const row = await db.query("SELECT 1", [id]); }',
+        "users.map(async (u) => { return await prisma.user.findUnique({ where: { id: u.id } }); })",
+        "for case_id in case_ids:\n    row = session.execute(select(Case))\n",
+    ):
+        assert agent._review_n_plus_one(code)["findings"], code
+
+
+def test_the_orms_own_suffixed_spellings_still_report():
+    """A boundary straight after the base name would have silenced every one
+    of these — the suffix is part of the method, not the next token."""
+    agent = DatabaseArchitectAgent()
+    for code in (
+        "for (const u of users) { await prisma.user.findUniqueOrThrow({ where: { id: u.id } }); }",
+        "for (const u of users) { await prisma.user.findFirstOrThrow({ where: { id: u.id } }); }",
+        "for (const u of users) { await User.findOneAndUpdate({ _id: u.id }, patch); }",
+        "for (const u of users) { await User.findByIdAndDelete(u.id); }",
+        "for (const u of users) { await db.selectDistinct().from(t); }",
+        'for (const u of users) { await conn.executeMany("SELECT 1", [u.id]); }',
+        "for (const u of users) { await db.queryRaw`SELECT 1`; }",
+    ):
+        assert agent._review_n_plus_one(code)["findings"], code
+
+
+def test_other_dom_and_driver_lookalikes_stay_clean():
+    agent = DatabaseArchitectAgent()
+    for code in (
+        'items.forEach((i) => { document.queryCommandState("bold"); });',
+        'items.forEach((i) => { driver.executeScript("return 1"); });',
+        'rows.forEach((card) => { card.querySelectorAll(".cell").forEach(paint); });',
+    ):
+        assert agent._review_n_plus_one(code)["findings"] == [], code
