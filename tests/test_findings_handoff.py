@@ -145,3 +145,101 @@ def test_cli_remote_findings_pulls_from_a_dashboard(tmp_path, monkeypatch):
         assert denied.returncode != 0 and "token is required" in denied.stderr
     finally:
         server.shutdown()
+
+
+def test_dismissed_findings_are_left_out_of_the_handoff():
+    # Regression: /api/findings returns dismissed findings so the board can
+    # offer its "show dismissed" toggle, but the Markdown hand-off has no such
+    # toggle — it used to list them anyway, so dismissing a false positive
+    # changed nothing and the same finding came back in every hand-off.
+    findings = [
+        {
+            "severity": "HIGH",
+            "issue": "Real problem",
+            "file_path": "src/a.ts",
+            "project_label": "nick/app",
+            "finding_id": "agf_real",
+        },
+        {
+            "severity": "HIGH",
+            "issue": "Known false positive",
+            "file_path": "src/b.ts",
+            "project_label": "nick/app",
+            "finding_id": "agf_dismissed",
+            "verdict": "FALSE_POSITIVE",
+            "verdict_reason": "Parameterized fragment, not user input",
+        },
+    ]
+    markdown = findings_markdown(findings)
+    assert "Real problem" in markdown
+    assert "Known false positive" not in markdown
+    assert "fix these 1 finding(s)" in markdown
+
+
+def test_confirmed_and_unreviewed_findings_still_appear():
+    findings = [
+        {
+            "severity": "HIGH",
+            "issue": "Confirmed problem",
+            "file_path": "src/a.ts",
+            "project_label": "nick/app",
+            "verdict": "CONFIRMED",
+        },
+        {
+            "severity": "LOW",
+            "issue": "Unreviewed problem",
+            "file_path": "src/b.ts",
+            "project_label": "nick/app",
+        },
+    ]
+    markdown = findings_markdown(findings)
+    assert "Confirmed problem" in markdown
+    assert "Unreviewed problem" in markdown
+    assert "fix these 2 finding(s)" in markdown
+
+
+def test_dismissed_findings_are_shown_when_explicitly_requested():
+    findings = [
+        {
+            "severity": "HIGH",
+            "issue": "Known false positive",
+            "file_path": "src/b.ts",
+            "project_label": "nick/app",
+            "verdict": "FALSE_POSITIVE",
+        }
+    ]
+    assert "Known false positive" in findings_markdown(findings, include_dismissed=True)
+
+
+def test_cli_include_dismissed_reaches_the_markdown_formatter(monkeypatch, capsys):
+    """Regression: the CLI filtered its own list but then called
+    findings_markdown() without the flag, so its default re-filtered and
+    --include-dismissed only worked with --json (Codex, agents#60)."""
+    import argparse
+
+    from agents import cli
+
+    rows = [
+        {
+            "severity": "HIGH",
+            "issue": "Known false positive",
+            "file_path": "src/b.ts",
+            "project_label": "nick/app",
+            "verdict": "FALSE_POSITIVE",
+        }
+    ]
+    monkeypatch.setattr(cli, "fetch_remote_findings", lambda *a, **k: rows)
+    args = argparse.Namespace(
+        token="t",
+        url="http://example",
+        project=None,
+        limit=200,
+        json=False,
+        include_dismissed=True,
+    )
+    cli.cmd_remote_findings(args)
+    assert "Known false positive" in capsys.readouterr().out
+
+    args.include_dismissed = False
+    cli.cmd_remote_findings(args)
+    assert "Known false positive" not in capsys.readouterr().out

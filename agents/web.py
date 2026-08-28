@@ -1321,11 +1321,23 @@ def _rationale(tool: str, issue: str) -> str:
     return explain_finding(tool or "", {"issue": issue})
 
 
-def findings_markdown(findings: List[Dict[str, Any]], title: str = "") -> str:
+def findings_markdown(
+    findings: List[Dict[str, Any]], title: str = "", include_dismissed: bool = False
+) -> str:
     """The hand-off format: findings grouped by repository, each with the
     line, the reason, the fix and its id — what a person (or Claude) needs
-    to go fix them. Mirrors the dashboard's *Copy for Claude* button."""
+    to go fix them. Mirrors the dashboard's *Copy for Claude* button.
+
+    Findings already dismissed as false positives are left out: /api/findings
+    returns them so the board can offer its "show dismissed" toggle, and this
+    is the one consumer with no such toggle. Without this filter a dismissal
+    changed nothing here, and the same false positives came back in every
+    hand-off asking to be fixed.
+    """
     from datetime import datetime, timezone
+
+    if not include_dismissed:
+        findings = [f for f in findings if f.get("verdict") != "FALSE_POSITIVE"]
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [

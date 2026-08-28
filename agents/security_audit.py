@@ -26,6 +26,116 @@ from agents.base import BaseAgent
 logger = logging.getLogger(__name__)
 
 
+# A `/` starts a regex literal only where an expression may start. After a
+# value — an identifier, a literal, `)` or `]` — it is division instead.
+_REGEX_MAY_FOLLOW_CHARS = set("(,=:[!&|?{};+-*%~^<>")
+_REGEX_MAY_FOLLOW_WORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "throw",
+        "case",
+        "do",
+        "else",
+        "yield",
+        "await",
+    }
+)
+
+
+def _strip_js_comments(code: str) -> str:
+    """Drop // and /* */ comments so regex checks don't read prose as code.
+
+    Scans rather than regexing: a `//[^\\n]*` sweep also matches the `//` in
+    every URL, deleting the rest of that line. In a security check that turns
+    into a false negative — `scriptSrc: ["https://cdn.example",
+    "'unsafe-inline'"]` would lose the unsafe directive before it is tested.
+    So string, template, and regex literals are copied through untouched and
+    only comments outside them are removed.
+
+    Newlines inside block comments are preserved so any line numbers derived
+    from the result still line up with the original file.
+    """
+    out: List[str] = []
+    i = 0
+    length = len(code)
+    # The last significant character emitted, used to tell a regex literal
+    # from division; a trailing keyword counts too (`return /re/`).
+    prev = ""
+    prev_word = ""
+
+    while i < length:
+        ch = code[i]
+
+        if ch in "\"'`":
+            # String or template literal — copy verbatim, honoring escapes.
+            j = i + 1
+            while j < length:
+                if code[j] == "\\":
+                    j += 2
+                    continue
+                if code[j] == ch:
+                    j += 1
+                    break
+                j += 1
+            out.append(code[i:j])
+            prev, prev_word, i = ch, "", j
+            continue
+
+        if ch == "/" and i + 1 < length:
+            nxt = code[i + 1]
+            if nxt == "/":
+                j = code.find("\n", i)
+                i = length if j == -1 else j
+                continue
+            if nxt == "*":
+                j = code.find("*/", i + 2)
+                end = length if j == -1 else j + 2
+                out.append("\n" * code.count("\n", i, end))
+                i = end
+                continue
+            if (
+                not prev
+                or prev in _REGEX_MAY_FOLLOW_CHARS
+                or (prev_word in _REGEX_MAY_FOLLOW_WORDS)
+            ):
+                # Regex literal: `/` is literal inside a [...] class.
+                j = i + 1
+                in_class = False
+                while j < length:
+                    cur = code[j]
+                    if cur == "\\":
+                        j += 2
+                        continue
+                    if cur == "\n":
+                        break  # unterminated — treat the `/` as division
+                    if cur == "[":
+                        in_class = True
+                    elif cur == "]":
+                        in_class = False
+                    elif cur == "/" and not in_class:
+                        j += 1
+                        break
+                    j += 1
+                out.append(code[i:j])
+                prev, prev_word, i = "/", "", j
+                continue
+
+        out.append(ch)
+        if not ch.isspace():
+            prev = ch
+            prev_word = prev_word + ch if (ch.isalnum() or ch == "_") else ""
+        i += 1
+
+    return "".join(out)
+
+
 def _shannon_entropy(value: str) -> float:
     if not value:
         return 0.0
@@ -477,6 +587,13 @@ Format findings as structured reports with severity, location, description, and 
                 config = parsed
         except json.JSONDecodeError:
             config = None
+
+        if config is None:
+            # Source mode: every check below is a regex over the file body, so
+            # prose in comments would otherwise be read as code. A file that
+            # calls helmet({...}) but *describes* helmet() in a comment was
+            # reported as a bare call (VibeMaps backend/src/index.ts).
+            text = _strip_js_comments(text)
 
         checks = {
             "contentSecurityPolicy": "CSP is not configured — allows inline scripts and styles from any source",
