@@ -1557,7 +1557,10 @@ Format findings as structured reports with severity, location, description, and 
         # the narrower list missed, reporting a capped endpoint as unbounded
         # (aegisapparel backend/server.py, 2026-08-28).
         if (is_multer or is_fastapi_upload) and not re.search(
-            r"limits|content_length|\bmax[_a-z]*(?:size|bytes|length|mb|kb)\b",
+            r"limits|content_length"
+            r"|\bmax[_a-z]*(?:file|upload|image|attachment|body|request|part)"
+            r"[_a-z]*(?:size|bytes|length|mb|kb)\b"
+            r"|\bmax(?:_?size|_?bytes|_?length)\b",
             code,
             re.IGNORECASE,
         ):

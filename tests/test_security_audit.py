@@ -214,3 +214,19 @@ def test_upload_with_no_cap_at_all_is_still_reported():
     )
     issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
     assert any("No file size limit" in issue for issue in issues)
+
+
+def test_unrelated_max_size_constant_does_not_count_as_an_upload_cap():
+    """A pagination or buffer limit is not a file-size cap; matching any
+    max…size name suppressed the unbounded-upload finding (Codex,
+    agents#64)."""
+    agent = SecurityAuditAgent()
+    code = (
+        "MAX_PAGE_SIZE = 100\n"
+        '@app.post("/upload")\n'
+        "async def upload(file: UploadFile = File(...)):\n"
+        "    contents = await file.read()\n"
+        '    open("out", "wb").write(contents)\n'
+    )
+    issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
+    assert any("No file size limit" in issue for issue in issues)

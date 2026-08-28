@@ -26,32 +26,54 @@ _EMAIL_HTML_MARKERS = re.compile(
 )
 
 
-def _string_literal_spans(code: str) -> List[Tuple[int, int]]:
-    """(start, end) ranges covered by '...', "..." and `...` literals."""
+def _template_literal_spans(code: str) -> List[Tuple[int, int]]:
+    """(start, end) ranges covered by closed `...` template literals.
+
+    Backticks only, and only when the literal actually closes. Treating ' and
+    " as literal delimiters is unsafe without a real parser: an apostrophe in
+    ordinary JSX text — `<p>Don't wait</p>` — would open a span that swallows
+    everything after it, hiding real findings (Codex, agents#64). Generated
+    markup is written as a template literal in practice, which is the case
+    this needs to recognise.
+    """
     spans: List[Tuple[int, int]] = []
     i = 0
     while i < len(code):
-        ch = code[i]
-        if ch in "\"'`":
-            j = i + 1
-            while j < len(code):
-                if code[j] == "\\":
-                    j += 2
-                    continue
-                if code[j] == ch:
-                    j += 1
-                    break
+        if code[i] != "`":
+            i += 1
+            continue
+        j = i + 1
+        closed = False
+        while j < len(code):
+            if code[j] == "\\":
+                j += 2
+                continue
+            if code[j] == "`":
                 j += 1
+                closed = True
+                break
+            j += 1
+        if closed:
             spans.append((i, j))
             i = j
-            continue
-        i += 1
+        else:
+            i += 1  # unterminated: assume it was not a literal at all
     return spans
 
 
-# An image positioned to fill its container takes its box from that container,
-# so intrinsic width/height would be inert markup and reserve nothing extra.
-_FILLS_CONTAINER = re.compile(r"absolute[^\"'`]*inset-0|w-full[^\"'`]*h-full")
+# Evidence the module hands HTML to the browser, which renders it — so the
+# loading and dimension hints do apply to markup built in a string here.
+_INJECTS_HTML = re.compile(
+    r"\binnerHTML\b|\binsertAdjacentHTML\b|\bouterHTML\b|dangerouslySetInnerHTML",
+)
+
+
+# An absolutely-positioned image with all insets pinned takes its box from its
+# containing block, so intrinsic width/height would be inert markup. `w-full
+# h-full` alone is NOT enough: a percentage height resolves to auto unless the
+# parent has a definite height, and the parent isn't visible from here
+# (Codex, agents#64).
+_FILLS_CONTAINER = re.compile(r"absolute[^\"'`]*inset-0")
 
 
 def _builds_email_html(code: str) -> bool:
@@ -114,7 +136,9 @@ class FrontendPerformanceAgent(BaseAgent):
         # An <img> written inside a string or template literal is markup this
         # module *generates* (an email body, an innerHTML fragment), not JSX it
         # renders, so browser loading hints don't apply to it.
-        literal = _string_literal_spans(code)
+        # Markup a module injects into the DOM is rendered by the browser, so
+        # the hints do apply there — only skip generated markup that isn't.
+        literal = [] if _INJECTS_HTML.search(code) else _template_literal_spans(code)
         img_tags = []
         if not email_html:
             cursor = 0

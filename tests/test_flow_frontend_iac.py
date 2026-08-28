@@ -346,3 +346,39 @@ def test_real_jsx_image_beside_a_string_literal_one_is_still_reported():
     )
     issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
     assert any("lazy" in issue for issue in issues)
+
+
+def test_apostrophe_in_jsx_text_does_not_hide_a_later_image():
+    """Regression: treating ' as a literal delimiter opened a span that ran to
+    EOF, swallowing every image after ordinary prose (Codex, agents#64)."""
+    code = '<div><p>Don\'t wait</p><img src="/hero.png" /></div>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+    assert any("unoptimized" in issue for issue in issues)
+
+
+def test_markup_injected_into_the_dom_is_still_checked():
+    """innerHTML/insertAdjacentHTML markup is rendered by the browser, so the
+    hints do apply to it (Codex, agents#64)."""
+    code = 'el.innerHTML = `<img src="${u}" />`;'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("loading='lazy'" in issue for issue in issues)
+
+
+def test_full_size_image_without_a_reserved_parent_is_still_reported():
+    """`w-full h-full` alone doesn't reserve anything — a percentage height
+    resolves to auto unless the parent has a definite height, and the parent
+    isn't visible from a single-file check (Codex, agents#64)."""
+    code = '<div><img className="w-full h-full" src={url} /></div>'
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert any("unoptimized" in issue for issue in issues)
+
+
+def test_absolutely_pinned_image_is_still_exempt():
+    code = (
+        '<div className="aspect-[4/5]">'
+        '<img className="absolute inset-0 w-full h-full object-cover" '
+        'src={i} loading="lazy" /></div>'
+    )
+    issues = _issues(FrontendPerformanceAgent()._audit_frontend_performance(code))
+    assert not any("unoptimized" in issue for issue in issues)
