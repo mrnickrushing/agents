@@ -287,6 +287,9 @@ def record_webhook_result(
 # and cloning repositories / running detectors on demand must not be.
 
 MAX_ARG_CHARS = 512_000
+# A whole board's worth of dismissals in one request, with a ceiling so a
+# malformed client can't ask for an unbounded write.
+MAX_FEEDBACK_BATCH = 500
 _CATALOG: List[Dict[str, Any]] = []
 _CATALOG_LOCK = threading.Lock()
 
@@ -1032,26 +1035,87 @@ def create_app(
         if refusal:
             return refusal
         body = request.get_json(silent=True) or {}
-        finding_id = str(body.get("finding_id", "")).strip()
         verdict = str(body.get("verdict", "")).strip()
         reason = str(body.get("reason", "")).strip()[:500]
-        if not finding_id or not verdict or not reason:
+        # One id or many: the board dismisses a whole filtered batch in a
+        # single request rather than one round trip per finding.
+        raw_ids = body.get("finding_ids")
+        if raw_ids is None:
+            raw_ids = [body.get("finding_id", "")]
+        elif not isinstance(raw_ids, list):
+            return jsonify({"error": "finding_ids must be a list"}), 400
+        seen: set = set()
+        finding_ids = []
+        for raw in raw_ids:
+            candidate = str(raw).strip()
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                finding_ids.append(candidate)
+        if not finding_ids or not verdict or not reason:
             return (
-                jsonify({"error": "finding_id, verdict and reason are required"}),
+                jsonify({"error": "finding_id(s), verdict and reason are required"}),
                 400,
             )
+        if len(finding_ids) > MAX_FEEDBACK_BATCH:
+            return (
+                jsonify(
+                    {
+                        "error": f"at most {MAX_FEEDBACK_BATCH} findings per request, "
+                        f"got {len(finding_ids)}"
+                    }
+                ),
+                400,
+            )
+
+        by = g.principal.get("login", "")
+        results = []
+        failures = []
         try:
             with EvolutionStore(resolved_db) as store:
-                result = store.add_feedback(finding_id, verdict, reason)
+                for finding_id in finding_ids:
+                    try:
+                        entry = store.add_feedback(finding_id, verdict, reason)
+                    except KeyError:
+                        # One unknown id must not throw away the verdicts that
+                        # did land — report it and keep going.
+                        failures.append(
+                            {
+                                "finding_id": finding_id,
+                                "error": f"unknown finding id {finding_id}",
+                            }
+                        )
+                        continue
+                    entry["by"] = by
+                    results.append(entry)
         except ValueError as exc:
+            # A bad verdict is the same for every id — nothing was written.
             return jsonify({"error": str(exc)}), 400
-        except KeyError:
-            return jsonify({"error": f"unknown finding id {finding_id}"}), 404
-        result["by"] = g.principal.get("login", "")
-        dashboard.publish_event(
-            f"feedback {finding_id}: {result['verdict'].lower()} by {result['by']}"
+
+        # A single-id request keeps its original shape, so anything already
+        # calling this endpoint sees no change.
+        if len(finding_ids) == 1 and not body.get("finding_ids"):
+            if failures:
+                return jsonify({"error": failures[0]["error"]}), 404
+            dashboard.publish_event(
+                f"feedback {results[0]['finding_id']}: "
+                f"{results[0]['verdict'].lower()} by {by}"
+            )
+            return jsonify(results[0])
+
+        if results:
+            settled = results[0]["verdict"].lower()
+            dashboard.publish_event(
+                f"feedback: {len(results)} finding(s) {settled} by {by}"
+            )
+        payload = {
+            "results": results,
+            "failures": failures,
+            "applied": len(results),
+            "requested": len(finding_ids),
+        }
+        return jsonify(payload), (
+            207 if failures and results else 200 if results else 404
         )
-        return jsonify(result)
 
     @app.get("/api/jobs")
     def api_jobs():
