@@ -181,7 +181,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--sev); }
 .card[data-sev="CRITICAL"] { --sev: var(--critical); } .card[data-sev="HIGH"] { --sev: var(--high); }
 .card[data-sev="MEDIUM"] { --sev: var(--medium); } .card[data-sev="LOW"] { --sev: var(--low); } .card[data-sev="INFO"] { --sev: var(--info); }
-.card summary { list-style: none; cursor: pointer; padding: 14px 16px 14px 20px; min-height: 56px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 12px; align-items: start; }
+.card summary { list-style: none; cursor: pointer; padding: 14px 16px 14px 20px; min-height: 56px; display: grid; grid-template-columns: auto auto minmax(0,1fr) auto; gap: 12px; align-items: start; }
 .card summary::marker { display: none; content: ""; }
 .card summary::-webkit-details-marker { display: none; }
 .badge { font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--sev); border: 1px solid color-mix(in srgb, var(--sev) 50%, transparent); background: color-mix(in srgb, var(--sev) 12%, transparent); border-radius: 6px; padding: 3px 7px; white-space: nowrap; margin-top: 2px; }
@@ -209,6 +209,11 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 .reason { color: var(--muted); font-style: italic; }
 .card[data-verdict="FALSE_POSITIVE"] { opacity: .72; }
 .copy { margin-left: auto; }
+.pick { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+span.pick { display: inline-block; }
+.bulk { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
+.bulk .count { font-weight: 600; }
+.bulk .grow { margin-left: auto; }
 .empty { border: 1px dashed var(--line); border-radius: 14px; padding: 28px 20px; text-align: center; color: var(--muted); }
 .empty code { color: var(--text); }
 
@@ -237,7 +242,9 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: 0 0 auto; }
   .toolbar .search { flex-basis: 100%; }
-  .card summary { grid-template-columns: minmax(0,1fr); gap: 8px; padding: 14px 14px 14px 18px; }
+  .card summary { grid-template-columns: auto minmax(0,1fr); gap: 8px; padding: 14px 14px 14px 18px; }
+  .card summary > .pick { grid-row: 1 / -1; }
+  .card summary > :not(.pick) { grid-column: 2; }
   .badge { justify-self: start; }
   .caret { display: none; }
   .body { padding: 0 14px 14px 18px; }
@@ -358,7 +365,15 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
       <button class="chip" id="chip-dismissed" aria-pressed="false" type="button" title="Show findings a person dismissed as false positives">Dismissed <span class="n">0</span></button>
     </div>
     <input class="search" id="search" type="search" placeholder="Filter by file, repo, issue, detector…" aria-label="Filter findings">
+    <button class="btn" type="button" id="select-all" title="Select every finding matching the current filters, for one bulk verdict">Select all shown</button>
     <button class="btn" type="button" id="copy-claude" title="Copy the findings shown below as Markdown to paste into Claude">Copy for Claude</button>
+  </div>
+
+  <div class="bulk" id="bulk" hidden>
+    <span class="count" id="bulk-count">0 selected</span>
+    <button class="btn" type="button" id="bulk-dismiss" title="Mark every selected finding a false positive with one reason">Dismiss selected…</button>
+    <button class="btn" type="button" id="bulk-confirm" title="Mark every selected finding real with one reason">Confirm selected…</button>
+    <button class="btn grow" type="button" id="bulk-clear">Clear selection</button>
   </div>
 
   <section class="list" id="list" aria-live="polite">
@@ -370,7 +385,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 28px max(20px, env(safe-area-
 
 <script>
 const $ = (s) => document.querySelector(s);
-const state = { findings: [], sev: new Set(), q: '', open: new Set(), lastPayload: '', showDismissed: false };
+const state = { findings: [], sev: new Set(), q: '', open: new Set(), lastPayload: '', showDismissed: false, selected: new Set() };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function when(iso) {
@@ -411,6 +426,10 @@ async function loadFindings() {
     if (text === state.lastPayload) return;   // nothing changed: keep open cards and scroll position
     state.lastPayload = text;
     state.findings = (JSON.parse(text).findings) || [];
+    // A finding that has been fixed, or already given a verdict, is gone from
+    // the payload — drop it from the selection rather than sending a stale id.
+    const live = new Set(state.findings.map(f => f.finding_id));
+    for (const id of [...state.selected]) if (!live.has(id)) state.selected.delete(id);
     render();
   } catch (e) { console.warn('findings', e); }
 }
@@ -468,6 +487,7 @@ function card(f) {
   return `
   <details class="card" data-sev="${esc(f.severity)}" data-id="${id}" data-verdict="${esc(f.verdict || '')}"${state.open.has(f.finding_id) ? ' open' : ''}>
     <summary>
+      ${id ? `<input class="pick" type="checkbox" data-id="${id}" ${state.selected.has(f.finding_id) ? 'checked' : ''} aria-label="Select this finding for a bulk verdict">` : '<span class="pick" aria-hidden="true"></span>'}
       <span class="badge">${esc(f.severity)}</span>
       <span>
         <div class="title">${esc(f.issue)}${f.verdict ? ` <span class="verdict ${f.verdict === 'FALSE_POSITIVE' ? 'dismissed' : 'confirmed'}" title="${esc(f.verdict_reason || '')}">${f.verdict === 'FALSE_POSITIVE' ? 'dismissed' : 'confirmed'}</span>` : ''}</div>
@@ -493,15 +513,33 @@ function card(f) {
   </details>`;
 }
 
+// Selection for bulk verdicts, held in `state` rather than read back off the
+// DOM so it survives the re-render that every filter change triggers.
+function selectableIds(rows) {
+  return rows.filter(f => f.finding_id).map(f => f.finding_id);
+}
+
+function updateBulk() {
+  const n = state.selected.size;
+  $('#bulk').hidden = n === 0;
+  $('#bulk-count').textContent = `${n} selected`;
+  const shown = selectableIds(visibleFindings());
+  const allPicked = shown.length > 0 && shown.every(id => state.selected.has(id));
+  $('#select-all').textContent = allPicked ? 'Select none' : 'Select all shown';
+  $('#select-all').disabled = shown.length === 0;
+}
+
 function render() {
   const rows = visibleFindings();
   const list = $('#list');
   if (!state.findings.length) {
     list.innerHTML = `<div class="empty">Nothing recorded yet. Open a pull request on a connected repository, or run <code>agents scan --path . </code> locally with recording on, and findings land here.</div>`;
+    updateBulk();
     return;
   }
-  if (!rows.length) { list.innerHTML = `<div class="empty">No findings match this filter.</div>`; return; }
+  if (!rows.length) { list.innerHTML = `<div class="empty">No findings match this filter.</div>`; updateBulk(); return; }
   list.innerHTML = rows.map(card).join('');
+  updateBulk();
 }
 
 document.querySelectorAll('.chip[data-sev]').forEach(c => c.addEventListener('click', () => {
@@ -538,6 +576,67 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-verdict]'); if (!b) return;
   sendVerdict(b.dataset.id, b.dataset.verdict);
 });
+
+// The checkbox sits inside <summary> so a card can be picked without being
+// opened. Browsers make the box itself the activation target, so the card does
+// not toggle; stopPropagation keeps that true for any that disagree. Never
+// preventDefault here — it would revert the box's own tick.
+$('#list').addEventListener('click', e => {
+  if (e.target.closest('.pick')) e.stopPropagation();
+});
+// `change` rather than `click`, so the box's state is settled before it is read.
+$('#list').addEventListener('change', e => {
+  const box = e.target.closest('.pick'); if (!box) return;
+  box.checked ? state.selected.add(box.dataset.id) : state.selected.delete(box.dataset.id);
+  updateBulk();
+});
+
+$('#select-all').addEventListener('click', () => {
+  const shown = selectableIds(visibleFindings());
+  const allPicked = shown.length > 0 && shown.every(id => state.selected.has(id));
+  // Scoped to what the filters are showing, so "select all" can never reach a
+  // finding the person cannot currently see.
+  for (const id of shown) allPicked ? state.selected.delete(id) : state.selected.add(id);
+  render();
+});
+
+$('#bulk-clear').addEventListener('click', () => { state.selected.clear(); render(); });
+$('#bulk-dismiss').addEventListener('click', () => sendVerdictBatch('dismiss'));
+$('#bulk-confirm').addEventListener('click', () => sendVerdictBatch('confirm'));
+
+async function sendVerdictBatch(verdict) {
+  const ids = selectableIds(visibleFindings()).filter(id => state.selected.has(id));
+  if (!ids.length) return;
+  const what = `${ids.length} finding${ids.length === 1 ? '' : 's'}`;
+  const reason = prompt(verdict === 'dismiss'
+    ? `Why are these ${what} false positives? The same reason is recorded for each.`
+    : `Confirm ${what} — what makes them real? The same reason is recorded for each.`);
+  if (reason === null || !reason.trim()) return;
+  const buttons = [$('#bulk-dismiss'), $('#bulk-confirm'), $('#bulk-clear')];
+  buttons.forEach(b => b.disabled = true);
+  $('#bulk-count').textContent = `applying to ${what}…`;
+  try {
+    const r = await fetch('/api/feedback', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ finding_ids: ids, verdict, reason: reason.trim() }),
+    });
+    const d = await r.json();
+    if (!r.ok && !d.applied) { alert(d.error || r.statusText); return; }
+    // A partial result is reported rather than swallowed: the ones that landed
+    // stay landed, and the person is told which did not.
+    if (d.failures && d.failures.length) {
+      alert(`${d.applied} of ${d.requested} recorded. These could not be: ` +
+            d.failures.map(f => f.finding_id).join(', '));
+    }
+    for (const entry of (d.results || [])) state.selected.delete(entry.finding_id);
+    state.lastPayload = ''; loadSummary(); loadFindings();
+  } catch (err) {
+    alert('Could not reach the service: ' + err);
+  } finally {
+    buttons.forEach(b => b.disabled = false);
+    updateBulk();
+  }
+}
 function findingsMarkdown(rows) {
   const groups = new Map();
   for (const f of rows) {

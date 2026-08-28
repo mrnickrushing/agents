@@ -165,3 +165,130 @@ def test_cli_remote_feedback_records_a_verdict(app):
         )
     finally:
         server.shutdown()
+
+
+# --- Bulk verdicts from the board -------------------------------------------
+
+
+def test_one_request_dismisses_a_whole_batch(app):
+    """The board sends the selected findings together: 26 dismissals should be
+    one round trip, not 26."""
+    client = app.test_client()
+    rows = client.get("/api/findings", headers=AUTH).get_json()["findings"]
+    ids = [r["finding_id"] for r in rows]
+    assert len(ids) == 2
+
+    r = client.post(
+        "/api/feedback",
+        json={"finding_ids": ids, "verdict": "dismiss", "reason": "both delegated"},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["applied"] == 2 and body["requested"] == 2 and body["failures"] == []
+    assert {e["verdict"] for e in body["results"]} == {"FALSE_POSITIVE"}
+
+    summary = client.get("/api/summary", headers=AUTH).get_json()
+    assert summary["by_severity"] == {} and summary["dismissed"] == 2
+    # The rows stay in the payload carrying their verdict; the board hides them.
+    after = client.get("/api/findings", headers=AUTH).get_json()["findings"]
+    assert {r["verdict"] for r in after} == {"FALSE_POSITIVE"}
+
+
+def test_an_unknown_id_does_not_discard_the_verdicts_that_landed(app):
+    """A stale id in the selection must not cost the whole batch."""
+    client = app.test_client()
+    rows = client.get("/api/findings", headers=AUTH).get_json()["findings"]
+    good = rows[0]["finding_id"]
+
+    r = client.post(
+        "/api/feedback",
+        json={
+            "finding_ids": [good, "agf_gone"],
+            "verdict": "dismiss",
+            "reason": "one of these is stale",
+        },
+        headers=AUTH,
+    )
+    assert r.status_code == 207
+    body = r.get_json()
+    assert body["applied"] == 1 and body["requested"] == 2
+    assert [f["finding_id"] for f in body["failures"]] == ["agf_gone"]
+    assert client.get("/api/summary", headers=AUTH).get_json()["dismissed"] == 1
+
+
+def test_a_repeated_id_is_recorded_once(app):
+    client = app.test_client()
+    good = client.get("/api/findings", headers=AUTH).get_json()["findings"][0][
+        "finding_id"
+    ]
+    r = client.post(
+        "/api/feedback",
+        json={"finding_ids": [good, good], "verdict": "dismiss", "reason": "dupe"},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    assert r.get_json()["requested"] == 1 and r.get_json()["applied"] == 1
+
+
+def test_a_bad_batch_is_refused_before_anything_is_written(app):
+    client = app.test_client()
+    ids = [
+        r["finding_id"]
+        for r in client.get("/api/findings", headers=AUTH).get_json()["findings"]
+    ]
+
+    assert (
+        client.post(
+            "/api/feedback",
+            json={"finding_ids": ids, "verdict": "maybe", "reason": "unsure"},
+            headers=AUTH,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/feedback",
+            json={"finding_ids": "not-a-list", "verdict": "dismiss", "reason": "x"},
+            headers=AUTH,
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/feedback",
+            json={
+                "finding_ids": [f"agf_{n}" for n in range(501)],
+                "verdict": "dismiss",
+                "reason": "too many",
+            },
+            headers=AUTH,
+        ).status_code
+        == 400
+    )
+    # Nothing was recorded by any of those.
+    assert client.get("/api/summary", headers=AUTH).get_json()["dismissed"] == 0
+
+
+def test_the_single_id_shape_is_unchanged(app):
+    """Anything already calling this endpoint with one id sees no difference."""
+    client = app.test_client()
+    good = client.get("/api/findings", headers=AUTH).get_json()["findings"][0][
+        "finding_id"
+    ]
+    r = client.post(
+        "/api/feedback",
+        json={"finding_id": good, "verdict": "dismiss", "reason": "still flat"},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["finding_id"] == good and body["verdict"] == "FALSE_POSITIVE"
+    assert "results" not in body
+
+    missing = client.post(
+        "/api/feedback",
+        json={"finding_id": "agf_gone", "verdict": "dismiss", "reason": "x"},
+        headers=AUTH,
+    )
+    assert missing.status_code == 404
