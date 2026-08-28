@@ -661,11 +661,35 @@ def _luau_alias_expr(name: str, content: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def _within_root(candidate: str, root: str) -> bool:
+    """True when `candidate` really sits under `root`.
+
+    A prefix test says yes to `/repo-backup/x` for root `/repo`; comparing
+    the common ancestor does not.
+    """
+    try:
+        return os.path.commonpath(
+            [os.path.abspath(candidate), os.path.abspath(root)]
+        ) == os.path.abspath(root)
+    except ValueError:  # different drives on Windows
+        return False
+
+
 def _resolve_luau_import(
     spec: str, path: str, root: str, content: str
 ) -> Optional[str]:
-    """Resolve one `require(...)` argument to a file on disk."""
-    spec = spec.strip()
+    """Resolve one `require(...)` argument to a file inside the scan root."""
+    found = _resolve_luau_target(spec.strip(), path, root, content)
+    # Every form can address a file outside the repository being scanned —
+    # enough `..` in a string require, a `script.Parent` walk that climbs too
+    # far, a Rojo `$path` pointing at a sibling checkout. Findings must not be
+    # based on source the scan was never pointed at.
+    return found if found and _within_root(found, root) else None
+
+
+def _resolve_luau_target(
+    spec: str, path: str, root: str, content: str
+) -> Optional[str]:
 
     literal = re.fullmatch(r"""["']([^"']+)["']""", spec)
     if literal:
@@ -691,9 +715,6 @@ def _resolve_luau_import(
                     if step == "Parent"
                     else os.path.join(location, step)
                 )
-            root_abs = os.path.abspath(root)
-            if not os.path.abspath(location).startswith(root_abs):
-                return None
             return _luau_module_file(location)
 
         if head.startswith("service:"):

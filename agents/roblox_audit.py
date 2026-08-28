@@ -135,66 +135,39 @@ _VALIDATION_RE = re.compile(
 _CALL_RE = re.compile(r"(?<![\w.:])(?:(\w+)\s*([.:])\s*)?(\w+)\s*\(([^()]*)\)")
 
 
-def _function_body(scope: str, name: str) -> Optional[str]:
-    """The body of a function named ``name`` defined anywhere in ``scope``.
+def _function_bodies(scope: str, name: str, receiver: str = "") -> List[str]:
+    """Every body of a function named ``name`` defined in ``scope``.
 
     Matches every way Luau spells a definition — `function f()`,
     `local function f()`, `function M.f()`, `function M:f()`, `f = function()`
     — so a handler that delegates to a named helper can be judged on what
     that helper actually does.
+
+    When the call named a receiver, definitions qualified by that receiver win
+    outright: two reachable modules can define the same method name, and an
+    unrelated `Other.isValid` must not vouch for `Contract.isValid`. If none
+    is qualified that way — a requiring file may bind a module under a
+    different local name than the one it uses internally — every same-named
+    definition is returned, and the caller requires them all to agree.
     """
-    definition = re.search(
-        r"(?:\blocal\s+)?\bfunction\s+(?:\w+\s*[.:]\s*)*"
+    qualified: List[str] = []
+    unqualified: List[str] = []
+    for definition in re.finditer(
+        r"(?:\blocal\s+)?\bfunction\s+(?P<owner>(?:\w+\s*[.:]\s*)*)"
         + re.escape(name)
         + r"\s*\([^)]*\)"
-        r"|(?<![\w.:])" + re.escape(name) + r"\s*=\s*function\s*\([^)]*\)",
+        r"|(?<![\w.:])(?P<assigned>(?:\w+\s*[.:]\s*)*)"
+        + re.escape(name)
+        + r"\s*=\s*function\s*\([^)]*\)",
         scope,
-    )
-    if not definition:
-        return None
-    return scope[definition.end() : _block_end(scope, definition.end())]
-
-
-def _connection_is_retained(body: str, connect_at: int) -> bool:
-    """True when the RBXScriptConnection a `:Connect(` returns is kept.
-
-    Scans backwards from the call to the start of its statement, following
-    unclosed parentheses so a multi-line `table.insert(self._connections,
-    button.Activated:Connect(...))` still reads as one statement. Either an
-    assignment (`local c = ...`, `self._c[i] = ...`) or an insert-style call
-    means the connection went somewhere it can be disconnected from later.
-    """
-    depth = 0
-    index = connect_at - 1
-    while index >= 0:
-        char = body[index]
-        if char == ")":
-            depth += 1
-        elif char == "(":
-            if depth:
-                depth -= 1
-            else:
-                # An enclosing call. If it is one that keeps what it is
-                # handed, we are done; otherwise keep walking outwards, since
-                # the retaining call may be one level further out still.
-                callee = re.search(r"(\w+)$", body[:index].rstrip())
-                if callee and callee.group(1) in _RETAINING_CALLS:
-                    return True
-        elif depth == 0:
-            if (
-                char == "="
-                and body[index - 1 : index] not in ("=", "~", "<", ">")
-                and body[index + 1 : index + 2] != "="
-            ):
-                return True
-            if char == "\n":
-                # A newline ends the statement unless the line before it was
-                # left open — `table.insert(` / a trailing `,` means the
-                # connect call is still an argument to something above.
-                if not body[:index].rstrip().endswith(("(", ",")):
-                    return False
-        index -= 1
-    return False
+    ):
+        body = scope[definition.end() : _block_end(scope, definition.end())]
+        prefix = definition.group("owner") or definition.group("assigned") or ""
+        if receiver and re.sub(r"[\s.:]+$", "", prefix) == receiver:
+            qualified.append(body)
+        else:
+            unqualified.append(body)
+    return qualified or unqualified
 
 
 def _handler_statements(body: str) -> str:
@@ -217,16 +190,36 @@ def _handler_statements(body: str) -> str:
     return body
 
 
+def _iter_calls(body: str) -> List[Tuple[str, str, str]]:
+    """Every call in ``body`` as (receiver, separator, name)."""
+    return [
+        (call.group(1) or "", call.group(2) or "", call.group(3))
+        for call in _CALL_RE.finditer(body)
+    ]
+
+
 def _calls_receiving(body: str, params: List[str]) -> List[Tuple[str, str, str]]:
     """Calls in ``body`` that are handed one of ``params`` as an argument."""
-    received = []
-    for call in _CALL_RE.finditer(body):
-        receiver, separator, name, args = call.groups()
-        if any(
-            re.search(r"(?<![\w.])" + re.escape(p) + r"(?![\w])", args) for p in params
-        ):
-            received.append((receiver or "", separator or "", name))
-    return received
+    return [
+        (call.group(1) or "", call.group(2) or "", call.group(3))
+        for call in _CALL_RE.finditer(body)
+        if _mentions_any(call.group(4), params)
+    ]
+
+
+def _passes_any(
+    body: str, receiver: str, separator: str, name: str, params: List[str]
+) -> bool:
+    return any(
+        (r, sep, n) == (receiver, separator, name)
+        for r, sep, n in _calls_receiving(body, params)
+    )
+
+
+def _mentions_any(text: str, params: List[str]) -> bool:
+    return any(
+        re.search(r"(?<![\w.])" + re.escape(p) + r"(?![\w])", text) for p in params
+    )
 
 
 def _only_forwards(body: str, params: List[str]) -> bool:
@@ -261,32 +254,138 @@ def _is_injected(name: str, scope: str) -> bool:
 def _relays_to_injected_callback(body: str, params: List[str], scope: str) -> bool:
     """True when the handler is a transport shim: it hands its client-supplied
     arguments, unchanged, to a callback that was injected into this module and
-    does nothing else with them.
+    does nothing of its own besides.
 
     A generic remote multiplexer (a NetworkService that owns the RemoteEvents
     and forwards each payload to whichever handler the composition root
     registered) has nothing to validate or throttle itself — the registered
     handler is where both belong, and it lives in a file this one never
-    imports, so no amount of following requires can reach it. Method-syntax
-    calls (`store:SetAsync(key, payload)`) are deliberately excluded: passing
-    client data straight into an engine API *is* acting on it.
+    imports, so no amount of following requires can reach it.
+
+    Two things disqualify a handler. Method-syntax calls
+    (`store:SetAsync(key, payload)`) act on the client data rather than
+    relaying it. And a call to anything the module reaches directly, rather
+    than had injected — `giveDailyReward(player)` alongside the forwarding —
+    is work this handler really does, and it stays as spammable and as
+    unvalidated as the check says.
     """
     if not params or not _only_forwards(body, params):
         return False
-    receivers = _calls_receiving(body, params)
-    if not receivers:
-        return False
-    for receiver, separator, name in receivers:
+    forwarded = False
+    for receiver, separator, name in _iter_calls(body):
         if separator == ":":
             return False
+        if receiver in _LUAU_BUILTIN_NAMESPACES or (
+            not receiver and name in _LUAU_PURE_GLOBALS
+        ):
+            continue
         if not _is_injected(receiver or name, scope):
             return False
-    return True
+        if _passes_any(body, receiver, separator, name, params):
+            forwarded = True
+    return forwarded
 
 
-# Calls whose whole point is to keep what they are given: a connection
-# handed to one of these is tracked, not dropped on the floor.
+# Calling into these is not the handler doing work of its own: a namespace
+# the Luau runtime provides, or a global that only inspects or converts.
+_LUAU_BUILTIN_NAMESPACES = {
+    "os",
+    "math",
+    "table",
+    "string",
+    "task",
+    "bit32",
+    "utf8",
+    "coroutine",
+    "debug",
+}
+_LUAU_PURE_GLOBALS = {
+    "typeof",
+    "type",
+    "tostring",
+    "tonumber",
+    "assert",
+    "error",
+    "print",
+    "warn",
+    "select",
+    "next",
+    "pairs",
+    "ipairs",
+    "require",
+}
+
 _RETAINING_CALLS = {"insert", "append", "push", "add", "give", "track"}
+
+
+def _connection_storage(body: str, connect_at: int) -> Optional[str]:
+    """Where the RBXScriptConnection a `:Connect(` returns is stored, if at all.
+
+    Scans backwards from the call to the start of its statement, following
+    unclosed parentheses so a multi-line `table.insert(self._connections,
+    button.Activated:Connect(...))` still reads as one statement. Returns the
+    container it was inserted into or the variable it was assigned to — the
+    caller still has to find a teardown that disconnects *that*.
+    """
+    depth = 0
+    index = connect_at - 1
+    while index >= 0:
+        char = body[index]
+        if char == ")":
+            depth += 1
+        elif char == "(":
+            if depth:
+                depth -= 1
+            else:
+                # An enclosing call. If it is one that keeps what it is
+                # handed, its first argument is the container; otherwise keep
+                # walking outwards, since a retaining call may be one level
+                # further out still.
+                callee = re.search(r"(\w+)$", body[:index].rstrip())
+                if callee and callee.group(1) in _RETAINING_CALLS:
+                    argument = re.match(
+                        r"\s*([\w.]+)\s*,", body[index + 1 :], re.DOTALL
+                    )
+                    return argument.group(1) if argument else None
+        elif depth == 0:
+            if (
+                char == "="
+                and body[index - 1 : index] not in ("=", "~", "<", ">")
+                and body[index + 1 : index + 2] != "="
+            ):
+                target = re.search(
+                    r"(?:\blocal\s+)?([\w.]+)\s*(?:\[[^\]\n]*\])?\s*$",
+                    body[:index],
+                )
+                return target.group(1) if target else None
+            if char == "\n":
+                # A newline ends the statement unless the line before it was
+                # left open — `table.insert(` / a trailing `,` means the
+                # connect call is still an argument to something above.
+                if not body[:index].rstrip().endswith(("(", ",")):
+                    return None
+        index -= 1
+    return None
+
+
+def _is_disconnected(scope: str, target: str) -> bool:
+    """True when ``scope`` disconnects what is stored in ``target``.
+
+    A file-wide `:Disconnect(` count is not enough — one unrelated teardown
+    elsewhere would vouch for every connection in the file. The disconnect has
+    to name the same container, either directly or by iterating it.
+    """
+    escaped = re.escape(target)
+    if re.search(escaped + r"(?:\s*\[[^\]\n]*\])?\s*:\s*Disconnect\s*\(", scope):
+        return True
+    # `for _, connection in self._connections do connection:Disconnect() end`
+    for loop in re.finditer(
+        r"\b(?:for|while)\b[^\n]*\b" + escaped + r"\b[^\n]*\bdo\b", scope
+    ):
+        if ":Disconnect(" in scope[loop.end() : _block_end(scope, loop.end())]:
+            return True
+    return False
+
 
 _HANDLER_ENTRY_RE = re.compile(
     r"OnServerEvent\s*:\s*Connect\s*\(\s*function\s*\(\s*(\w+)"
@@ -754,12 +853,11 @@ file, so treat findings as leads to verify against the actual script context, no
             # is validation. Judge the helper by its own body, wherever it is
             # defined: in this file, or in a module this file requires.
             if takes_arguments and not validated:
-                validated = any(
-                    _VALIDATION_RE.search(helper_body)
-                    for _, _, callee in _calls_receiving(statements, client_params)
-                    for helper_body in [_function_body(scope, callee)]
-                    if helper_body is not None
-                )
+                for receiver, _, callee in _calls_receiving(statements, client_params):
+                    bodies = _function_bodies(scope, callee, receiver)
+                    if bodies and all(_VALIDATION_RE.search(b) for b in bodies):
+                        validated = True
+                        break
             # A transport shim that only relays its arguments to an injected
             # callback owns neither the validation nor the throttle.
             relays = (
@@ -1037,9 +1135,12 @@ file, so treat findings as leads to verify against the actual script context, no
                 # (`table.insert(self._connections, ...)`, then a teardown
                 # loop over it) is managed — the `:Disconnect(` just isn't in
                 # this loop, because that is not where cleanup belongs.
-                if disconnect_count and _connection_is_retained(
-                    loop_body, connect.start()
-                ):
+                storage = (
+                    _connection_storage(loop_body, connect.start())
+                    if disconnect_count
+                    else None
+                )
+                if storage and _is_disconnected(stripped, storage):
                     continue
                 leaky.append(connect.group(1))
             if leaky and ":Disconnect(" not in loop_body:

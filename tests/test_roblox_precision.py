@@ -295,3 +295,93 @@ end
     assert any(
         "inside a loop" in i for i in _issues(agent._audit_connection_leaks(code))
     )
+
+
+# --- Codex review of PR #65 -------------------------------------------------
+
+
+def test_a_shim_that_also_does_its_own_work_is_not_a_shim():
+    """Forwarding the payload does not excuse everything else in the body:
+    `giveDailyReward(player)` is work this handler really does, and it stays
+    as spammable and as unvalidated as the check says."""
+    agent = RobloxAuditAgent()
+    code = """
+rewardEvent.OnServerEvent:Connect(function(player, payload)
+    giveDailyReward(player)
+    local handler = self._payloadHandler
+    if handler ~= nil then
+        handler(player, payload)
+    end
+end)
+"""
+    issues = _issues(agent._audit_remote_validation(code))
+    assert any("type/shape validation" in i for i in issues)
+    assert any("rate limiting" in i for i in issues)
+
+
+def test_an_unrelated_module_cannot_vouch_for_a_same_named_validator():
+    """Two reachable modules define `isValid`. The one actually called does
+    not validate, so the finding stands — `Other.isValid` is not evidence."""
+    agent = RobloxAuditAgent()
+    code = """
+actionEvent.OnServerEvent:Connect(function(player, payload)
+    if not Contract.isValid(payload) then
+        return
+    end
+    local last = lastAt[player]
+    if last and os.clock() - last < 1 then
+        return
+    end
+    lastAt[player] = os.clock()
+    apply(player, payload)
+end)
+"""
+    imported = """
+local Other = {}
+function Other.isValid(value)
+    return typeof(value) == "number"
+end
+local Contract = {}
+function Contract.isValid(payload)
+    return payload ~= nil
+end
+"""
+    assert any(
+        "type/shape validation" in i
+        for i in _issues(agent._audit_remote_validation(code, imported))
+    )
+
+    validating = """
+local Other = {}
+function Other.isValid(value)
+    return value ~= nil
+end
+local Contract = {}
+function Contract.isValid(payload)
+    return typeof(payload) == "table"
+end
+"""
+    assert not any(
+        "type/shape validation" in i
+        for i in _issues(agent._audit_remote_validation(code, validating))
+    )
+
+
+def test_an_unrelated_teardown_does_not_vouch_for_a_loop_local_connection():
+    """A `:Disconnect(` somewhere in the file is not enough — it has to name
+    the same storage. Here it disconnects a menu handler, while each loop
+    iteration drops its own connection on the floor."""
+    agent = RobloxAuditAgent()
+    code = """
+local menuConnection = menu.Closed:Connect(onClose)
+menuConnection:Disconnect()
+
+function refresh()
+    for _, part in ipairs(parts) do
+        local connection = part.Touched:Connect(onTouch)
+    end
+end
+"""
+    assert any(
+        "inside a loop" in i for i in _issues(agent._audit_connection_leaks(code))
+    )

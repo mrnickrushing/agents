@@ -295,3 +295,29 @@ def test_luau_require_it_cannot_resolve_is_left_alone(tmp_path):
     _write(path, content)
 
     assert _inline_local_imports(path, content, root) == content
+
+
+def test_luau_relative_require_cannot_escape_the_scan_root(tmp_path):
+    """Enough `..` in a string require reaches a real file in a sibling
+    checkout. Findings must not be based on source the scan was never
+    pointed at, so it resolves to nothing."""
+    root = str(tmp_path / "inside")
+    _luau_project(root)
+    _write(str(tmp_path / "Outside.luau"), "return {}\n")
+    path = os.path.join(root, "src", "shared", "Rules.luau")
+    content = 'local Outside = require("../../../Outside")\n'
+    _write(path, content)
+
+    assert _inline_local_imports(path, content, root) == content
+
+
+def test_luau_root_containment_is_not_a_prefix_test(tmp_path):
+    """`/repo-backup` starts with `/repo` but is not inside it."""
+    root = str(tmp_path / "repo")
+    _luau_project(root)
+    _write(str(tmp_path / "repo-backup" / "Stale.luau"), "return {}\n")
+    path = os.path.join(root, "src", "shared", "Rules.luau")
+    content = 'local Stale = require("../../../repo-backup/Stale")\n'
+    _write(path, content)
+
+    assert _inline_local_imports(path, content, root) == content
