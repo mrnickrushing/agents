@@ -337,9 +337,13 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         findings = []
 
         query_re = re.compile(
-            r"(?:await\s+)?(?:db\.(?:query|execute|select)|session\.execute|cursor\.execute|"
-            r"\w+\.(?:findMany|findOne|findUnique|findFirst|query|execute)|"
-            r"(?:select|query)\s*\()",
+            # `\b` after each name matters: without it `card.querySelector(`
+            # matches `card.query`, so every DOM-heavy script that reaches for
+            # an element inside a .map/.forEach reads as an N+1 query.
+            r"(?:await\s+)?(?:db\.(?:query|execute|select)\b|session\.execute\b"
+            r"|cursor\.execute\b"
+            r"|\w+\.(?:findMany|findOne|findUnique|findFirst|query|execute)\b"
+            r"|\b(?:select|query)\s*\()",
             re.IGNORECASE,
         )
         loop_bodies: List[str] = []

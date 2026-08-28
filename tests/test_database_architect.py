@@ -105,3 +105,29 @@ request_id: text('request_id').notNull(),
 sender_email: text('sender_email').notNull(),
 """
     assert DatabaseArchitectAgent()._review_constraints(code)["findings"] == []
+
+
+def test_query_select_does_not_match_queryselector():
+    """`card.querySelector(...)` inside a .forEach is DOM traversal, not a
+    database call. Without a word boundary after `query`, every DOM-heavy
+    script that reaches for an element inside a loop read as an N+1
+    (backgrounds/workbench, 2026-08-28)."""
+    agent = DatabaseArchitectAgent()
+    dom = """
+rows.forEach((card) => {
+  const button = card.querySelector("[data-view-load]");
+  const target = card.querySelectorAll(".cell");
+  button.onclick = () => open(card.dataset.id);
+});
+"""
+    assert agent._review_n_plus_one(dom)["findings"] == []
+
+
+def test_a_real_query_in_a_loop_is_still_reported():
+    agent = DatabaseArchitectAgent()
+    for code in (
+        'for (const id of ids) { const row = await db.query("SELECT 1", [id]); }',
+        "users.map(async (u) => { return await prisma.user.findUnique({ where: { id: u.id } }); })",
+        "for case_id in case_ids:\n    row = session.execute(select(Case))\n",
+    ):
+        assert agent._review_n_plus_one(code)["findings"], code
