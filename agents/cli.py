@@ -2638,12 +2638,13 @@ def cmd_remote_findings(args: argparse.Namespace) -> None:
         )
     except OSError as exc:
         raise SystemExit(f"Could not reach {args.url}: {exc}") from exc
-    if not getattr(args, "include_dismissed", False):
-        findings = [f for f in findings if f.get("verdict") != "FALSE_POSITIVE"]
+    include_dismissed = getattr(args, "include_dismissed", False)
     if args.json:
+        if not include_dismissed:
+            findings = [f for f in findings if f.get("verdict") != "FALSE_POSITIVE"]
         print(json.dumps(findings, indent=2))
         return
-    print(findings_markdown(findings))
+    print(findings_markdown(findings, include_dismissed=include_dismissed))
 
 
 def cmd_remote_feedback(args: argparse.Namespace) -> None:

@@ -18,6 +18,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.base import BaseAgent
+from agents.security_audit import _strip_js_comments
 
 
 def _balanced_call(text: str, open_paren: int) -> str:
@@ -367,7 +368,10 @@ Always provide the fix with code, not just a description of what's wrong.
         code_lower = code.lower()
         effect_calls = _named_calls(code, "useEffect")
 
-        code_without_comments = re.sub(r"/\*.*?\*/|//[^\n]*", "", code, flags=re.DOTALL)
+        # Same sweep as the helmet analyzer used to do: a bare `//[^\n]*`
+        # also eats everything after the `//` in a URL, so a `: any` or a
+        # console.log later on that line went unseen.
+        code_without_comments = _strip_js_comments(code)
         if re.search(r"(?<![\w]):\s*any\b|\bas\s+any\b", code_without_comments):
             findings.append(
                 {

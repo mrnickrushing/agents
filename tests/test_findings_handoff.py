@@ -209,3 +209,37 @@ def test_dismissed_findings_are_shown_when_explicitly_requested():
         }
     ]
     assert "Known false positive" in findings_markdown(findings, include_dismissed=True)
+
+
+def test_cli_include_dismissed_reaches_the_markdown_formatter(monkeypatch, capsys):
+    """Regression: the CLI filtered its own list but then called
+    findings_markdown() without the flag, so its default re-filtered and
+    --include-dismissed only worked with --json (Codex, agents#60)."""
+    import argparse
+
+    from agents import cli
+
+    rows = [
+        {
+            "severity": "HIGH",
+            "issue": "Known false positive",
+            "file_path": "src/b.ts",
+            "project_label": "nick/app",
+            "verdict": "FALSE_POSITIVE",
+        }
+    ]
+    monkeypatch.setattr(cli, "fetch_remote_findings", lambda *a, **k: rows)
+    args = argparse.Namespace(
+        token="t",
+        url="http://example",
+        project=None,
+        limit=200,
+        json=False,
+        include_dismissed=True,
+    )
+    cli.cmd_remote_findings(args)
+    assert "Known false positive" in capsys.readouterr().out
+
+    args.include_dismissed = False
+    cli.cmd_remote_findings(args)
+    assert "Known false positive" not in capsys.readouterr().out
