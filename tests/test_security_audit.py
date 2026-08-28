@@ -230,3 +230,60 @@ def test_unrelated_max_size_constant_does_not_count_as_an_upload_cap():
     )
     issues = [f["issue"] for f in agent._audit_file_upload(code)["findings"]]
     assert any("No file size limit" in issue for issue in issues)
+
+
+# --- innerHTML: reported per assignment, only where the value is dynamic -----
+
+
+def _html_issues(code):
+    return [
+        f
+        for f in SecurityAuditAgent()._audit_xss_patterns(code)["findings"]
+        if "innerHTML" in f["issue"]
+    ]
+
+
+def test_literal_markup_assigned_to_innerhtml_is_not_reported():
+    """Clearing a container, or dropping in a fixed empty state, carries
+    nothing that could be user-controlled. Firing on every file that renders
+    at all made the check unactionable (backgrounds, 2026-08-28)."""
+    for code in (
+        'el.innerHTML = "";',
+        "list.innerHTML = '<div class=\"empty\">No items</div>';",
+        "el.innerHTML = `<p>Nothing yet</p>`;",
+        'el.innerHTML = "<b>" + "hi" + "</b>";',
+        "// el.innerHTML = userInput;\nconst x = 1;",
+    ):
+        assert _html_issues(code) == [], code
+
+
+def test_a_value_built_at_runtime_is_reported_with_its_line():
+    for code in (
+        "el.innerHTML = `<p>${name}</p>`;",
+        "el.innerHTML = html;",
+        "el.innerHTML = render(rows);",
+        'el.innerHTML = "<b>" + name + "</b>";',
+    ):
+        found = _html_issues(code)
+        assert found, code
+        assert found[0]["line"] == 1
+
+
+def test_the_append_form_is_the_same_sink():
+    """`innerHTML +=` was missed entirely: the old pattern required `=`
+    immediately after the property name."""
+    assert _html_issues("el.innerHTML += `<li>${item}</li>`;")
+
+
+def test_a_statement_continued_on_the_next_line_is_read_whole():
+    """Stopping at the newline after `=` would read an empty right-hand side
+    and call the assignment static."""
+    found = _html_issues("node.innerHTML =\n  header(c) +\n  records(c.rows);")
+    assert found and found[0]["line"] == 1
+
+
+def test_the_finding_says_how_many_sites_there_are():
+    code = 'a.innerHTML = x;\nb.innerHTML = "";\nc.innerHTML = y;\n'
+    found = _html_issues(code)
+    assert len(found) == 1
+    assert "line 1 and 1 more" in found[0]["issue"]
