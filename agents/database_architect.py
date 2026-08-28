@@ -337,12 +337,19 @@ When reviewing, always cite the exact column/migration/loop and give the exact f
         findings = []
 
         query_re = re.compile(
-            # `\b` after each name matters: without it `card.querySelector(`
-            # matches `card.query`, so every DOM-heavy script that reaches for
-            # an element inside a .map/.forEach reads as an N+1 query.
-            r"(?:await\s+)?(?:db\.(?:query|execute|select)\b|session\.execute\b"
-            r"|cursor\.execute\b"
-            r"|\w+\.(?:findMany|findOne|findUnique|findFirst|query|execute)\b"
+            # The boundary goes after the suffix, not after the base name.
+            # Without any boundary, `card.querySelector(` matched `card.query`
+            # and every DOM-heavy script reading an element inside a
+            # .map/.forEach looked like an N+1. With the boundary straight
+            # after the base name, the ORMs' own suffixed spellings —
+            # findUniqueOrThrow, findOneAndUpdate, selectDistinct, executeMany
+            # — stopped matching at all. Allowing the real suffixes keeps both
+            # ends honest: `querySelector` and `executeScript` still have no
+            # boundary to land on.
+            r"(?:await\s+)?(?:"
+            r"\w+\.(?:findMany|findOne|findUnique|findFirst|findById)"
+            r"(?:OrThrow|And\w+)?\b"
+            r"|\w+\.(?:query|execute|select)(?:Raw|Many|One|All|Distinct)?\b"
             r"|\b(?:select|query)\s*\()",
             re.IGNORECASE,
         )
