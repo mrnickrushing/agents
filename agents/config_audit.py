@@ -25,7 +25,7 @@ import os
 import json
 import re
 import tempfile
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseAgent
 
@@ -80,6 +80,59 @@ def _finding(severity: str, issue: str, line: int | None, fix: str, **extra) -> 
         out["line"] = line
     out.update(extra)
     return out
+
+
+# A container that starts as root only to hand a mounted volume to its runtime
+# user, then drops privileges and execs the service, is not "running as root" —
+# the long-lived process is unprivileged. It cannot use USER: a volume is
+# mounted over its directory after the build, so a build-time chown never
+# reaches it, and files an earlier root-running image left behind (mode 0600,
+# root-owned) would be unopenable. Recognise the pattern rather than reporting
+# the correct fix for it (backgrounds/workbench, 2026-08-28).
+_ENTRYPOINT_RE = re.compile(r"^\s*ENTRYPOINT\s+(.+)$", re.I | re.M)
+_DROPS_PRIVILEGE_RE = re.compile(
+    r"\bgosu\b|\bsu-exec\b|\bsetpriv\b|\brunuser\b"
+    r"|\bchroot\s+--userspec|\bexec\s+su\s|\bstart-stop-daemon\b"
+    r"|\bos\.set(?:re)?(?:res)?uid\b|\bsetuid\s*\(|\bprocess\.setuid\b"
+)
+
+
+def _entrypoint_script(content: str, path: str) -> Optional[str]:
+    """The build-context file an ENTRYPOINT runs, if it names one."""
+    match = None
+    for match in _ENTRYPOINT_RE.finditer(content):
+        pass
+    if not match or not path:
+        return None
+    words = re.findall(r"[\w./-]+", match.group(1))
+    scripts = [
+        w
+        for w in words
+        if w.endswith((".sh", ".py", ".bash")) or "entrypoint" in w.lower()
+    ]
+    if not scripts:
+        return None
+    candidate = os.path.join(
+        os.path.dirname(os.path.abspath(path)), os.path.basename(scripts[-1])
+    )
+    return candidate if os.path.isfile(candidate) else None
+
+
+def runs_unprivileged(content: str, path: str = "") -> bool:
+    """True when the final stage sets a non-root USER, or its entrypoint drops
+    privileges before exec'ing the service."""
+    if re.search(r"(?im)^\s*USER\s+(?!root\b)\S+", content):
+        return True
+    if _DROPS_PRIVILEGE_RE.search(content):
+        return True
+    script = _entrypoint_script(content, path)
+    if not script:
+        return False
+    try:
+        with open(script, "r", errors="ignore") as handle:
+            return bool(_DROPS_PRIVILEGE_RE.search(handle.read()))
+    except OSError:
+        return False
 
 
 class ConfigAuditAgent(BaseAgent):
@@ -222,7 +275,7 @@ class ConfigAuditAgent(BaseAgent):
         if not stage_starts:
             return {"findings": findings, "total_issues": 0}
         final = lines[stage_starts[-1] :]
-        if not any(re.match(r"^\s*USER\s+(?!root\b)\S+", line, re.I) for line in final):
+        if not runs_unprivileged("\n".join(final), path):
             findings.append(
                 _finding(
                     "HIGH",

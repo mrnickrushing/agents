@@ -19,6 +19,7 @@ import re
 from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
+from agents.config_audit import runs_unprivileged
 
 
 class RailwayDeployAgent(BaseAgent):
@@ -266,7 +267,7 @@ When helping with deployment issues:
         }
 
     def _review_deployment_config(
-        self, config_text: str, filename: str
+        self, config_text: str, filename: str, path: str = ""
     ) -> Dict[str, Any]:
         """Review an existing deployment config rather than generating one.
 
@@ -349,7 +350,10 @@ When helping with deployment issues:
                         "fix": f"Copy package.json plus the lockfile first, then run {strict} for reproducible installs",
                     }
                 )
-            if not re.search(r"(?im)^\s*USER\s+\S+", config_text) and re.search(
+            # Same rule as config_audit.audit_dockerfile: an entrypoint that
+            # drops privileges before exec'ing the service is not running as
+            # root, even though it cannot use USER.
+            if not runs_unprivileged(config_text, path) and re.search(
                 r"(?im)^\s*FROM\s+(node|python)(?::|@|\s)", config_text
             ):
                 findings.append(
