@@ -25,16 +25,66 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import re
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agents.base import AgentResponse, BaseAgent
 
+# JSX attribute lists can't be matched with a fixed regex: a plain [^>]* stops
+# at the ">" inside "=>" arrow functions, and any bounded {...} pattern
+# silently drops tags whose attribute expressions nest deeper — e.g.
+# <img onLoad={() => setState({nested: {loaded: true}})} /> never matches a
+# two-level pattern, so its missing alt goes unreported. Scan instead: walk
+# the tag character by character, tracking quote state and arbitrary brace
+# depth, and end the tag at the first ">" outside quotes and braces.
 
-# JSX attribute matcher for tag regexes: a plain [^>]* stops at the ">" inside
-# "=>" arrow functions (and any {a > b} expression), truncating the attribute
-# list mid-tag and hiding attributes that come after it (aria-label, alt, id).
-# Treat up to two levels of {..} nesting as atomic instead.
-JSX_ATTRS = r"(?:[^{}>]|\{(?:[^{}]|\{[^{}]*\})*\})*"
+
+def _jsx_tag_end(code: str, start: int) -> Optional[int]:
+    """Index just past the ">" that closes the tag being scanned from ``start``.
+
+    Skips '...'/"..."/`...` strings (honoring backslash escapes) and
+    arbitrarily nested {...} attribute expressions. Returns None for an
+    unterminated tag.
+    """
+    depth = 0
+    quote: Optional[str] = None
+    i = start
+    while i < len(code):
+        ch = code[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        elif ch == ">" and depth == 0:
+            return i + 1
+        i += 1
+    return None
+
+
+def find_jsx_tags(
+    code: str, name_pattern: str = r"[a-zA-Z][\w.]*", flags: int = 0
+) -> List[Tuple[str, str, str]]:
+    """Every opening/self-closing JSX tag whose name matches ``name_pattern``.
+
+    Returns (tag_name, attrs, full_tag) triples. Unlike a regex with a
+    bounded brace pattern, this never drops a tag because an attribute
+    expression nests too deep.
+    """
+    tags: List[Tuple[str, str, str]] = []
+    for m in re.finditer(rf"<({name_pattern})(?=[\s/>])", code, flags):
+        end = _jsx_tag_end(code, m.end())
+        if end is None:
+            continue
+        tags.append((m.group(1), code[m.end() : end - 1], code[m.start() : end]))
+    return tags
 
 
 class UIGenerationAgent(BaseAgent):
@@ -407,7 +457,9 @@ You're not decorating screens — you're crafting the thing the user feels every
         # lookaheads only checking the attribute immediately after the tag
         # name misfire whenever attributes aren't in that exact order (the
         # common case for anything formatted by prettier).
-        img_tags = re.findall(rf"<img\b{JSX_ATTRS}/?>", component_code, re.IGNORECASE)
+        img_tags = [
+            full for _, _, full in find_jsx_tags(component_code, "img", re.IGNORECASE)
+        ]
         missing_alt = [
             t for t in img_tags if not re.search(r"\balt\s*=", t, re.IGNORECASE)
         ]
@@ -419,11 +471,11 @@ You're not decorating screens — you're crafting the thing the user feels every
                 "Add alt attribute with descriptive text to all img elements",
             )
 
-        # Attrs can contain "{() => fn()}" — the "=>" arrow has a literal ">" in it,
-        # so a plain [^>]* stops there. JSX_ATTRS treats {..} nesting as atomic
-        # so we don't truncate the attribute list mid-JSX-expression.
-        tag_pattern = rf"<([a-zA-Z][\w.]*)\b({JSX_ATTRS})>"
-        all_tags = re.findall(tag_pattern, component_code)
+        # Attrs can contain "{() => fn()}" — the "=>" arrow has a literal ">" in
+        # it, so a plain [^>]* stops there. find_jsx_tags scans quote- and
+        # brace-aware, so attribute expressions of any nesting depth stay
+        # inside the tag instead of truncating it.
+        all_tags = [(name, attrs) for name, attrs, _ in find_jsx_tags(component_code)]
 
         clickable_no_keyboard = []
         for tag_name, attrs in all_tags:
@@ -475,9 +527,12 @@ You're not decorating screens — you're crafting the thing the user feels every
                     "Use a real <button> with visible text, or add aria-label plus keyboard handlers",
                 )
 
-        input_tags = re.findall(
-            rf"<(?:input|textarea|select)\b{JSX_ATTRS}>", component_code, re.IGNORECASE
-        )
+        input_tags = [
+            full
+            for _, _, full in find_jsx_tags(
+                component_code, "input|textarea|select", re.IGNORECASE
+            )
+        ]
         unlabeled = 0
         for tag in input_tags:
             if re.search(r"aria-label\s*=|aria-labelledby\s*=", tag, re.IGNORECASE):
@@ -498,8 +553,7 @@ You're not decorating screens — you're crafting the thing the user feels every
                 "Associate a <label htmlFor=...> with each control, or add an accurate aria-label/aria-labelledby",
             )
 
-        for match in re.finditer(rf"<a\b({JSX_ATTRS})>", component_code, re.IGNORECASE):
-            attrs = match.group(1)
+        for _, attrs, _ in find_jsx_tags(component_code, "a", re.IGNORECASE):
             if not re.search(r"\bhref\s*=", attrs, re.IGNORECASE) and re.search(
                 r"\bonClick\s*=", attrs
             ):

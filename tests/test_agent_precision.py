@@ -135,7 +135,7 @@ def test_label_after_arrow_function_prop_is_still_seen():
     # "=>", truncating the tag before aria-label/id and miscounting fully
     # labeled controls as unlabeled (VibeMaps AdminDashboard, 2026-08-27).
     code = (
-        '<input value={q} onChange={e => setQ(e.target.value)} '
+        "<input value={q} onChange={e => setQ(e.target.value)} "
         'placeholder="Search" aria-label="Search users" />'
     )
     result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
@@ -153,6 +153,36 @@ def test_htmlfor_id_pair_after_arrow_function_prop_is_still_seen():
 
 def test_img_alt_after_arrow_function_prop_is_still_seen():
     code = '<img onLoad={() => setLoaded(true)} src={src} alt="Cover" />'
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("missing alt" in issue["issue"] for issue in result["issues"])
+
+
+def test_img_with_deeply_nested_prop_expression_is_not_dropped():
+    # Regression: a bounded two-level brace pattern failed to match tags whose
+    # attribute expressions nest deeper, so this alt-less <img> was silently
+    # excluded from the check entirely (Codex review, agents#58).
+    code = "<img onLoad={() => setState({nested: {loaded: true}})} src={src} />"
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("missing alt" in issue["issue"] for issue in result["issues"])
+
+
+def test_labeled_control_with_deeply_nested_prop_expression_is_still_seen():
+    code = (
+        "<input onChange={(e) => setForm({user: {name: e.target.value}})} "
+        'aria-label="Name" />'
+    )
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert not any("form control" in issue["issue"] for issue in result["issues"])
+
+
+def test_clickable_anchor_with_deeply_nested_prop_expression_is_flagged():
+    code = "<a onClick={() => track({event: {name: 'nav'}})}>Open</a>"
+    result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
+    assert any("no href" in issue["issue"] for issue in result["issues"])
+
+
+def test_quoted_gt_inside_attribute_value_does_not_end_the_tag():
+    code = '<img src={src} title="a > b" alt="Comparison chart" />'
     result = UIGenerationAgent()._validate_accessibility(code, severity="minor")
     assert not any("missing alt" in issue["issue"] for issue in result["issues"])
 
