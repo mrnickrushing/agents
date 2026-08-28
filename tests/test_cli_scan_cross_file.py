@@ -177,3 +177,121 @@ def test_nextjs_app_router_layout_naming_is_supported(tmp_path):
     nested_path = os.path.join(root, "app", "dashboard", "layout.tsx")
     _write(nested_path, "export default function D() {}\n")
     assert "ErrorBoundary" in _ancestor_layout_sources(nested_path, root)
+
+
+# --- Luau requires ----------------------------------------------------------
+#
+# Every form below is taken from a real Roblox codebase (lastlight, 2026-08),
+# where 340 of 340 `require(...)` calls use one of these four shapes.
+
+_ROJO_PROJECT = json.dumps(
+    {
+        "name": "Game",
+        "tree": {
+            "$className": "DataModel",
+            "ReplicatedStorage": {"Shared": {"$path": "src/shared"}},
+            "ServerScriptService": {"Server": {"$path": "src/server"}},
+        },
+    }
+)
+
+
+def _luau_project(root: str) -> None:
+    _write(os.path.join(root, "default.project.json"), _ROJO_PROJECT)
+    _write(
+        os.path.join(root, "src", "shared", "Contract.luau"),
+        "local Contract = {}\n"
+        "function Contract.isValid(payload)\n"
+        '    return type(payload) == "table"\n'
+        "end\n"
+        "return Contract\n",
+    )
+    _write(
+        os.path.join(root, "src", "server", "World", "Terrain.luau"),
+        "return { build = function() end }\n",
+    )
+
+
+def test_luau_relative_string_require_resolves(tmp_path):
+    root = str(tmp_path)
+    _luau_project(root)
+    path = os.path.join(root, "src", "shared", "Rules.luau")
+    content = 'local Contract = require("./Contract")\nreturn Contract\n'
+    _write(path, content)
+
+    assert "Contract.isValid" in _inline_local_imports(path, content, root)
+
+
+def test_luau_script_parent_chain_resolves(tmp_path):
+    """`script.Parent` is the requiring file's own directory, so each extra
+    `.Parent` climbs one level and the remaining names descend."""
+    root = str(tmp_path)
+    _luau_project(root)
+    path = os.path.join(root, "src", "server", "Services", "WorldService.luau")
+    content = (
+        "local Terrain = require(script.Parent.Parent.World.Terrain)\nreturn Terrain\n"
+    )
+    _write(path, content)
+
+    assert "build" in _inline_local_imports(path, content, root)
+
+
+def test_luau_init_script_is_its_own_directory(tmp_path):
+    """An `init.server.luau` *becomes* its folder's instance rather than a
+    child of it, so `script.X` there means a sibling file, not `script.Parent.X`."""
+    root = str(tmp_path)
+    _luau_project(root)
+    _write(
+        os.path.join(root, "src", "server", "Services", "Logger.luau"),
+        "return { info = function() end }\n",
+    )
+    path = os.path.join(root, "src", "server", "init.server.luau")
+    content = "local Logger = require(script.Services.Logger)\nreturn Logger\n"
+    _write(path, content)
+
+    assert "info = function" in _inline_local_imports(path, content, root)
+
+
+def test_luau_service_rooted_require_uses_the_rojo_mapping(tmp_path):
+    root = str(tmp_path)
+    _luau_project(root)
+    path = os.path.join(root, "src", "server", "Services", "NetworkService.luau")
+    content = (
+        'local Contract = require(game:GetService("ReplicatedStorage")'
+        ':WaitForChild("Shared").Contract)\n'
+    )
+    _write(path, content)
+
+    assert "Contract.isValid" in _inline_local_imports(path, content, root)
+
+
+def test_luau_aliased_root_require_resolves_through_both_bindings(tmp_path):
+    """`require(root.Contract)` where `root` is bound to a WaitForChild on a
+    service that is itself bound to a `GetService` — two alias hops."""
+    root = str(tmp_path)
+    _luau_project(root)
+    path = os.path.join(root, "src", "server", "Services", "Commerce.luau")
+    content = (
+        'local ReplicatedStorage = game:GetService("ReplicatedStorage")\n'
+        'local shared = ReplicatedStorage:WaitForChild("Shared", 8)\n'
+        "local Contract = require(shared.Contract)\n"
+    )
+    _write(path, content)
+
+    assert "Contract.isValid" in _inline_local_imports(path, content, root)
+
+
+def test_luau_require_it_cannot_resolve_is_left_alone(tmp_path):
+    """A packaged require, a computed one, and a walk that climbs out of the
+    repository all resolve to nothing rather than to a guess."""
+    root = str(tmp_path)
+    _luau_project(root)
+    path = os.path.join(root, "src", "shared", "Rules.luau")
+    content = (
+        'local A = require("@Package/Thing")\n'
+        "local B = require(modules[name])\n"
+        "local C = require(script.Parent.Parent.Parent.Parent.Elsewhere)\n"
+    )
+    _write(path, content)
+
+    assert _inline_local_imports(path, content, root) == content

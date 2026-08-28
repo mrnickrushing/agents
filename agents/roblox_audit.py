@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agents.base import BaseAgent
 from agents.luau_static import analyze_repository
@@ -120,6 +120,173 @@ def _matching_paren_end(text: str, after_open: int) -> int:
         i += 1
     return i
 
+
+# What counts as validating a value: a type/shape test, a clamp, a comparison
+# against a literal (`action ~= "shown"`, stripped here to `""`), or an
+# allow-list table lookup (`VALID_ACTIONS[action]`).
+_VALIDATION_RE = re.compile(
+    r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\("
+    r"|(?:==|~=)\s*(?:\"\"|'')|\b[A-Z_]*(?:VALID|ALLOWED|KNOWN)\w*\s*\["
+)
+
+# A call, with the receiver (if any) captured separately from the function
+# name: `contract.isValidTransport(payload)`, `store:SetAsync(key, payload)`,
+# `validate(payload)`.
+_CALL_RE = re.compile(r"(?<![\w.:])(?:(\w+)\s*([.:])\s*)?(\w+)\s*\(([^()]*)\)")
+
+
+def _function_body(scope: str, name: str) -> Optional[str]:
+    """The body of a function named ``name`` defined anywhere in ``scope``.
+
+    Matches every way Luau spells a definition — `function f()`,
+    `local function f()`, `function M.f()`, `function M:f()`, `f = function()`
+    — so a handler that delegates to a named helper can be judged on what
+    that helper actually does.
+    """
+    definition = re.search(
+        r"(?:\blocal\s+)?\bfunction\s+(?:\w+\s*[.:]\s*)*"
+        + re.escape(name)
+        + r"\s*\([^)]*\)"
+        r"|(?<![\w.:])" + re.escape(name) + r"\s*=\s*function\s*\([^)]*\)",
+        scope,
+    )
+    if not definition:
+        return None
+    return scope[definition.end() : _block_end(scope, definition.end())]
+
+
+def _connection_is_retained(body: str, connect_at: int) -> bool:
+    """True when the RBXScriptConnection a `:Connect(` returns is kept.
+
+    Scans backwards from the call to the start of its statement, following
+    unclosed parentheses so a multi-line `table.insert(self._connections,
+    button.Activated:Connect(...))` still reads as one statement. Either an
+    assignment (`local c = ...`, `self._c[i] = ...`) or an insert-style call
+    means the connection went somewhere it can be disconnected from later.
+    """
+    depth = 0
+    index = connect_at - 1
+    while index >= 0:
+        char = body[index]
+        if char == ")":
+            depth += 1
+        elif char == "(":
+            if depth:
+                depth -= 1
+            else:
+                # An enclosing call. If it is one that keeps what it is
+                # handed, we are done; otherwise keep walking outwards, since
+                # the retaining call may be one level further out still.
+                callee = re.search(r"(\w+)$", body[:index].rstrip())
+                if callee and callee.group(1) in _RETAINING_CALLS:
+                    return True
+        elif depth == 0:
+            if (
+                char == "="
+                and body[index - 1 : index] not in ("=", "~", "<", ">")
+                and body[index + 1 : index + 2] != "="
+            ):
+                return True
+            if char == "\n":
+                # A newline ends the statement unless the line before it was
+                # left open — `table.insert(` / a trailing `,` means the
+                # connect call is still an argument to something above.
+                if not body[:index].rstrip().endswith(("(", ",")):
+                    return False
+        index -= 1
+    return False
+
+
+def _handler_statements(body: str) -> str:
+    """``body`` with the tail of the parameter list removed.
+
+    `_iter_remote_handlers` yields from just after the trusted player
+    parameter, so the remaining parameter names and their type annotations
+    are still attached — and `payload: any)` looks nothing like the
+    pass-through `handler(player, payload)` the forwarding check is trying
+    to recognize.
+    """
+    depth = 1
+    for index, char in enumerate(body):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return body[index + 1 :]
+    return body
+
+
+def _calls_receiving(body: str, params: List[str]) -> List[Tuple[str, str, str]]:
+    """Calls in ``body`` that are handed one of ``params`` as an argument."""
+    received = []
+    for call in _CALL_RE.finditer(body):
+        receiver, separator, name, args = call.groups()
+        if any(
+            re.search(r"(?<![\w.])" + re.escape(p) + r"(?![\w])", args) for p in params
+        ):
+            received.append((receiver or "", separator or "", name))
+    return received
+
+
+def _only_forwards(body: str, params: List[str]) -> bool:
+    """True when every mention of ``params`` is a bare pass-through argument.
+
+    `handler(player, payload)` forwards; `payload.amount`, `#payload`,
+    `coins + amount` all *use* the value and so must be validated here.
+    """
+    for param in params:
+        for occurrence in re.finditer(
+            r"(?<![\w.])" + re.escape(param) + r"(?![\w])", body
+        ):
+            before = body[: occurrence.start()].rstrip()
+            after = body[occurrence.end() :].lstrip()
+            if not before.endswith(("(", ",")) or after[:1] not in (",", ")"):
+                return False
+    return True
+
+
+def _is_injected(name: str, scope: str) -> bool:
+    """True when ``name`` holds something handed to this module from outside —
+    `local handler = self._performanceHandler`, or the assert-guarded
+    `local contract = assert(self._actionPayloadContract, "...")`."""
+    return bool(
+        re.search(
+            r"\blocal\s+" + re.escape(name) + r"\s*=[^\n]*\bself\s*[.:]\s*\w+",
+            scope,
+        )
+    )
+
+
+def _relays_to_injected_callback(body: str, params: List[str], scope: str) -> bool:
+    """True when the handler is a transport shim: it hands its client-supplied
+    arguments, unchanged, to a callback that was injected into this module and
+    does nothing else with them.
+
+    A generic remote multiplexer (a NetworkService that owns the RemoteEvents
+    and forwards each payload to whichever handler the composition root
+    registered) has nothing to validate or throttle itself — the registered
+    handler is where both belong, and it lives in a file this one never
+    imports, so no amount of following requires can reach it. Method-syntax
+    calls (`store:SetAsync(key, payload)`) are deliberately excluded: passing
+    client data straight into an engine API *is* acting on it.
+    """
+    if not params or not _only_forwards(body, params):
+        return False
+    receivers = _calls_receiving(body, params)
+    if not receivers:
+        return False
+    for receiver, separator, name in receivers:
+        if separator == ":":
+            return False
+        if not _is_injected(receiver or name, scope):
+            return False
+    return True
+
+
+# Calls whose whole point is to keep what they are given: a connection
+# handed to one of these is tracked, not dropped on the floor.
+_RETAINING_CALLS = {"insert", "append", "push", "add", "give", "track"}
 
 _HANDLER_ENTRY_RE = re.compile(
     r"OnServerEvent\s*:\s*Connect\s*\(\s*function\s*\(\s*(\w+)"
@@ -528,10 +695,16 @@ file, so treat findings as leads to verify against the actual script context, no
 
     # ── Remote trust boundary ────────────────────────────────────────
 
-    def _audit_remote_validation(self, code: str) -> Dict[str, Any]:
+    def _audit_remote_validation(
+        self, code: str, imported_code: str = ""
+    ) -> Dict[str, Any]:
         findings = []
 
         stripped = _strip_luau_noise(code)
+        # Definitions this file can reach: its own, plus whatever it requires.
+        # Only ever searched for a *named callee* — never scanned for handlers
+        # of its own, so an imported module's remotes can't be reported here.
+        scope = stripped + "\n" + _strip_luau_noise(imported_code)
         handlers = list(_iter_remote_handlers(stripped))
 
         if not handlers:
@@ -567,15 +740,34 @@ file, so treat findings as leads to verify against the actual script context, no
                 r":Kick\s*\(|Teleport|Instance\.new|Clone\s*\(",
                 body,
             )
-            # Comparing an argument against literals (`action ~= "shown"`,
-            # stripped here to `""`) or an allow-list table
-            # (`VALID_ACTIONS[action]`) validates it as surely as typeof().
-            validated = re.search(
-                r"\btypeof\s*\(|\btype\s*\(|\bassert\s*\(|\bmath\.clamp\s*\("
-                r"|(?:==|~=)\s*(?:\"\"|'')|\b[A-Z_]*(?:VALID|ALLOWED|KNOWN)\w*\s*\[",
-                body,
-            )
+            # Parameters carry Luau type annotations (`payload: any`); the
+            # checks below need the bare name.
+            client_params = [
+                p.split(":", 1)[0].strip()
+                for p in params[1:]
+                if p.split(":", 1)[0].strip().isidentifier()
+            ]
+            statements = _handler_statements(body)
+            validated = bool(_VALIDATION_RE.search(body))
+            # Validation the handler delegates to a named helper —
+            # `if not contract.isValidTransport(payload) then return end` —
+            # is validation. Judge the helper by its own body, wherever it is
+            # defined: in this file, or in a module this file requires.
             if takes_arguments and not validated:
+                validated = any(
+                    _VALIDATION_RE.search(helper_body)
+                    for _, _, callee in _calls_receiving(statements, client_params)
+                    for helper_body in [_function_body(scope, callee)]
+                    if helper_body is not None
+                )
+            # A transport shim that only relays its arguments to an injected
+            # callback owns neither the validation nor the throttle.
+            relays = (
+                takes_arguments
+                and not validated
+                and _relays_to_injected_callback(statements, client_params, stripped)
+            )
+            if takes_arguments and not validated and not relays:
                 findings.append(
                     {
                         "severity": "MEDIUM",
@@ -586,13 +778,17 @@ file, so treat findings as leads to verify against the actual script context, no
 
             # A project's own throttle helper — `if not allowReset(player)
             # then return end`, RemoteThrottle.create(...) — is rate limiting.
-            if not cheap_player_only and not re.search(
-                r"(?i)debounce|cooldown|rate[_-]?limit|throttle|last[A-Z]\w*(?:Time|At)\b"
-                r"|os\.clock\s*\(\s*\)\s*-"
-                r"|\b(?:allow|can|may|permit)\w*\s*\(\s*"
-                + re.escape(trusted_param)
-                + r"\s*\)",
-                body,
+            if (
+                not cheap_player_only
+                and not relays
+                and not re.search(
+                    r"(?i)debounce|cooldown|rate[_-]?limit|throttle|last[A-Z]\w*(?:Time|At)\b"
+                    r"|os\.clock\s*\(\s*\)\s*-"
+                    r"|\b(?:allow|can|may|permit)\w*\s*\(\s*"
+                    + re.escape(trusted_param)
+                    + r"\s*\)",
+                    body,
+                )
             ):
                 findings.append(
                     {
@@ -827,12 +1023,25 @@ file, so treat findings as leads to verify against the actual script context, no
         for loop_match in re.finditer(r"\b(?:for|while)\b[^\n]*?\bdo\b", stripped):
             body_end = _block_end(stripped, loop_match.end())
             loop_body = stripped[loop_match.end() : body_end]
-            connects = re.findall(r"(\w+)(?:[.:]\w+)*\s*:\s*Connect\s*\(", loop_body)
             created_here = set(re.findall(r"\blocal\s+(\w+)\s*=", loop_body))
-            # Connecting to an instance created in this same iteration (a
-            # rune, a card) is the normal way to wire per-instance handlers;
-            # destroying the instance drops the connection.
-            leaky = [c for c in connects if c not in created_here]
+            leaky = []
+            for connect in re.finditer(
+                r"(\w+)(?:[.:]\w+)*\s*:\s*Connect\s*\(", loop_body
+            ):
+                # Connecting to an instance created in this same iteration (a
+                # rune, a card) is the normal way to wire per-instance
+                # handlers; destroying the instance drops the connection.
+                if connect.group(1) in created_here:
+                    continue
+                # A connection stashed in a table the file later disconnects
+                # (`table.insert(self._connections, ...)`, then a teardown
+                # loop over it) is managed — the `:Disconnect(` just isn't in
+                # this loop, because that is not where cleanup belongs.
+                if disconnect_count and _connection_is_retained(
+                    loop_body, connect.start()
+                ):
+                    continue
+                leaky.append(connect.group(1))
             if leaky and ":Disconnect(" not in loop_body:
                 findings.append(
                     {
