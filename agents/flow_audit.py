@@ -8,6 +8,29 @@ from typing import Any, Callable, Dict, List
 from agents.base import BaseAgent
 
 
+def _serialises_writes(code: str) -> bool:
+    """True when the file shows a mechanism that runs writes one at a time.
+
+    A serialising queue is the idiomatic JavaScript mutex — `x = x.then(...)`
+    appends each task to a chain — and none of lock/mutex/transaction appears
+    anywhere near one, so a relay client that funnels every tmux action
+    through `actionQueue` read as unguarded (cyberlab-terminal, 2026-08-28).
+
+    The seed matters: without it, an incidental `result = result.then(
+    normalize)` on a fetch would vouch for unrelated writes elsewhere in the
+    file. A real queue starts from an already-resolved promise. And a
+    concurrency limiter only serialises at one — `pLimit(5)` deliberately
+    permits five writes at once.
+    """
+    if re.search(r"lock|mutex|transaction|FOR UPDATE", code, re.IGNORECASE):
+        return True
+    for seed in re.finditer(r"\b(\w+)\s*=\s*Promise\.resolve\s*\(\s*\)", code):
+        name = re.escape(seed.group(1))
+        if re.search(rf"\b{name}\s*=\s*{name}\s*\.then\b", code):
+            return True
+    return bool(re.search(r"\bpLimit\s*\(\s*1\s*\)|\bconcurrency\s*:\s*1\b", code))
+
+
 class FlowAuditAgent(BaseAgent):
     name = "flow_audit"
     description = "Audits async/state-machine flow logic for auth, payments, uploads, and concurrency risks."
@@ -107,7 +130,7 @@ class FlowAuditAgent(BaseAgent):
                 r"|\bUPDATE\s+\w+\s+SET\b|\bINSERT\s+INTO\b",
                 code,
             )
-            and not re.search(r"lock|mutex|transaction|FOR UPDATE", code, re.IGNORECASE)
+            and not _serialises_writes(code)
         ):
             findings.append(
                 {
