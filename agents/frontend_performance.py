@@ -7,6 +7,28 @@ from typing import Any, Callable, Dict, List
 
 from agents.base import BaseAgent
 
+# `loading="lazy"` and `srcSet` are browser features that email clients do not
+# implement, so telling an email template to use them is noise, not a fix.
+# These markers identify a module that builds or sends email HTML.
+_EMAIL_HTML_MARKERS = re.compile(
+    r"""
+      \b(?:nodemailer|sendgrid|postmark|mailgun|SESClient|sendEmail)\b
+    | \.emails\.send\s*\(
+    | \bsendMail\s*\(
+    | \bfrom\s+['"]resend['"]
+    | \brequire\(\s*['"]resend['"]\s*\)
+    | \b[A-Z0-9_]*(?:EMAIL|MAIL)[A-Z0-9_]*_HTML\b
+    | \bcellpadding\s*=
+    | \bcellspacing\s*=
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _builds_email_html(code: str) -> bool:
+    """True when this module builds or sends email HTML rather than a page."""
+    return bool(_EMAIL_HTML_MARKERS.search(code))
+
 
 class FrontendPerformanceAgent(BaseAgent):
     name = "frontend_performance"
@@ -51,8 +73,15 @@ class FrontendPerformanceAgent(BaseAgent):
                     "fix": "Provide stable key props for list items.",
                 }
             )
-        if re.search(r"<img\b", code) and not re.search(
-            r"loading\s*=\s*['\"]lazy['\"]", code
+        # Email HTML is exempt: email clients ignore loading/srcSet, so these
+        # hints would be dead markup in a message body (sugarhaus server.js
+        # builds its order emails inline, 2026-08-28).
+        email_html = _builds_email_html(code)
+
+        if (
+            re.search(r"<img\b", code)
+            and not email_html
+            and not re.search(r"loading\s*=\s*['\"]lazy['\"]", code)
         ):
             findings.append(
                 {
@@ -61,8 +90,10 @@ class FrontendPerformanceAgent(BaseAgent):
                     "fix": "Add loading='lazy' for non-critical images.",
                 }
             )
-        if re.search(r"<img\b", code) and not re.search(
-            r"\b(srcSet|width=|height=)", code
+        if (
+            re.search(r"<img\b", code)
+            and not email_html
+            and not re.search(r"\b(srcSet|width=|height=)", code)
         ):
             findings.append(
                 {
