@@ -19,7 +19,7 @@ import json
 import logging
 import math
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from agents.base import BaseAgent
 
@@ -134,6 +134,57 @@ def _strip_js_comments(code: str) -> str:
         i += 1
 
     return "".join(out)
+
+
+def _string_literals(code: str) -> Iterator[Tuple[str, str, str, int, int]]:
+    """Yield ``(prefix, quote, body, start, end)`` for every string literal.
+
+    Walks the source instead of regexing it. A character class like
+    ``[^"']*`` cannot span a literal that contains the *other* quote
+    character, and that is precisely the shape a SQL injection takes:
+
+        cur.execute(f"SELECT * FROM users WHERE name = '{term}'")
+
+    There the body stops at the inner ``'``, dropping the ``{term}`` that
+    proves the query is interpolated — so the check read it as static and
+    said nothing. Same story for ``"... n = '" + value``, where the class
+    matched the empty span between the two quotes instead of the SQL.
+
+    Handles Python string prefixes (f/r/b/u and pairs), triple-quoted
+    strings, JavaScript template literals, and backslash escapes. An
+    unterminated literal yields whatever is left rather than being skipped:
+    unjudgeable is not the same as safe.
+    """
+    index = 0
+    length = len(code)
+    while index < length:
+        char = code[index]
+        if char not in "\"'`":
+            index += 1
+            continue
+
+        # A prefix only counts when it stands alone — `rb"..."` is a prefix,
+        # the `f` at the end of `some_var_f` followed by a quote is not.
+        match = re.search(r"(?:^|[^A-Za-z0-9_])([A-Za-z]{1,2})$", code[:index])
+        prefix = (match.group(1) if match else "").lower()
+        if prefix and not set(prefix) <= set("frbu"):
+            prefix = ""
+
+        closer = char * 3 if code.startswith(char * 3, index) else char
+        cursor = index + len(closer)
+        body_start = cursor
+        while cursor < length:
+            if code[cursor] == "\\":
+                cursor += 2
+                continue
+            if code.startswith(closer, cursor):
+                break
+            cursor += 1
+
+        body = code[body_start:cursor]
+        end = min(length, cursor + len(closer))
+        yield prefix, char, body, index, end
+        index = max(end, index + 1)
 
 
 def _shannon_entropy(value: str) -> float:
@@ -1353,81 +1404,83 @@ Format findings as structured reports with severity, location, description, and 
         # to db.query(sql, params), a common and safe pattern) as it is raw
         # unsanitized input. Don't assert CRITICAL on a guess either way.
         direct_input_re = re.compile(
-            r"\$\{\s*(req|request|ctx)\.(body|params|query)|\{\s*(request|req)\.(query_params|path_params)",
+            r"\$\{\s*(?:req|request|ctx)\.(?:body|params|query)"
+            r"|\{\s*(?:request|req)\.(?:query_params|path_params|json|args|form|values)",
             re.IGNORECASE,
         )
 
-        for m in re.finditer(r"`([^`]*)`", code, re.DOTALL):
-            literal = m.group(1)
-            if (
-                re.search(sql_stmt, literal, re.IGNORECASE | re.DOTALL)
-                and "${" in literal
-            ):
-                if direct_input_re.search(literal):
-                    findings.append(
-                        {
-                            "severity": "CRITICAL",
-                            "issue": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection",
-                            "fix": "Replace with parameterized query using placeholders ($1, $2, etc.)",
-                        }
-                    )
-                else:
-                    findings.append(
-                        {
-                            "severity": "MEDIUM",
-                            "issue": "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments",
-                            "fix": "Replace with parameterized query",
-                        }
-                    )
-                break
+        # What each interpolation style is called, and how loudly to say it.
+        # Concatenation stays CRITICAL on its own: building a statement with
+        # `+` has no parameterized reading, unlike an opaque `{x}` that may
+        # well be a pre-built fragment.
+        kinds = {
+            "template": (
+                "MEDIUM",
+                "SQL query built with template-literal interpolation (`${...}`) — verify the interpolated value(s) are pre-built parameterized fragments",
+                "Replace with parameterized query",
+            ),
+            "concat": (
+                "CRITICAL",
+                "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input",
+                "Use parameterized queries instead",
+            ),
+            "fstring": (
+                "MEDIUM",
+                "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input",
+                "Use parameterized queries",
+            ),
+            "format": (
+                "MEDIUM",
+                "SQL query built with .format() — verify the interpolated value(s) aren't raw unsanitized input",
+                "Use parameterized queries (bound parameters, not string formatting)",
+            ),
+            "percent": (
+                "MEDIUM",
+                "SQL query built with %-formatting — note this splices the value in, unlike passing %s placeholders with a separate parameter tuple",
+                "Pass the values as a parameter sequence: cursor.execute(sql, (a, b))",
+            ),
+        }
+        critical_issue = {
+            "template": "SQL query interpolates a request value (req.body/params/query) directly into the query string — SQL injection",
+            "fstring": "SQL query f-string interpolates a request value directly — SQL injection",
+            "format": "SQL query .format() interpolates a request value directly — SQL injection",
+            "percent": "SQL query %-formatting interpolates a request value directly — SQL injection",
+        }
 
-        for m in re.finditer(r"[\"']([^\"']*)[\"']\s*\+\s*\w", code):
-            literal = m.group(1)
-            if re.search(sql_stmt, literal, re.IGNORECASE):
-                findings.append(
-                    {
-                        "severity": "CRITICAL",
-                        "issue": "SQL query built with string concatenation (+) — classic SQL injection if the concatenated value comes from user input",
-                        "fix": "Use parameterized queries instead",
-                    }
-                )
-                break
+        seen = set()
+        for prefix, quote, body, begin, end in _string_literals(code):
+            if not re.search(sql_stmt, body, re.IGNORECASE | re.DOTALL):
+                continue
 
-        # Python: f-string or %/.format() with SQL statement shape
-        for m in re.finditer(r"f[\"']([^\"']*)[\"']", code):
-            literal = m.group(1)
-            if re.search(sql_stmt, literal, re.IGNORECASE) and "{" in literal:
-                if re.search(
-                    r"\{\s*(request|req)\.(query_params|path_params|json)",
-                    literal,
-                    re.IGNORECASE,
-                ):
-                    findings.append(
-                        {
-                            "severity": "CRITICAL",
-                            "issue": "SQL query f-string interpolates a request value directly — SQL injection",
-                            "fix": "Use parameterized queries (SQLAlchemy text() with bound parameters)",
-                        }
-                    )
-                else:
-                    findings.append(
-                        {
-                            "severity": "MEDIUM",
-                            "issue": "SQL query built with an f-string — verify the interpolated value(s) aren't raw unsanitized input",
-                            "fix": "Use parameterized queries",
-                        }
-                    )
-                break
-        if re.search(
-            rf"[\"'][^\"']*{sql_stmt}[^\"']*[\"']\s*%\s*[\(\w]", code, re.IGNORECASE
-        ):
-            findings.append(
-                {
-                    "severity": "HIGH",
-                    "issue": "SQL query built with %-formatting — use parameterized queries instead",
-                    "fix": "Pass values as query parameters, not via % string formatting",
-                }
-            )
+            # `{{` and `}}` are escaped braces, not interpolation.
+            unescaped = re.sub(r"\{\{|\}\}", "", body)
+            trailer = code[end : end + 40]
+            leader = code[max(0, begin - 40) : begin]
+
+            if quote == "`" and "${" in body:
+                kind = "template"
+            elif "f" in prefix and "{" in unescaped:
+                kind = "fstring"
+            elif re.match(r"\s*\+\s*\w", trailer) or re.search(r"\w\s*\+\s*$", leader):
+                kind = "concat"
+            elif re.match(r"\s*\.\s*format\s*\(", trailer):
+                kind = "format"
+            # A trailing `%` splices the value in. `"... = %s", (val,)` is the
+            # bound-parameter form and is safe — there the literal is followed
+            # by a comma, not a percent.
+            elif re.match(r"\s*%\s*[\w(\[]", trailer):
+                kind = "percent"
+            else:
+                continue
+
+            if kind in seen:
+                continue
+            seen.add(kind)
+
+            severity, issue, fix = kinds[kind]
+            if kind in critical_issue and direct_input_re.search(body):
+                severity, issue = "CRITICAL", critical_issue[kind]
+            findings.append({"severity": severity, "issue": issue, "fix": fix})
 
         return {"findings": findings, "total_issues": len(findings)}
 

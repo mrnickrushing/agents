@@ -832,8 +832,15 @@ def review_security(context: ReviewContext) -> List[ReviewFinding]:
         source = file_diff.patch_source
         if not source.strip():
             continue
-        findings.extend(_injected_sql(file_diff))
+        spliced_sql = _injected_sql(file_diff)
+        findings.extend(spliced_sql)
         for check in checks:
+            # The shared detector reaches further than `_injected_sql` — it
+            # catches a query built into a variable and executed on another
+            # line — but on a query this reviewer already flagged it only
+            # restates it, at a lower severity and a worse anchor.
+            if check == "audit_sql_injection" and spliced_sql:
+                continue
             raws = _run_detector("security_audit", check, code=source)
             findings.extend(
                 _findings_from_detector(
