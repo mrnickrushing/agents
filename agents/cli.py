@@ -43,6 +43,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from agents.api_architect import APIArchitectAgent
 from agents.auth_security import AuthSecurityAgent
 from agents.code_review import CodeReviewAgent
+from agents.pr_review import PRReviewAgent
 from agents.compliance import ComplianceAuditAgent
 from agents.config_audit import ConfigAuditAgent
 from agents import autofix
@@ -71,6 +72,7 @@ AGENTS: Dict[str, type] = {
     "security_audit": SecurityAuditAgent,
     "config_audit": ConfigAuditAgent,
     "code_review": CodeReviewAgent,
+    "pr_review": PRReviewAgent,
     "stripe_billing": StripeBillingAgent,
     "railway_deploy": RailwayDeployAgent,
     "scaffolder": ScaffolderAgent,
@@ -3036,6 +3038,91 @@ def cmd_prospect_report(args: argparse.Namespace) -> None:
     raise SystemExit(prospect_main())
 
 
+def cmd_review(args: argparse.Namespace) -> None:
+    """Review a pull request with the graph-indexed reviewer swarm."""
+    from agents.pr_review import ReviewMemory, run_review
+
+    if args.diff == "-":
+        diff = sys.stdin.read()
+    elif args.diff:
+        with open(os.path.expanduser(args.diff), "r", encoding="utf-8") as handle:
+            diff = handle.read()
+    else:
+        diff = None
+
+    overrides: Dict[str, Any] = {}
+    if args.strictness:
+        overrides["strictness"] = args.strictness
+    if args.comment_types:
+        overrides["commentTypes"] = [
+            item.strip() for item in args.comment_types.split(",") if item.strip()
+        ]
+
+    pull_request: Dict[str, Any] = {}
+    if args.pr_json:
+        with open(os.path.expanduser(args.pr_json), "r", encoding="utf-8") as handle:
+            pull_request = json.load(handle)
+
+    memory = None
+    if not args.no_memory:
+        try:
+            memory = ReviewMemory()
+        except Exception:
+            memory = None
+
+    try:
+        report = run_review(
+            repo_path=args.path,
+            diff=diff,
+            base=args.base,
+            head=args.head,
+            overrides=overrides or None,
+            pull_request=pull_request,
+            use_graph=not args.no_graph,
+            memory=memory,
+        )
+    finally:
+        if memory is not None:
+            memory.close()
+
+    if args.format == "json":
+        print(json.dumps(report, indent=2))
+    else:
+        print(report["markdown"])
+
+    if args.fail_on and report.get("reviewed"):
+        from agents.pr_review import SEVERITIES
+
+        threshold = SEVERITIES.index(args.fail_on)
+        blocking = [
+            item
+            for item in report["findings"]
+            if SEVERITIES.index(item["severity"]) <= threshold
+        ]
+        if blocking:
+            print(
+                f"\n{len(blocking)} finding(s) at or above {args.fail_on} — failing.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+
+def cmd_review_feedback(args: argparse.Namespace) -> None:
+    """Teach the reviewer which comment categories are worth surfacing."""
+    from agents.pr_review import ReviewMemory
+
+    project = os.path.realpath(os.path.expanduser(args.path))
+    with ReviewMemory() as memory:
+        recorded = memory.record(
+            project, {"category": args.category, "title": args.note}, args.verdict
+        )
+        recorded["tallies"] = memory.tallies(project)
+        recorded["suppressed_categories"] = sorted(
+            memory.suppressed_categories(project)
+        )
+    print(json.dumps(recorded, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m agents.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3043,6 +3130,65 @@ def main() -> None:
     sub.add_parser("list", help="List all agents and their tools").set_defaults(
         func=cmd_list
     )
+
+    p_review = sub.add_parser(
+        "review",
+        help="Review a pull request with the graph-indexed reviewer swarm",
+    )
+    p_review.add_argument(
+        "--path", default=".", help="Repository checkout to review against"
+    )
+    p_review.add_argument(
+        "--diff",
+        help="Unified diff file to review, or '-' to read from stdin. "
+        "Omit to diff with git.",
+    )
+    p_review.add_argument(
+        "--base", default="HEAD~1", help="Base revision when diffing with git"
+    )
+    p_review.add_argument(
+        "--head", default="HEAD", help="Head revision when diffing with git"
+    )
+    p_review.add_argument(
+        "--strictness",
+        type=int,
+        choices=[1, 2, 3],
+        help="1 verbose, 2 balanced, 3 critical only (overrides greptile.json)",
+    )
+    p_review.add_argument(
+        "--comment-types",
+        help="Comma-separated subset of logic,syntax,style to surface",
+    )
+    p_review.add_argument(
+        "--pr-json", help="JSON file of PR metadata for scope filters"
+    )
+    p_review.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    p_review.add_argument(
+        "--fail-on",
+        choices=["P0", "P1", "P2"],
+        help="Exit non-zero when a finding at or above this severity is found",
+    )
+    p_review.add_argument(
+        "--no-graph",
+        action="store_true",
+        help="Skip codebase indexing and review the diff alone",
+    )
+    p_review.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Ignore learned suppressions for this run",
+    )
+    p_review.set_defaults(func=cmd_review)
+
+    p_rf = sub.add_parser(
+        "review-feedback",
+        help="Record a reaction to a review comment so the reviewer learns",
+    )
+    p_rf.add_argument("category", help="Finding category, e.g. convention:raw_sql")
+    p_rf.add_argument("verdict", choices=["upvote", "downvote", "addressed", "ignored"])
+    p_rf.add_argument("--path", default=".", help="Repository the comment was on")
+    p_rf.add_argument("--note", default="", help="Optional note for the record")
+    p_rf.set_defaults(func=cmd_review_feedback)
 
     p_luau = sub.add_parser(
         "luau-scan",
