@@ -4,6 +4,7 @@ RushingTech Agents — OpenAI-compatible AI agents for solo full-stack operators
 Import and use anywhere:
     from agents import (
         SecurityAuditAgent, StripeBillingAgent, RailwayDeployAgent, CodeReviewAgent,
+        PRReviewAgent,
         ScaffolderAgent, AuthSecurityAgent, MobileDeployAgent, APIArchitectAgent,
         DatabaseArchitectAgent, InfraMonitorAgent,
     )
@@ -17,6 +18,7 @@ from agents.security_audit import SecurityAuditAgent
 from agents.stripe_billing import StripeBillingAgent
 from agents.railway_deploy import RailwayDeployAgent
 from agents.code_review import CodeReviewAgent
+from agents.pr_review import PRReviewAgent, ReviewMemory
 from agents.ui_generation import UIGenerationAgent
 from agents.scaffolder import ScaffolderAgent
 from agents.auth_security import AuthSecurityAgent
@@ -39,6 +41,7 @@ from agents.figma_scaffold import FigmaScaffoldAgent
 from agents.workflow import WorkflowOrchestrator
 from agents.durability import DurableStep, DurabilityDB, durable_step, durable_workflow
 from agents.knowledge_graph import CodebaseGraph
+from agents.review_config import ReviewConfig, load_review_config
 from agents.streaming import StreamingEventBus, get_default_bus, emit
 from agents.triage import TriageAgent, TriageRAG
 
@@ -47,6 +50,8 @@ __all__ = [
     "StripeBillingAgent",
     "RailwayDeployAgent",
     "CodeReviewAgent",
+    "PRReviewAgent",
+    "ReviewMemory",
     "UIGenerationAgent",
     "ScaffolderAgent",
     "AuthSecurityAgent",
@@ -73,6 +78,8 @@ __all__ = [
     "durable_step",
     "durable_workflow",
     "CodebaseGraph",
+    "ReviewConfig",
+    "load_review_config",
     "StreamingEventBus",
     "get_default_bus",
     "emit",

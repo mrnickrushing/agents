@@ -2,7 +2,7 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twenty-three specialized agents (111 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
+Twenty-four specialized agents (116 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
@@ -315,6 +315,7 @@ Grounded against Roblox's own Creator Hub docs (security tactics, DataStore requ
 | **RailwayDeployAgent** | OpenAI, Anthropic | CI/CD workflows (GitHub Actions, Codemagic, EAS), platform configs (Vercel, Cloudflare), Sentry integration, migrations, monitoring alerts, backup strategies |
 | **MobileDeployAgent** | OpenAI, Anthropic | EAS build profile review (hardcoded secrets, production hardening), Codemagic code-signing hygiene, App Store/Play submission checklists, RevenueCat SDK setup |
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
+| **PRReviewAgent** ⭐ NEW | OpenAI, Anthropic | Whole-repo pull request review — graph-indexed cross-file impact (callers a signature change breaks), convention drift from what the repo already does, security/logic/performance/dependency/test-coverage reviewers running in parallel, `greptile.json` + `.greptile/` config, P0/P1/P2 inline comments, 0–5 confidence scoring, Mermaid diagrams, and auto-approve decisions |
 | **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
 | **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |
 | **ConfigAuditAgent** | OpenAI, Anthropic | Docker, workflow, mobile-platform, Railway, environment, framework, and web-server configuration auditing |
@@ -364,6 +365,8 @@ python -m agents.cli scan --path ~/lastlight --runtime --runtime-command 'npm ru
 | `agents list` | Every agent and its tools |
 | `agents run <agent> <tool> [--arg k=v] [--file k=path] [--stdin k]` | Call one tool handler directly; `--file` reads a file into that argument, `--stdin` fills it from stdin |
 | `agents scan [--path P] [--agents a,b] [--out report.json] [--fail-on SEV] [--runtime [--runtime-command CMD] [--runtime-timeout S]] [--triage/--no-triage] [--triage-model M] [--no-record] [--db PATH] [--knowledge-graph] [--durable-db PATH --workflow-id ID]` | Project scan. `--knowledge-graph` builds the AST call/import graph for cross-file taint paths; `--durable-db`/`--workflow-id` persist each step so a re-run resumes instead of repeating |
+| `agents review [--path P] [--diff FILE\|-] [--base REV] [--head REV] [--strictness 1\|2\|3] [--comment-types logic,syntax,style] [--pr-json F] [--format markdown\|json] [--fail-on P0\|P1\|P2] [--no-graph] [--no-memory]` | Review a pull request with the graph-indexed reviewer swarm. Omit `--diff` to diff with git; `--fail-on` exits non-zero so CI can gate on it |
+| `agents review-feedback <category> upvote\|downvote\|addressed\|ignored [--path P] [--note ...]` | Teach the reviewer which comment categories are worth surfacing. Security and breaking-change categories are never suppressed |
 | `agents luau-scan [root] [--rules r1 r2] [--json] [--fail-on SEV]` | Roblox/Luau static analysis (rule ids as printed in the report) |
 | `agents fix [path] [--apply] [--kinds pin-actions,workflow-permissions,env-example,compose]` | Mechanical fixes; dry run unless `--apply` |
 | `agents feedback <agf_id> confirm\|dismiss --reason "..."` | Record a human verdict that outranks triage |
@@ -782,6 +785,96 @@ agent = SecurityAuditAgent(provider="anthropic")  # Uses ANTHROPIC_API_KEY
 - `review_codemagic_config` — code-signing hygiene (no inlined keys), trigger scoping, TestFlight/App Store submission steps
 - `app_store_submission_checklist` — App Store/Play submission checklist (privacy labels, ATT, HealthKit disclosures, IAP readiness) by app category
 - `review_revenuecat_setup` — Purchases.configure() timing, offerings error handling, restorePurchases(), entitlement-gated purchase flow
+
+### PRReviewAgent ⭐ NEW
+
+Reviews a pull request with the whole codebase in view, not just the diff.
+
+**Three stages**
+
+1. **Index.** `CodebaseGraph` parses the repository into files, functions, classes,
+   imports, calls, and data flows.
+2. **Swarm.** Eight reviewers run in parallel over the diff, each citing evidence:
+
+   | Reviewer | What it looks for |
+   |---|---|
+   | `impact` | Callers and importers the change breaks — the ones *outside* the diff |
+   | `security` | Injection, secrets, auth, upload, transport, JWT/OAuth |
+   | `logic` | Control flow, state machines, idempotency, async hazards, schema/migration safety |
+   | `conventions` | Drift from patterns the repo demonstrably already follows |
+   | `performance` | Bundle weight, render cost, layout shift |
+   | `dependencies` | Manifests and lockfiles the PR touches |
+   | `rules` | Custom rules from `greptile.json` / `.greptile/` |
+   | `tests` | New behaviour nothing exercises |
+
+3. **Learn.** Reactions recorded with `agents review-feedback` tally per category.
+   A category the team ignores three times stops being surfaced — except
+   security and breaking-change categories, and except P0 findings, which are
+   always posted.
+
+**What it catches that a diff-only reviewer cannot**
+
+```fish
+agents review --path . --base main --head HEAD
+```
+
+```
+| Severity | Type | Location | Issue |
+| **P0** Critical | logic | `src/db/users.py:4` | `get_user` now requires `tenant_id`, but 2 call site(s) outside this PR were not updated |
+| **P0** Critical | logic | `src/db/users.py:13` | Raw SQL interpolation here, parameterised queries everywhere else |
+| **P2** Medium | style | `src/db/users.py:12` | `print()` here, structured logger everywhere else |
+```
+
+The first finding cites `src/api/billing.py:6` and `src/api/reports.py:4` — files the
+PR never touches. The convention findings only fire because the rest of the repo
+demonstrably binds parameters and uses a logger; a codebase that never adopted
+either pattern is never nagged about them.
+
+**Output** — a plain-language summary, a 0–5 confidence score (5/5 is only
+reachable with no open findings), an issues table, a file-by-file breakdown, a
+Mermaid diagram chosen to fit the change (ER for schema, sequence for request
+flow, class for hierarchy, flowchart otherwise), and P0/P1/P2 inline comments with
+"fix with your agent" blocks.
+
+**Configuration** — `greptile.json` at the repo root, plus `.greptile/` folders at
+any depth holding `config.json`, `rules.md`, and `files.json`. Nested folders
+inherit from their parents: scalars from the deepest folder win, rules and
+context files accumulate, and auto-approve merges strictest-wins — a nested
+config can tighten the policy but never loosen it.
+
+```json
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "autoReview": ["open"],
+  "excludeAuthors": ["dependabot[bot]"],
+  "ignorePatterns": "**/*.generated.*\ndist/**",
+  "rules": [
+    { "rule": "All API endpoints must have rate limiting",
+      "id": "rl-1", "scope": ["src/api/**/*.ts"], "severity": "high" }
+  ],
+  "autoApprove": { "enabled": true, "riskCeiling": "low",
+                   "filters": { "excludePaths": ["src/payments/**"] } },
+  "includeConfidenceScore": true,
+  "summarySection": { "included": true, "collapsible": false, "defaultOpen": true }
+}
+```
+
+Strictness is the main dial: `1` surfaces everything, `2` balances (the default),
+`3` reports critical findings only. A P0 is never dropped at any level.
+
+**Tools:**
+- `review_pull_request` — full swarm review; returns findings, score, diagram, auto-approve decision
+- `index_codebase` — build/refresh the graph and report what was indexed
+- `explain_impact` — trace a symbol: callers, importers, narrow/moderate/wide blast radius
+- `check_review_scope` — whether a PR passes the configured filters, and why not
+- `record_review_feedback` — record a reaction so the reviewer learns
+
+**Gate CI on it:**
+
+```fish
+agents review --base origin/main --head HEAD --fail-on P0
+```
 
 ### CodeReviewAgent
 

@@ -31,7 +31,12 @@ def test_every_exported_agent_is_registered_in_the_cli():
 def test_readme_agent_and_tool_counts_match_the_code():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     tools = sum(len(cls()._tool_handlers) for cls in AGENTS.values())
-    words = {22: "Twenty-two", 23: "Twenty-three", 24: "Twenty-four"}
+    words = {
+        22: "Twenty-two",
+        23: "Twenty-three",
+        24: "Twenty-four",
+        25: "Twenty-five",
+    }
     assert f"{words[len(AGENTS)]} specialized agents ({tools} tools total)" in readme
 
 
@@ -51,6 +56,7 @@ MIRRORS = {
     "infra_monitor": "infra-monitor",
     "mobile_deploy": "mobile-deploy-advisor",
     "postmortem": "postmortem-analyst",
+    "pr_review": "pr-review-agent",
     "railway_deploy": "railway-deploy-advisor",
     "roblox_audit": "roblox-auditor",
     "scaffolder": "project-scaffolder",
