@@ -911,3 +911,43 @@ def test_injected_sql_does_not_need_corpus_evidence(tmp_path):
     )
     result = run_review(repo_path=str(root), diff=diff)
     assert any(item["category"] == "sql_injection" for item in result["findings"])
+
+
+def _review_new_file(tmp_path, body):
+    root = tmp_path / "repo"
+    root.mkdir(exist_ok=True)
+    diff = (
+        "diff --git a/q.py b/q.py\nnew file mode 100644\n--- /dev/null\n+++ b/q.py\n"
+        f"@@ -0,0 +1,{body.count('+')} @@\n" + body
+    )
+    return run_review(repo_path=str(root), diff=diff, overrides={"strictness": 1})
+
+
+def test_one_interpolated_query_reports_once(tmp_path):
+    """`_injected_sql` and the shared detector both see a same-line query.
+
+    Before the shared detector was fixed it saw nothing here, so both could
+    not fire at once. Now they can, and a reviewer should still get one
+    comment — the better-anchored P0, not that plus a P2 restating it.
+    """
+    result = _review_new_file(
+        tmp_path,
+        "+def f(conn, name):\n"
+        "+    return conn.execute(f\"SELECT * FROM t WHERE n = '{name}'\")\n",
+    )
+    sql = [item for item in result["findings"] if item["category"] == "sql_injection"]
+    assert len(sql) == 1
+    assert sql[0]["severity"] == "P0"
+    assert sql[0]["line"] == 2  # anchored on the query, not the function
+
+
+def test_query_built_then_executed_is_still_caught(tmp_path):
+    """The reach the shared detector adds: `_injected_sql` needs the query
+    and the call on one line, and this splits them."""
+    result = _review_new_file(
+        tmp_path,
+        "+def f(conn, name):\n"
+        '+    sql = f"SELECT * FROM t WHERE n = {name}"\n'
+        "+    return conn.execute(sql)\n",
+    )
+    assert any(item["category"] == "sql_injection" for item in result["findings"])

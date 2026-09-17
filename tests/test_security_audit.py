@@ -314,3 +314,167 @@ def test_the_scan_discovery_rule_reaches_the_append_form():
         assert _re.search(
             rule[1], _discovery_text("f.js", code, "audit_xss_patterns")
         ), code
+
+
+# ── SQL injection: literal extraction ─────────────────────────────────────────
+
+
+def _sql(code):
+    return SecurityAuditAgent()._audit_sql_injection(code)["findings"]
+
+
+def _kinds(code):
+    return {
+        key
+        for key, token in (
+            ("template", "template-literal"),
+            ("concat", "concatenation"),
+            ("fstring", "f-string"),
+            ("format", ".format()"),
+            ("percent", "%-formatting"),
+        )
+        for finding in _sql(code)
+        if token in finding["issue"]
+    }
+
+
+def test_fstring_query_containing_a_quoted_value_is_flagged():
+    """The regression this rewrite exists for.
+
+    `[^"']*` cannot span a literal holding the other quote, so the body
+    stopped at the inner `'` and lost the `{term}` that proves the query is
+    interpolated — the check read it as static SQL and said nothing. That is
+    the exact shape a real injection takes.
+    """
+    assert _kinds("""cur.execute(f"SELECT * FROM users WHERE name = '{term}'")""") == {
+        "fstring"
+    }
+
+
+def test_concatenated_query_containing_a_quoted_value_is_flagged():
+    """Same root cause on the concatenation branch: the character class
+    matched the empty span between `'` and `"` rather than the SQL."""
+    assert _kinds(
+        """db.query("SELECT * FROM t WHERE n = '" + req.query.n + "'")"""
+    ) == {"concat"}
+
+
+def test_triple_quoted_query_is_flagged():
+    code = 'cur.execute(f"""\n    SELECT * FROM t\n    WHERE a = \'{x}\'\n""")'
+    assert _kinds(code) == {"fstring"}
+
+
+def test_format_and_percent_interpolation_are_flagged():
+    """Both were named in the comment above the check but never implemented."""
+    assert _kinds("""cur.execute("SELECT * FROM t WHERE a = {}".format(v))""") == {
+        "format"
+    }
+    assert _kinds("""cur.execute("SELECT * FROM t WHERE a = %s" % v)""") == {"percent"}
+
+
+def test_bound_parameters_are_not_mistaken_for_interpolation():
+    """`"... %s", (v,)` is the safe form and `"... %s" % v` is not; the
+    difference is whether a percent follows the closing quote."""
+    for safe in (
+        """conn.execute("SELECT * FROM users WHERE id = ?", (uid,))""",
+        """db.query("INSERT INTO users (email) VALUES ($1)", [email])""",
+        """cur.execute("UPDATE t SET a = %s WHERE b = %s", (a, b))""",
+        """cur.execute("DELETE FROM t WHERE id = :tid", {"tid": tid})""",
+        """cur.execute("SELECT * FROM t WHERE n LIKE '%foo%'", ())""",
+    ):
+        assert _sql(safe) == [], safe
+
+
+def test_prose_is_not_read_as_sql():
+    """The false positive the original check was tightened to avoid: an
+    f-string of ordinary English containing the word "update"."""
+    assert _sql('log.info(f"Last case update recorded on {when}")') == []
+    assert _sql('path = f"/users/{uid}/profile"') == []
+
+
+def test_static_sql_and_literal_concatenation_stay_silent():
+    assert _sql('cur.execute("SELECT * FROM users")') == []
+    assert _sql('q = "SELECT * FROM t" + " WHERE 1=1"') == []
+
+
+def test_request_values_escalate_to_critical():
+    for code in (
+        "db.query(`SELECT * FROM t WHERE a = ${req.body.x}`)",
+        'cur.execute(f"SELECT * FROM t WHERE a = {request.args}")',
+    ):
+        assert [f["severity"] for f in _sql(code)] == ["CRITICAL"], code
+
+
+def test_opaque_variable_stays_medium():
+    """An opaque name is as often a pre-built parameterised fragment as it is
+    raw input; the check must not assert CRITICAL on a guess."""
+    assert [
+        f["severity"] for f in _sql("db.query(`SELECT * FROM t WHERE a = ${frag}`)")
+    ] == ["MEDIUM"]
+
+
+def test_scan_reaches_the_python_spellings_of_a_query():
+    """A handler the scan never invokes is dead code.
+
+    Two things had to be true for this check to run on Python, and neither
+    was. The discovery expression named three receivers (`cursor`, `db`,
+    `session`), missing the usual `conn`/`cur`. And it is matched against
+    `_discovery_text`, which re-spaces Python tokens into `conn .execute (`
+    — so even `db.execute(` verbatim could not match a .py file. The check
+    had a Python f-string branch that no Python file ever reached.
+
+    Asserting against raw source would pass while the scan stayed broken,
+    so this matches what the scan actually matches.
+    """
+    import re
+
+    from agents.cli import RULES, _discovery_text
+
+    # RULES entries are (file_pattern, content_regex, agent, tool, argmaker).
+    pattern = next(rule[1] for rule in RULES if rule[3] == "audit_sql_injection")
+    gate = re.compile(pattern)
+    for name, code in (
+        ("a.py", 'conn.execute(f"SELECT * FROM t WHERE a = {x}")'),
+        ("a.py", 'cur.execute(f"SELECT * FROM t WHERE a = {x}")'),
+        ("a.py", 'engine.execute("SELECT * FROM t WHERE a = " + x)'),
+        ("a.py", 'cur.executemany("INSERT INTO t VALUES (%s)" % v)'),
+        ("a.py", 'Model.objects.raw("SELECT * FROM t WHERE a = " + x)'),
+        ("a.py", 'db.execute(f"SELECT * FROM t WHERE a = {x}")'),
+        ("a.py", 'session.execute(f"SELECT * FROM t WHERE a = {x}")'),
+        ("a.ts", 'db.query("SELECT * FROM t WHERE n = " + name)'),
+        ("a.ts", "cursor.execute(`SELECT * FROM t WHERE a = ${v}`)"),
+    ):
+        assert gate.search(_discovery_text(name, code, "audit_sql_injection")), code
+
+
+def test_sql_inside_a_docstring_is_not_reported():
+    """A documentation example is not a vulnerability.
+
+    Found by sweeping 2302 stdlib/site-packages files: the old check reported
+    CPython's own `typing.py` as having a SQL injection, because it regexed
+    through the `LiteralString` docstring — whose whole point is to explain
+    SQL injection. Walking literals instead means a docstring is one literal
+    and the check does not read inside it.
+    """
+    code = '''
+def run_query(sql):
+    """Run a query.
+
+    Example::
+
+        run_query("SELECT * FROM " + literal_string)  # OK
+        run_query(f"SELECT * FROM students WHERE name = {arbitrary}")
+    """
+    return execute(sql)
+'''
+    assert _sql(code) == []
+
+
+def test_sql_outside_the_docstring_is_still_reported():
+    """The exemption is the docstring, not the function containing one."""
+    code = '''
+def run_query(name):
+    """Run a query."""
+    return cur.execute(f"SELECT * FROM students WHERE name = '{name}'")
+'''
+    assert _kinds(code) == {"fstring"}

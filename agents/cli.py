@@ -1387,7 +1387,15 @@ RULES: List[
     ),
     (
         None,
-        r"\.query\(|cursor\.execute\(|db\.execute\(|session\.execute\(",
+        # The discovery expression only has to over-approximate: the handler
+        # itself requires real SQL statement shape plus an interpolation
+        # before it says anything. Naming three specific receivers meant a
+        # file whose only sink was `conn.execute(...)` or `cur.execute(...)`
+        # — the usual spelling in Python — never reached the handler at all.
+        # `_discovery_text` re-spaces Python tokens, so this is matched
+        # against `conn .execute (` — the old expression, which required
+        # `db.execute(` verbatim, could never match a Python file at all.
+        r"\.\s*execute(?:many|script)?\s*\(|\.\s*query\s*\(|\.\s*raw\s*\(",
         "security_audit",
         "audit_sql_injection",
         lambda p, c: {"code": c},
