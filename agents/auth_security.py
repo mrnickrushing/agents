@@ -447,10 +447,70 @@ When reviewing code, always cite the specific flow step that's missing (not just
             # case where the request key is assigned on one line and compared
             # with env.ADMIN_SECRET on another. Merely naming x-api-key in a
             # CORS header allowlist is not evidence of an insecure compare.
+            #
+            # Key material takes more shapes than bare identifiers: the
+            # request key is usually read through an accessor naming the
+            # header (`req.headers["x-api-key"]`, `req.get("x-api-key")`),
+            # the expected secret is often an env lookup or a variable that
+            # was assigned from one of those, and the gate is as often an
+            # inequality (`key !== SECRET`) as an equality. The original
+            # regex required secret-vocabulary words on BOTH sides of the
+            # operator, so none of those shapes were ever flagged — the
+            # most common Express middleware slipped through entirely.
+            quoted_key_name = r"[\"'][\w-]*(?:api[_-]?key|secret)[\w-]*[\"']"
+            header_ref = (
+                r"(?:"
+                r"\[[\"'][\w-]*(?:api[_-]?key|secret)[\w-]*[\"']\]"
+                r"|\.\s*get\s*\(\s*" + quoted_key_name + r"\s*\)"
+                r")"
+            )
+            strong_word = (
+                r"\b\w*(?:secret|api[_-]?key|apikey|providedkey|requestkey|"
+                r"expected[_-]?key|provided)\w*\b"
+            )
+            env_ref = r"(?:process\.)?env\.\w*(?:secret|key)\w*"
+            # Python reads env vars through os.environ/os.getenv with the key
+            # name inside a quoted string; cover those shapes too.
+            py_env_ref = (
+                r"(?:os\.)?(?:environ\.get|getenv)\s*\(\s*"
+                + quoted_key_name
+                + r"|(?:os\.)?environ\s*\[\s*"
+                + quoted_key_name
+                + r"\s*\]"
+            )
+
+            # A variable assigned from a header accessor or env lookup
+            # (`const key = req.headers["x-api-key"]`, `provided =
+            # request.headers.get("x-api-key")`) carries the key material
+            # to the comparison line under an unrelated name.
+            assigned_names = sorted(
+                {
+                    re.escape(name)
+                    for name in re.findall(
+                        r"\b(?:const|let|var)?\s*([A-Za-z_]\w*)\s*=\s*[^;\n]*?"
+                        r"(?:" + header_ref + r"|(?:process\.)?env\.\w+)",
+                        code,
+                        re.IGNORECASE,
+                    )
+                }
+            )
+            assigned_alt = (
+                r"|\b(?:" + "|".join(assigned_names) + r")\b" if assigned_names else ""
+            )
+            operand = (
+                r"(?:"
+                + strong_word
+                + r"|"
+                + env_ref
+                + r"|"
+                + py_env_ref
+                + r"|"
+                + header_ref
+                + assigned_alt
+                + r")"
+            )
             insecure_compare = re.search(
-                r"(?:\b\w*(?:secret|api_?key|apikey|providedkey|requestkey)\w*\b|(?:process\.)?env\.\w*(?:secret|key)\w*)"
-                r"\s*(?:===|==)\s*"
-                r"(?:\b\w*(?:secret|api_?key|apikey|providedkey|requestkey)\w*\b|(?:process\.)?env\.\w*(?:secret|key)\w*)",
+                operand + r"\s*(?:===|==|!==|!=)\s*" + operand,
                 code,
                 re.IGNORECASE,
             )
@@ -460,19 +520,23 @@ When reviewing code, always cite the specific flow step that's missing (not just
                 findings.append(
                     {
                         "severity": "MEDIUM",
-                        "issue": "Shared secret compared with ===/== — vulnerable in principle to a timing attack that leaks the secret byte-by-byte",
-                        "fix": "Use crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) (Node) or hmac.compare_digest(a, b) (Python) instead of === / ==",
+                        "issue": "Shared secret compared with ===/==/!==/!= — vulnerable in principle to a timing attack that leaks the secret byte-by-byte",
+                        "fix": "Use crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) (Node) or hmac.compare_digest(a, b) (Python) instead of === / == / !== / !=",
                     }
                 )
             if re.search(
                 r"(x-api-key|internal_api_key|app[_-]?secret|admin[_-]?secret)\s*(\|\||\?\?)\s*[\"'][\w-]{2,}[\"']",
                 code,
                 re.IGNORECASE,
+            ) or re.search(
+                r"\b(?:os\.environ\.get|os\.getenv|getenv)\s*\(\s*[\"'][\w-]*(?:secret|api[_-]?key|internal[_-]?api)[\w-]*[\"']\s*,\s*[\"'][^\"']{2,}[\"']",
+                code,
+                re.IGNORECASE,
             ):
                 findings.append(
                     {
                         "severity": "CRITICAL",
-                        "issue": 'Shared secret has a hardcoded fallback value (e.g. `|| "default"`) — if the env var is ever unset in production, auth silently falls back to a known secret',
+                        "issue": 'Shared secret has a hardcoded fallback value (e.g. `|| "default"` or `os.getenv("ADMIN_SECRET", "...")`) — if the env var is ever unset in production, auth silently falls back to a known secret',
                         "fix": "Fail closed: throw/exit at startup if the secret env var is missing, rather than defaulting to a literal",
                     }
                 )

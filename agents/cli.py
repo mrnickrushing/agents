@@ -267,7 +267,20 @@ def cmd_run(args: argparse.Namespace) -> None:
         kwargs[key] = _coerce(value)
     for item in args.file or []:
         key, _, path = item.partition("=")
-        with open(os.path.expanduser(path), "r", errors="ignore") as fh:
+        expanded = os.path.expanduser(path)
+        # A binary file read with errors="ignore" silently corrupts the
+        # content and the check then reports on noise. Refuse with a clear
+        # error instead of guessing.
+        try:
+            with open(expanded, "rb") as probe:
+                if b"\x00" in probe.read(8192):
+                    raise SystemExit(
+                        f"Refusing to read '{path}' as text: it looks binary. "
+                        "These checks analyze source code, not binary assets."
+                    )
+        except OSError as exc:
+            raise SystemExit(f"Cannot read '{path}': {exc}") from exc
+        with open(expanded, "r", errors="ignore") as fh:
             kwargs[key] = fh.read()
     if args.stdin:
         kwargs[args.stdin] = sys.stdin.read()
@@ -1947,8 +1960,19 @@ def _project_runtime_commands(root: str) -> List[List[str]]:
     has_python_project = os.path.isfile(
         os.path.join(root, "requirements.txt")
     ) or os.path.isfile(os.path.join(root, "pyproject.toml"))
-    if has_python_project and shutil.which("pytest"):
-        commands.append(["pytest", "-q"])
+    if has_python_project:
+        # pytest is detected in the running interpreter, not on PATH: inside a
+        # venv the console script is often missing from PATH while
+        # `python -m pytest` works, and running via sys.executable verifies the
+        # same environment the operator is actually using.
+        try:
+            import importlib.util
+
+            pytest_spec = importlib.util.find_spec("pytest")
+        except (ImportError, ValueError):
+            pytest_spec = None
+        if pytest_spec is not None:
+            commands.append([sys.executable, "-m", "pytest", "-q"])
     pyproject_text = ""
     try:
         with open(os.path.join(root, "pyproject.toml"), encoding="utf-8") as fh:
