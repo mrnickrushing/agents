@@ -1,5 +1,7 @@
+import importlib.util
 import json
 import subprocess
+import sys
 
 from agents.api_architect import APIArchitectAgent
 from agents.cli import (
@@ -88,6 +90,18 @@ def test_runtime_verification_runs_multiple_detected_commands(tmp_path, monkeypa
     assert len(result["checks"]) == len(commands)
 
 
-def test_runtime_detects_pytest_from_pyproject_without_requirements(tmp_path):
+def test_runtime_detects_pytest_from_pyproject_without_requirements(
+    tmp_path, monkeypatch
+):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n")
-    assert ["pytest", "-q"] in _project_runtime_commands(str(tmp_path))
+    # pytest is detected in the running interpreter and launched via
+    # sys.executable -m pytest, so the exact argv depends on the environment.
+    spec = importlib.util.find_spec("pytest")
+    if spec is None:
+        monkeypatch.setattr(
+            "agents.cli.sys.executable", "/usr/bin/python", raising=False
+        )
+        assert _project_runtime_commands(str(tmp_path)) == []
+        return
+    argv = _project_runtime_commands(str(tmp_path))
+    assert argv == [[sys.executable, "-m", "pytest", "-q"]]
