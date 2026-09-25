@@ -19,6 +19,9 @@ from agents.stripe_billing import StripeBillingAgent
 from agents.railway_deploy import RailwayDeployAgent
 from agents.code_review import CodeReviewAgent
 from agents.pr_review import PRReviewAgent, ReviewMemory
+from agents.llm_security import LLMSecurityAgent
+from agents.test_quality import TestQualityAgent
+from agents.docs_drift import DocsDriftAgent
 from agents.ui_generation import UIGenerationAgent
 from agents.scaffolder import ScaffolderAgent
 from agents.auth_security import AuthSecurityAgent
@@ -51,6 +54,9 @@ __all__ = [
     "RailwayDeployAgent",
     "CodeReviewAgent",
     "PRReviewAgent",
+    "LLMSecurityAgent",
+    "TestQualityAgent",
+    "DocsDriftAgent",
     "ReviewMemory",
     "UIGenerationAgent",
     "ScaffolderAgent",

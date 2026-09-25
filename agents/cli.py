@@ -44,6 +44,9 @@ from agents.api_architect import APIArchitectAgent
 from agents.auth_security import AuthSecurityAgent
 from agents.code_review import CodeReviewAgent
 from agents.pr_review import PRReviewAgent
+from agents.llm_security import LLMSecurityAgent
+from agents.test_quality import TestQualityAgent
+from agents.docs_drift import DocsDriftAgent
 from agents.compliance import ComplianceAuditAgent
 from agents.config_audit import ConfigAuditAgent
 from agents import autofix
@@ -73,6 +76,9 @@ AGENTS: Dict[str, type] = {
     "config_audit": ConfigAuditAgent,
     "code_review": CodeReviewAgent,
     "pr_review": PRReviewAgent,
+    "llm_security": LLMSecurityAgent,
+    "test_quality": TestQualityAgent,
+    "docs_drift": DocsDriftAgent,
     "stripe_billing": StripeBillingAgent,
     "railway_deploy": RailwayDeployAgent,
     "scaffolder": ScaffolderAgent,
@@ -253,6 +259,26 @@ def cmd_list(_args: argparse.Namespace) -> None:
             print(f"  - {tool_name}")
 
 
+def _collect_repo_files(root: str) -> Dict[str, str]:
+    """Collect a repository into the {relative_path: content} map that the
+    repository-wide tools take.
+
+    Without this there was no way to call them from the CLI at all: `--arg`
+    coerces only scalars, so a documented `files=@repo` arrived as the literal
+    string and the handler failed on `.items()`.
+    """
+    root = os.path.realpath(os.path.expanduser(root))
+    collected: Dict[str, str] = {}
+    for path in _iter_files(root):
+        if not _is_text_candidate(path):
+            continue
+        try:
+            collected[os.path.relpath(path, root).replace(os.sep, "/")] = _read(path)
+        except (OSError, UnicodeError):
+            continue
+    return collected
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     agent = _get_agent(args.agent)
     handler = agent._tool_handlers.get(args.tool)
@@ -282,6 +308,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(f"Cannot read '{path}': {exc}") from exc
         with open(expanded, "r", errors="ignore") as fh:
             kwargs[key] = fh.read()
+    for item in args.repo or []:
+        key, _, path = item.partition("=")
+        kwargs[key] = _collect_repo_files(path or ".")
     if args.stdin:
         kwargs[args.stdin] = sys.stdin.read()
 
@@ -1781,6 +1810,78 @@ RULES: List[
         "analyze_incident",
         lambda p, c: {"incident_text": c},
     ),
+    # --- llm_security: the code around a model call ---------------------------
+    # Gated on SDK identifiers rather than call syntax: `_discovery_text`
+    # strips string literals and re-spaces Python tokens, so `openai` survives
+    # as an import while `openai.chat.completions.create(` does not.
+    (
+        None,
+        r"(?i)\bopenai\b|\banthropic\b|litellm|\bollama\b|langchain"
+        r"|generateText|streamText|generativeai|bedrock-runtime|@ai-sdk",
+        "llm_security",
+        "audit_prompt_construction",
+        lambda p, c: {"code": c},
+    ),
+    (
+        None,
+        r"(?i)\bopenai\b|\banthropic\b|litellm|\bollama\b|langchain"
+        r"|generateText|streamText|generativeai|bedrock-runtime|@ai-sdk",
+        "llm_security",
+        "audit_token_limits",
+        lambda p, c: {"code": c},
+    ),
+    (
+        None,
+        r"(?i)dangerouslyAllowBrowser|\bopenai\b|\banthropic\b|generativeai",
+        "llm_security",
+        "audit_llm_key_exposure",
+        lambda p, c: {"code": c},
+    ),
+    (
+        None,
+        r"(?i)\bopenai\b|\banthropic\b|litellm|generateText|generateObject",
+        "llm_security",
+        "audit_llm_output_handling",
+        lambda p, c: {"code": c},
+    ),
+    (
+        None,
+        r"(?i)\bopenai\b|\banthropic\b|litellm|langchain|tool_choice|function_call",
+        "llm_security",
+        "audit_llm_tool_exposure",
+        lambda p, c: {"code": c},
+    ),
+    # --- test_quality: the tests themselves -----------------------------------
+    # Glob-matched, not content-matched: a content-gated rule skips test files
+    # by design, so the only way to review a test is to name its filename shape.
+    (
+        "test_*.py",
+        None,
+        "test_quality",
+        "audit_test_suite",
+        lambda p, c: {"code": c},
+    ),
+    (
+        "*_test.py",
+        None,
+        "test_quality",
+        "audit_test_suite",
+        lambda p, c: {"code": c},
+    ),
+    (
+        "*.test.*",
+        None,
+        "test_quality",
+        "audit_test_suite",
+        lambda p, c: {"code": c},
+    ),
+    (
+        "*.spec.*",
+        None,
+        "test_quality",
+        "audit_test_suite",
+        lambda p, c: {"code": c},
+    ),
 ]
 
 
@@ -3249,6 +3350,13 @@ def main() -> None:
         "--file",
         action="append",
         help="key=path — read file contents into this argument (repeatable)",
+    )
+    p_run.add_argument(
+        "--repo",
+        action="append",
+        metavar="KEY=PATH",
+        help="key=path — collect a repository into this argument as a "
+        "{path: content} map, for repository-wide tools (docs_drift, fleet_policy)",
     )
     p_run.add_argument("--stdin", help="argument name to fill from stdin")
     p_run.set_defaults(func=cmd_run)

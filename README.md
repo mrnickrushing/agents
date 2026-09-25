@@ -2,7 +2,7 @@
 
 **AI agents for solo full-stack operators with OpenAI & Anthropic (Claude) support.**
 
-Twenty-four specialized agents (116 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
+Twenty-seven specialized agents (127 tools total) that understand React/Node/Express, FastAPI, React Native/Expo, Stripe, Railway, Roblox/Luau, infrastructure, compliance, supply-chain risk, and security hardening. Dual-provider support, Claude-powered UI generation, and a no-API-key CLI expose the deterministic checks directly.
 
 Built for the workflow at [Rushing Technologies](https://rushingtechnologies.com) — one person, every layer, real software that ships.
 
@@ -315,6 +315,9 @@ Grounded against Roblox's own Creator Hub docs (security tactics, DataStore requ
 | **RailwayDeployAgent** | OpenAI, Anthropic | CI/CD workflows (GitHub Actions, Codemagic, EAS), platform configs (Vercel, Cloudflare), Sentry integration, migrations, monitoring alerts, backup strategies |
 | **MobileDeployAgent** | OpenAI, Anthropic | EAS build profile review (hardcoded secrets, production hardening), Codemagic code-signing hygiene, App Store/Play submission checklists, RevenueCat SDK setup |
 | **CodeReviewAgent** | OpenAI, Anthropic | Express routes, React/Expo components, Drizzle schemas, Zustand stores, Socket.io handlers, Celery tasks, API design, performance, accessibility, tests |
+| **LLMSecurityAgent** ⭐ NEW | OpenAI, Anthropic | Audits code that *calls* a model — untrusted input spliced into the system prompt (OWASP LLM01), uncapped token spend and unbounded loops (denial of wallet), API keys reaching the client bundle (`dangerouslyAllowBrowser`, `NEXT_PUBLIC_*`), model output rendered or executed without validation, and model-callable tools that run unvalidated arguments |
+| **TestQualityAgent** ⭐ NEW | OpenAI, Anthropic | Audits the tests themselves — bodies that assert nothing and cannot fail, sleep/clock/network/randomness flakiness, assertions that only prove a mock was called, and tests disabled with no recorded reason |
+| **DocsDriftAgent** ⭐ NEW | OpenAI, Anthropic | Repository-wide documentation drift — CLI commands shown in the README that are not registered, env vars read but undocumented (or documented and read nowhere), and doc links pointing at files that no longer exist |
 | **PRReviewAgent** ⭐ NEW | OpenAI, Anthropic | Whole-repo pull request review — graph-indexed cross-file impact (callers a signature change breaks), convention drift from what the repo already does, security/logic/performance/dependency/test-coverage reviewers running in parallel, `greptile.json` + `.greptile/` config, P0/P1/P2 inline comments, 0–5 confidence scoring, Mermaid diagrams, and auto-approve decisions |
 | **APIArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Pagination affordances, error response shape consistency, status code correctness, OpenAPI stub generation |
 | **DatabaseArchitectAgent** ⭐ NEW | OpenAI, Anthropic | Index coverage (Drizzle + SQLAlchemy 2.0), migration safety against populated tables, N+1 query detection, missing unique constraints |

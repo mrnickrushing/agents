@@ -87,6 +87,7 @@ def test_one_shot_scan_exercises_every_scannable_agent(tmp_path):
         "railway_deploy",
         "security_audit",
         "supply_chain_audit",
+        "test_quality",
         "stripe_billing",
         "ui_generation",
     }
