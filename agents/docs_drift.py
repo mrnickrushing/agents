@@ -137,7 +137,13 @@ def _check_broken_links(files: Dict[str, str]) -> List[Dict[str, Any]]:
                 continue
             resolved = posixpath.normpath(
                 target if target.startswith("/") else posixpath.join(base, target)
-            ).lstrip("./")
+            )
+            # Strip an exact leading "./" or "/" — never a character set, which
+            # would eat the dot of `.github/workflows/ci.yml` and report an
+            # existing file as missing.
+            if resolved.startswith("./"):
+                resolved = resolved[2:]
+            resolved = resolved.lstrip("/")
             if resolved not in known:
                 broken.append(f"{doc_path} → {target}")
 

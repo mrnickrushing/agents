@@ -259,6 +259,26 @@ def cmd_list(_args: argparse.Namespace) -> None:
             print(f"  - {tool_name}")
 
 
+def _collect_repo_files(root: str) -> Dict[str, str]:
+    """Collect a repository into the {relative_path: content} map that the
+    repository-wide tools take.
+
+    Without this there was no way to call them from the CLI at all: `--arg`
+    coerces only scalars, so a documented `files=@repo` arrived as the literal
+    string and the handler failed on `.items()`.
+    """
+    root = os.path.realpath(os.path.expanduser(root))
+    collected: Dict[str, str] = {}
+    for path in _iter_files(root):
+        if not _is_text_candidate(path):
+            continue
+        try:
+            collected[os.path.relpath(path, root).replace(os.sep, "/")] = _read(path)
+        except (OSError, UnicodeError):
+            continue
+    return collected
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     agent = _get_agent(args.agent)
     handler = agent._tool_handlers.get(args.tool)
@@ -288,6 +308,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(f"Cannot read '{path}': {exc}") from exc
         with open(expanded, "r", errors="ignore") as fh:
             kwargs[key] = fh.read()
+    for item in args.repo or []:
+        key, _, path = item.partition("=")
+        kwargs[key] = _collect_repo_files(path or ".")
     if args.stdin:
         kwargs[args.stdin] = sys.stdin.read()
 
@@ -3327,6 +3350,13 @@ def main() -> None:
         "--file",
         action="append",
         help="key=path — read file contents into this argument (repeatable)",
+    )
+    p_run.add_argument(
+        "--repo",
+        action="append",
+        metavar="KEY=PATH",
+        help="key=path — collect a repository into this argument as a "
+        "{path: content} map, for repository-wide tools (docs_drift, fleet_policy)",
     )
     p_run.add_argument("--stdin", help="argument name to fill from stdin")
     p_run.set_defaults(func=cmd_run)

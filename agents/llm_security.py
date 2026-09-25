@@ -88,10 +88,17 @@ def _balanced_call(text: str, open_paren: int) -> str:
 
 
 def _llm_calls(code: str) -> List[str]:
-    """Every model call in ``code``, each as its full balanced argument list."""
-    return [
-        _balanced_call(code, match.end() - 1) for match in _LLM_CALL_RE.finditer(code)
-    ]
+    """Every model call in ``code``, method name and balanced arguments.
+
+    The name has to travel with the arguments: which SDK is being called
+    decides whether an absent token cap is a spend risk or simply a request
+    the API will reject, and the argument list alone does not say.
+    """
+    calls: List[str] = []
+    for match in _LLM_CALL_RE.finditer(code):
+        arguments = _balanced_call(code, match.end() - 1)
+        calls.append(code[match.start() : match.end() - 1] + arguments)
+    return calls
 
 
 def _talks_to_a_model(code: str) -> bool:
@@ -130,17 +137,81 @@ _INTERPOLATION_RE = re.compile(
 )
 
 
+def _enclosing_object(code: str, position: int) -> Optional[str]:
+    """The object literal containing ``position``, or None if not inside one."""
+    depth = 0
+    start = -1
+    for index in range(position, -1, -1):
+        char = code[index]
+        if char == "}":
+            depth += 1
+        elif char == "{":
+            if depth == 0:
+                start = index
+                break
+            depth -= 1
+    if start == -1:
+        return None
+
+    depth = 0
+    for index in range(start, len(code)):
+        char = code[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start : index + 1]
+    return code[start:]
+
+
+def _value_after(code: str, position: int) -> str:
+    """The value assigned at ``position``, stopping at the next argument.
+
+    Bounded by the expression itself rather than a fixed character count. A
+    fixed window ran past the end of a static system message and into the next
+    statement, so a nearby `logger.info(f"{req.body.message}")` was reported as
+    prompt injection even though the request value never entered the prompt.
+    """
+    depth = 0
+    quote: Optional[str] = None
+    escaped = False
+    for index in range(position, len(code)):
+        char = code[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                return code[position:index]
+            depth -= 1
+        elif char in ",\n" and depth == 0:
+            return code[position:index]
+    return code[position:]
+
+
 def _instruction_windows(code: str) -> List[tuple]:
     """Spans of code that build a system/instruction message.
 
-    A system message is usually an object literal or a keyword argument, so a
-    bounded window after the marker is enough to see how its content is built
-    without running into the next message in the list.
+    Each window is the instruction *value* — the message object for a
+    `role: "system"` entry, or the assigned expression for a `system=` kwarg —
+    never a fixed slice of surrounding source.
     """
     windows: List[tuple] = []
-    for pattern in (_SYSTEM_ROLE_RE, _INSTRUCTION_SLOT_RE):
-        for match in pattern.finditer(code):
-            windows.append((match.start(), code[match.start() : match.start() + 400]))
+    for match in _SYSTEM_ROLE_RE.finditer(code):
+        window = _enclosing_object(code, match.start())
+        windows.append((match.start(), window or _value_after(code, match.end())))
+    for match in _INSTRUCTION_SLOT_RE.finditer(code):
+        windows.append((match.start(), _value_after(code, match.end())))
     return windows
 
 
@@ -188,6 +259,17 @@ _TOKEN_CAP_RE = re.compile(
 _TIMEOUT_RE = re.compile(r"\btimeout\b|\bsignal\s*[:=]|AbortSignal", re.IGNORECASE)
 _UNBOUNDED_LOOP_RE = re.compile(r"\bwhile\s+(?:True|true|1)\s*[:{)]")
 
+#: SDKs whose API requires a cap, so an absent one fails before it bills.
+_REQUIRES_CAP_RE = re.compile(r"messages\.(?:create|stream)", re.IGNORECASE)
+
+#: A timeout set where it covers every call the client goes on to make.
+_CLIENT_TIMEOUT_RE = re.compile(
+    r"(?:OpenAI|Anthropic|AsyncOpenAI|AsyncAnthropic|Client)\s*\([^)]*\btimeout\b"
+    r"|with_options\s*\([^)]*\btimeout\b"
+    r"|\bdefault_?[Tt]imeout\b",
+    re.IGNORECASE,
+)
+
 
 def _audit_token_limits_impl(code: str) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
@@ -195,7 +277,15 @@ def _audit_token_limits_impl(code: str) -> List[Dict[str, Any]]:
     if not calls:
         return findings
 
-    uncapped = [call for call in calls if not _TOKEN_CAP_RE.search(call)]
+    # Anthropic's messages.create rejects a request with no max_tokens before
+    # any output is generated or billed, so an absent cap there is an API error
+    # rather than a spend risk — reporting it would contradict this agent's own
+    # guidance and bury the calls that really are uncapped.
+    uncapped = [
+        call
+        for call in calls
+        if not _TOKEN_CAP_RE.search(call) and not _REQUIRES_CAP_RE.search(call)
+    ]
     if uncapped:
         findings.append(
             _finding(
@@ -208,8 +298,11 @@ def _audit_token_limits_impl(code: str) -> List[Dict[str, Any]]:
             )
         )
 
+    # A timeout on the client constructor covers every call it makes; a bare
+    # `timeout` anywhere in the file does not, and scanning the whole file for
+    # one let genuinely unbounded calls through.
     untimed = [call for call in calls if not _TIMEOUT_RE.search(call)]
-    if untimed and not _TIMEOUT_RE.search(code):
+    if untimed and not _CLIENT_TIMEOUT_RE.search(code):
         findings.append(
             _finding(
                 "LOW",

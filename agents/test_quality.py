@@ -23,7 +23,11 @@ from agents.base import BaseAgent
 # ── Locating tests ────────────────────────────────────────────────────────────
 
 _PY_TEST_RE = re.compile(
-    r"^(?P<indent>[ \t]*)def (?P<name>test_\w+)\s*\(", re.MULTILINE
+    # `async def test_*` is an ordinary pytest test; missing it meant a suite of
+    # only async tests was skipped entirely, even though the CLI glob picked the
+    # file up and reported the agent as having reviewed it.
+    r"^(?P<indent>[ \t]*)(?:async\s+)?def (?P<name>test_\w+)\s*\(",
+    re.MULTILINE,
 )
 _JS_TEST_RE = re.compile(
     r"""^(?P<indent>[ \t]*)(?:it|test)\s*(?:\.\w+)?\s*\(\s*["'`](?P<name>[^"'`]+)""",

@@ -413,3 +413,99 @@ def test_agent_is_registered_and_mirrored():
         assert key in AGENTS
         agent = AGENTS[key]()
         assert set(agent._tool_handlers) == {t["name"] for t in agent._define_tools()}
+
+
+# ── Review fixes (PR #74, Codex) ──────────────────────────────────────────────
+
+
+def test_static_system_prompt_beside_an_unrelated_log_is_not_injection(llm):
+    """A fixed 400-character window ran past the end of the system message into
+    the next statement, so a nearby log line interpolating request data was
+    reported as CRITICAL prompt injection."""
+    code = (
+        "import openai\n"
+        'messages = [{"role": "system", "content": "You are a helpful assistant."}]\n'
+        'logger.info(f"Received {req.body.message}")\n'
+    )
+    assert llm._audit_prompt_construction(code=code)["findings"] == []
+
+
+def test_anthropic_call_without_max_tokens_is_not_a_spend_finding(llm):
+    """`messages.create` is rejected by the API before it generates or bills,
+    so an absent cap there is an error, not a denial-of-wallet risk."""
+    findings = llm._audit_token_limits(
+        code='client.messages.create(model="x", messages=m, timeout=5)'
+    )["findings"]
+    assert not any("token cap" in f["issue"] for f in findings)
+
+
+def test_openai_call_without_max_tokens_is_still_reported(llm):
+    findings = llm._audit_token_limits(
+        code='client.chat.completions.create(model="x", messages=m, timeout=5)'
+    )["findings"]
+    assert any("token cap" in f["issue"] for f in findings)
+
+
+def test_an_unrelated_timeout_variable_does_not_cover_untimed_calls(llm):
+    """A file-wide search for `timeout` let genuinely unbounded calls pass."""
+    code = (
+        "import openai\n"
+        "timeout = 30\n"
+        'openai.chat.completions.create(model="a", messages=m, max_tokens=5)\n'
+    )
+    findings = llm._audit_token_limits(code=code)["findings"]
+    assert any("timeout" in f["issue"] for f in findings)
+
+
+def test_client_level_timeout_covers_its_calls(llm):
+    code = (
+        "client = OpenAI(timeout=20)\n"
+        'client.chat.completions.create(model="a", messages=m, max_tokens=5)\n'
+    )
+    assert llm._audit_token_limits(code=code)["findings"] == []
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [("    pass\n", 1), ("    assert await f() == 1\n", 0)],
+)
+def test_async_test_functions_are_recognised(tq, body, expected):
+    """`async def test_*` was invisible, so a suite of only async tests was
+    skipped even though the CLI glob selected the file."""
+    findings = tq._audit_test_suite(code=f"async def test_x():\n{body}")["findings"]
+    assert len(findings) == expected
+
+
+def test_links_into_dot_directories_resolve(docs):
+    """`lstrip("./")` strips a character set, so `.github/...` lost its dot and
+    an existing file was reported missing."""
+    files = {
+        "README.md": "[CI](.github/workflows/ci.yml)\n",
+        ".github/workflows/ci.yml": "name: CI\n",
+    }
+    assert [f for f in _drift(docs, files) if "link" in f["issue"]] == []
+
+
+def test_repo_flag_builds_the_files_map_for_repository_wide_tools(tmp_path):
+    """`--arg` coerces scalars only, so the repository-wide tools had no
+    working CLI invocation at all."""
+    from agents.cli import _collect_repo_files
+
+    (tmp_path / "README.md").write_text("# Hi\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    collected = _collect_repo_files(str(tmp_path))
+    assert collected["README.md"] == "# Hi\n"
+    assert collected["app.py"] == "x = 1\n"
+
+
+def test_run_parser_accepts_repo():
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "agents.cli", "run", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "--repo" in completed.stdout

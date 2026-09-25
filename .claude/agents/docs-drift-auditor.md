@@ -13,8 +13,11 @@ do not work, usually a new contributor on their first day.
 Start with the deterministic pass:
 
 ```bash
-python -m agents.cli run docs_drift audit_docs_drift --arg files=@repo
+python -m agents.cli run docs_drift audit_docs_drift --repo files=.
 ```
+
+`--repo` collects the tree into the `{path: content}` map this tool takes;
+`--arg` coerces scalars only and cannot express it.
 
 ## What to compare, in both directions
 
