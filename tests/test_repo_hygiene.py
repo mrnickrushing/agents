@@ -28,16 +28,61 @@ def test_every_exported_agent_is_registered_in_the_cli():
     assert "fleet_policy" in AGENTS
 
 
+_UNITS = (
+    "Zero",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+    "Eleven",
+    "Twelve",
+    "Thirteen",
+    "Fourteen",
+    "Fifteen",
+    "Sixteen",
+    "Seventeen",
+    "Eighteen",
+    "Nineteen",
+)
+_TENS = (
+    "",
+    "",
+    "Twenty",
+    "Thirty",
+    "Forty",
+    "Fifty",
+    "Sixty",
+    "Seventy",
+    "Eighty",
+    "Ninety",
+)
+
+
+def _spelled(count: int) -> str:
+    """Spell a count the way the README writes it ("Twenty-seven").
+
+    Generated rather than tabulated: the hand-kept lookup this replaces had to
+    grow an entry for every agent added, and raised KeyError on the ones nobody
+    remembered — which is the same documentation drift the docs_drift agent
+    exists to catch, sitting inside the test meant to prevent it.
+    """
+    if count < 20:
+        return _UNITS[count]
+    tens, unit = divmod(count, 10)
+    return _TENS[tens] + (f"-{_UNITS[unit].lower()}" if unit else "")
+
+
 def test_readme_agent_and_tool_counts_match_the_code():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     tools = sum(len(cls()._tool_handlers) for cls in AGENTS.values())
-    words = {
-        22: "Twenty-two",
-        23: "Twenty-three",
-        24: "Twenty-four",
-        25: "Twenty-five",
-    }
-    assert f"{words[len(AGENTS)]} specialized agents ({tools} tools total)" in readme
+    expected = f"{_spelled(len(AGENTS))} specialized agents ({tools} tools total)"
+    assert expected in readme, f"README does not state: {expected}"
 
 
 MIRRORS = {
@@ -47,6 +92,7 @@ MIRRORS = {
     "compliance": "compliance-auditor",
     "config_audit": "config-auditor",
     "database_architect": "database-architect",
+    "docs_drift": "docs-drift-auditor",
     "figma_scaffold": "figma-scaffolder",
     "fleet_policy": "fleet-policy-auditor",
     "flow_audit": "flow-auditor",
@@ -54,6 +100,7 @@ MIRRORS = {
     "healing": "healing-agent",
     "iac_security": "iac-security-reviewer",
     "infra_monitor": "infra-monitor",
+    "llm_security": "llm-security-reviewer",
     "mobile_deploy": "mobile-deploy-advisor",
     "postmortem": "postmortem-analyst",
     "pr_review": "pr-review-agent",
@@ -63,6 +110,7 @@ MIRRORS = {
     "security_audit": "security-auditor",
     "stripe_billing": "stripe-billing-reviewer",
     "supply_chain_audit": "supply-chain-auditor",
+    "test_quality": "test-quality-auditor",
     "training": "detector-trainer",
     "ui_generation": "ui-designer",
 }
