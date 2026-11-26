@@ -145,7 +145,10 @@ def test_non_sql_string_concatenation_is_not_flagged():
 def test_request_value_in_res_send_html_is_reflected_xss():
     code = "app.get('/hi', (req, res) => res.send(`<h1>Hello ${req.query.name}</h1>`));"
     result = SecurityAuditAgent()._audit_xss_patterns(code)
-    assert any(f["severity"] == "HIGH" and "reflected XSS" in f["issue"] for f in result["findings"])
+    assert any(
+        f["severity"] == "HIGH" and "reflected XSS" in f["issue"]
+        for f in result["findings"]
+    )
 
 
 def test_concatenated_request_value_in_res_send_is_reflected_xss():
@@ -157,7 +160,10 @@ def test_concatenated_request_value_in_res_send_is_reflected_xss():
 def test_user_record_in_res_send_html_is_stored_xss():
     code = "res.send(`<h1>Welcome ${user.name}</h1>`);"
     result = SecurityAuditAgent()._audit_xss_patterns(code)
-    assert any(f["severity"] == "MEDIUM" and "stored XSS" in f["issue"] for f in result["findings"])
+    assert any(
+        f["severity"] == "MEDIUM" and "stored XSS" in f["issue"]
+        for f in result["findings"]
+    )
 
 
 def test_escaped_value_in_res_send_html_is_not_flagged():

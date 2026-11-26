@@ -1599,8 +1599,12 @@ Format findings as structured reports with severity, location, description, and 
         or sanitize call are left alone.
         """
         findings: List[Dict[str, Any]] = []
-        escaped = re.compile(r"escape|sanitize|encode|DOMPurify|xss\(|he\.", re.IGNORECASE)
-        request_value = re.compile(r"\b(req|request|ctx)\.(query|body|params|headers|cookies)\b")
+        escaped = re.compile(
+            r"escape|sanitize|encode|DOMPurify|xss\(|he\.", re.IGNORECASE
+        )
+        request_value = re.compile(
+            r"\b(req|request|ctx)\.(query|body|params|headers|cookies)\b"
+        )
         data_like = re.compile(
             r"\b(user|users|name|username|comment|message|msg|content|body|bio|title|text|input|query|param|row|record|data|post|profile)\b",
             re.IGNORECASE,
