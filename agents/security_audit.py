@@ -1576,6 +1576,8 @@ Format findings as structured reports with severity, location, description, and 
                     }
                 )
 
+        findings.extend(self._server_rendered_html_findings(code))
+
         if re.search(r"bypassSecurityTrustHtml\s*\(", code):
             findings.append(
                 {
@@ -1586,6 +1588,69 @@ Format findings as structured reports with severity, location, description, and 
             )
 
         return {"findings": findings, "total_issues": len(findings)}
+
+    @staticmethod
+    def _server_rendered_html_findings(code: str) -> List[Dict[str, Any]]:
+        """HTML built by hand in an Express response: res.send(`<h1>${x}</h1>`).
+
+        Express does no escaping, so a request value interpolated into markup is
+        reflected XSS, and a user/record field (user.name, comment.body) is the
+        classic stored-XSS shape. Constants and values passed through an escape
+        or sanitize call are left alone.
+        """
+        findings: List[Dict[str, Any]] = []
+        escaped = re.compile(
+            r"escape|sanitize|encode|DOMPurify|xss\(|he\.", re.IGNORECASE
+        )
+        request_value = re.compile(
+            r"\b(req|request|ctx)\.(query|body|params|headers|cookies)\b"
+        )
+        data_like = re.compile(
+            r"\b(user|users|name|username|comment|message|msg|content|body|bio|title|text|input|query|param|row|record|data|post|profile)\b",
+            re.IGNORECASE,
+        )
+        call = re.compile(r"\bres\.(send|write|end)\s*\(", re.IGNORECASE)
+        reported = set()
+        for m in call.finditer(code):
+            # The argument expression: up to the matching close paren (bounded).
+            depth, i, end = 1, m.end(), min(len(code), m.end() + 2000)
+            while i < end and depth:
+                ch = code[i]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                i += 1
+            arg = code[m.end() : i - 1]
+            if not re.search(r"<\s*[a-zA-Z][a-zA-Z0-9-]*[\s>/]", arg):
+                continue  # not HTML
+            # Interpolated pieces: ${...} in template literals and `+ expr` concatenation.
+            pieces = re.findall(r"\$\{([^}]*)\}", arg) + re.findall(
+                r"\+\s*([A-Za-z_$][\w$.\[\]'\"]*)", arg
+            )
+            pieces = [p for p in pieces if p.strip() and not escaped.search(p)]
+            if not pieces:
+                continue
+            if any(request_value.search(p) for p in pieces):
+                key = "reflected"
+                finding = {
+                    "severity": "HIGH",
+                    "issue": "Request value (req.query/body/params) inserted into HTML sent with res.send/res.write — reflected XSS",
+                    "fix": "Escape it before building HTML (e.g. the `escape-html` package), or render with a template engine that auto-escapes",
+                }
+            elif any(data_like.search(p) for p in pieces):
+                key = "stored"
+                finding = {
+                    "severity": "MEDIUM",
+                    "issue": "User or record data inserted into HTML sent with res.send/res.write without escaping — stored XSS if the value can contain markup",
+                    "fix": "Escape interpolated values (e.g. `escape-html`) or render with an auto-escaping template engine",
+                }
+            else:
+                continue
+            if key not in reported:
+                reported.add(key)
+                findings.append(finding)
+        return findings
 
     def _audit_csrf_protection(self, code: str) -> Dict[str, Any]:
         """Audit CSRF protection — only applicable to cookie/session-based auth."""

@@ -111,3 +111,71 @@ def test_angular_sanitizer_bypass_is_detected():
         )
     )
     assert any("Angular" in issue for issue in issues)
+
+
+# ── SQL concatenation where the SQL text contains the other quote ─────────
+
+
+def test_sql_concatenation_with_embedded_quote_is_detected():
+    code = """const q = "SELECT * FROM users WHERE name='" + req.body.name + "'";"""
+    issues = _issues(SecurityAuditAgent()._audit_sql_injection(code))
+    assert any("concatenation" in issue for issue in issues)
+
+
+def test_single_quoted_sql_concatenation_is_detected():
+    code = "const q = 'DELETE FROM sessions WHERE id = ' + id;"
+    issues = _issues(SecurityAuditAgent()._audit_sql_injection(code))
+    assert any("concatenation" in issue for issue in issues)
+
+
+def test_parameterized_query_is_not_flagged_as_concatenation():
+    code = """const rows = await db.query("SELECT * FROM users WHERE name = $1", [req.body.name]);"""
+    issues = _issues(SecurityAuditAgent()._audit_sql_injection(code))
+    assert not issues
+
+
+def test_non_sql_string_concatenation_is_not_flagged():
+    code = """const greeting = "Hello, it's " + user.name + "!";"""
+    assert not _issues(SecurityAuditAgent()._audit_sql_injection(code))
+
+
+# ── HTML built by hand in Express responses ───────────────────────────────
+
+
+def test_request_value_in_res_send_html_is_reflected_xss():
+    code = "app.get('/hi', (req, res) => res.send(`<h1>Hello ${req.query.name}</h1>`));"
+    result = SecurityAuditAgent()._audit_xss_patterns(code)
+    assert any(
+        f["severity"] == "HIGH" and "reflected XSS" in f["issue"]
+        for f in result["findings"]
+    )
+
+
+def test_concatenated_request_value_in_res_send_is_reflected_xss():
+    code = """res.send("<h1>" + req.query.name + "</h1>");"""
+    issues = _issues(SecurityAuditAgent()._audit_xss_patterns(code))
+    assert any("reflected XSS" in issue for issue in issues)
+
+
+def test_user_record_in_res_send_html_is_stored_xss():
+    code = "res.send(`<h1>Welcome ${user.name}</h1>`);"
+    result = SecurityAuditAgent()._audit_xss_patterns(code)
+    assert any(
+        f["severity"] == "MEDIUM" and "stored XSS" in f["issue"]
+        for f in result["findings"]
+    )
+
+
+def test_escaped_value_in_res_send_html_is_not_flagged():
+    code = "res.send(`<h1>Hello ${escapeHtml(req.query.name)}</h1>`);"
+    assert not _issues(SecurityAuditAgent()._audit_xss_patterns(code))
+
+
+def test_static_html_and_json_responses_are_not_flagged():
+    code = "res.send('<h1>Not found</h1>'); res.send(`ok ${count}`); res.send(JSON.stringify(data));"
+    assert not _issues(SecurityAuditAgent()._audit_xss_patterns(code))
+
+
+def test_constant_interpolation_in_html_is_not_flagged():
+    code = "res.send(`<p>Version ${APP_VERSION}</p>`);"
+    assert not _issues(SecurityAuditAgent()._audit_xss_patterns(code))
